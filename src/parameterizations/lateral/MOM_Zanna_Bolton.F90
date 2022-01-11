@@ -4,6 +4,30 @@ module MOM_Zanna_Bolton
 use MOM_grid,                  only : ocean_grid_type
 use MOM_verticalGrid,          only : verticalGrid_type
 
+implicit none ; private
+
+#include <MOM_memory.h>
+
+public Zanna_Bolton_2020
+
+contains
+
+!> Baroclinic parameterization is as follows:
+!! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
+!! (du/dt, dv/dt) = k_BC * 
+!!                  (div(S) + 1/2 * grad(vort_xy^2 + sh_xy^2 + sh_xx^2))
+!! vort_xy = dv/dx - du/dy - relative vorticity
+!! sh_xy   = dv/dx + du/dy - shearing deformation (or horizontal shear strain)
+!! sh_xx   = du/dx - dv/dy - stretching deformation (or horizontal tension)
+!! S - 2x2 tensor:
+!! S = vort_xy * (-sh_xy, sh_xx; sh_xx, sh_xy)
+!! In generalized curvilinear orthogonal coordinates (see Griffies 2020,
+!! and MOM documentation 
+!! https://mom6.readthedocs.io/en/dev-gfdl/api/generated/modules/mom_hor_visc.html#f/mom_hor_visc):
+!! du/dx -> dy/dx * delta_i (u / dy)
+!! dv/dy -> dx/dy * delta_j (v / dx)
+!! dv/dx -> dy/dx * delta_i (v / dy)
+!! du/dy -> dx/dy * delta_j (u / dx)
 subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
@@ -20,22 +44,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                                  intent(out) :: fy  !< Meridional acceleration due to convergence
                                                        !! of along-coordinate stress tensor [L T-2 ~> m s-2].
-  ! Baroclinic parameterization is as follows:
-  ! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
-  ! (du/dt, dv/dt) = k_BC * 
-  !                  (div(S) + 1/2 * grad(vort_xy^2 + sh_xy^2 + sh_xx^2))
-  ! vort_xy = dv/dx - du/dy - relative vorticity
-  ! sh_xy   = dv/dx + du/dy - shearing deformation (or horizontal shear strain)
-  ! sh_xx   = du/dx - dv/dy - stretching deformation (or horizontal tension)
-  ! S - 2x2 tensor:
-  ! S = vort_xy * (-sh_xy, sh_xx; sh_xx, sh_xy)
-  ! In generalized curvilinear orthogonal coordinates (see Griffies 2020,
-  ! and MOM documentation 
-  ! https://mom6.readthedocs.io/en/dev-gfdl/api/generated/modules/mom_hor_visc.html#f/mom_hor_visc):
-  ! du/dx -> dy/dx * delta_i (u / dy)
-  ! dv/dy -> dx/dy * delta_j (v / dx)
-  ! dv/dx -> dy/dx * delta_i (v / dy)
-  ! du/dy -> dx/dy * delta_j (u / dx)
   
   real, dimension(SZI_(G),SZJ_(G)) :: &
     dx_dyT, &     !< Pre-calculated dx/dy at h points [nondim]
@@ -64,34 +72,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     DX_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; DY_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
   enddo ; enddo
 
-  !$OMP parallel do default(none) &
-  !$OMP shared( &
-  !$OMP   CS, G, GV, US, OBC, VarMix, MEKE, u, v, h, &
-  !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, &
-  !$OMP   apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, &
-  !$OMP   use_MEKE_Ku, use_MEKE_Au, boundary_mask_h, boundary_mask_q, &
-  !$OMP   backscat_subround, GME_coeff_limiter, GME_effic_h, GME_effic_q, &
-  !$OMP   h_neglect, h_neglect3, FWfrac, inv_PI3, inv_PI6, H0_GME, &
-  !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_GME, &
-  !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
-  !$OMP   TD, KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt &
-  !$OMP ) &
-  !$OMP private( &
-  !$OMP   i, j, k, n, &
-  !$OMP   dudx, dudy, dvdx, dvdy, sh_xx, sh_xy, h_u, h_v, &
-  !$OMP   Del2u, Del2v, DY_dxBu, DX_dyBu, sh_xx_bt, sh_xy_bt, &
-  !$OMP   str_xx, str_xy, bhstr_xx, bhstr_xy, str_xx_GME, str_xy_GME, &
-  !$OMP   vort_xy, vort_xy_dx, vort_xy_dy, div_xx, div_xx_dx, div_xx_dy, &
-  !$OMP   grad_div_mag_h, grad_div_mag_q, grad_vort_mag_h, grad_vort_mag_q, &
-  !$OMP   grad_vort, grad_vort_qg, grad_vort_mag_h_2d, grad_vort_mag_q_2d, &
-  !$OMP   grad_vel_mag_h, grad_vel_mag_q, &
-  !$OMP   grad_vel_mag_bt_h, grad_vel_mag_bt_q, grad_d2vel_mag_h, &
-  !$OMP   meke_res_fn, Shear_mag, Shear_mag_bc, vert_vort_mag, h_min, hrat_min, visc_bound_rem, &
-  !$OMP   sh_xx_sq, sh_xy_sq, grid_Ah, grid_Kh, d_Del2u, d_Del2v, d_str, &
-  !$OMP   Kh, Ah, AhSm, AhLth, local_strain, Sh_F_pow, &
-  !$OMP   dDel2vdx, dDel2udy, DY_dxCv, DX_dyCu, Del2vort_q, Del2vort_h, KE, &
-  !$OMP   h2uq, h2vq, hu, hv, hq, FatH, RoScl, GME_coeff &
-  !$OMP )
   do k=1,nz
 
     ! Calculate horizontal tension
@@ -118,7 +98,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
       vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) )
     enddo ; enddo
-
     
   enddo ! end of k loop
 
