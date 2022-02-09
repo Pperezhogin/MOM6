@@ -22,7 +22,7 @@ contains
 !! S0 - 2x2 tensor:
 !! S0 = vort_xy * (-sh_xy, sh_xx; sh_xx, sh_xy)
 !! Relating k_BC to velocity gradient model,
-!! k_BC = - cell_area / 24 = - FGR^2 dx*dy / 24
+!! k_BC = - FGR^2 * cell_area / 24 = - FGR^2 * dx*dy / 24
 !! where FGR - filter to grid width ratio
 !! 
 !! S - is a tensor of full tendency
@@ -74,8 +74,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     sh_xx, &           ! horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
     vort_xy_center, &  ! vort_xy in the center
     sh_xy_center, &    ! sh_xy in the center
-    S_11, S_22, &      ! flux tensor components in the cell center, multiplied with interface height [m^3/s^2]
-    reduction_xx       ! to be defined later
+    S_11, S_22         ! flux tensor in the cell center, multiplied with interface height [m^2/s^2 * h]
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dx_dyBu, &         !< Pre-calculated dx/dy at q points [nondim]
@@ -86,9 +85,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     vort_xy, &         ! Vertical vorticity (dv/dx - du/dy) including metric terms [T-1 ~> s-1]
     sh_xy, &           ! horizontal shearing strain (du/dy + dv/dx) including metric terms [T-1 ~> s-1]
     sh_xx_corner, &    ! sh_xx in the corner
-    S_12, &            ! flux tensor component in the corner, multiplied with interface height [m^3/s^2]
-    hq, &              ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
-    reduction_xy       ! to be defined later
+    S_12, &            ! flux tensor in the corner, multiplied with interface height [m^2/s^2 * h]
+    hq                 ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
 
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     h_u                ! Thickness interpolated to u points [H ~> m or kg m-2].
@@ -97,11 +95,13 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
-  real :: sum_sq ! squared sum, i.e. 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2)
-  real :: vort_sh    ! multiplication of vort_xt and sh_xy
+  
   real :: h_neglect  ! thickness so small it can be lost in roundoff and so neglected [H ~> m or kg m-2]
   real :: h_neglect3 ! h_neglect^3 [H3 ~> m3 or kg3 m-6]
   real :: h2uq, h2vq ! temporary variables [H2 ~> m2 or kg2 m-4].
+
+  real :: sum_sq     ! squared sum, i.e. 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2)
+  real :: vort_sh    ! multiplication of vort_xt and sh_xy
 
   real k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2
   real FGR  ! Filter to grid width ratio, k_bc = - FGR^2 * dx * dy / 24
@@ -127,10 +127,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     DX_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; DY_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
   enddo ; enddo
 
-  ! To be defined later
-  reduction_xx = 1.
-  reduction_xy = 1.
-
   do k=1,nz
 
     ! Calculate horizontal tension (line 590 of MOM_hor_visc.F90)
@@ -149,9 +145,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     enddo ; enddo
 
     ! Shearing strain with free-slip B.C. (line 751 of MOM_hor_visc.F90)
+    ! We use free-slip as cannot guarantee that non-diagonal stress
+    ! will accelerate or decelerate currents
     ! Note that as there is no stencil operator, set of indices
     ! is identical to the previous loop, compared to MOM_hor_visc.F90
-    !do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
       sh_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) + dudy(I,J) ) ! corner of the cell
     enddo ; enddo
@@ -164,7 +161,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
     ! lower index as in loop for sh_xy, but minus 1
     ! upper index is identical 
-    !do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
       sh_xy_center(i,j) = 0.25 * ( (sh_xy(I-1,J-1) + sh_xy(I,J)) &
                                  + (sh_xy(I-1,J) + sh_xy(I,J-1)) )
@@ -180,12 +176,14 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
                                  + (sh_xx(i+1,j) + sh_xx(i,j+1)))
     enddo ; enddo
 
-    ! WITHOUT land mask (line 622 of MOM_hor_visc.F90)
+    ! WITH land mask (line 622 of MOM_hor_visc.F90)
+    ! Use of mask eliminates dependence on the 
+    ! values on land
     do j=js-2,je+2 ; do I=Isq-1,Ieq+1
-      h_u(I,j) = 0.5 * (h(i,j,k) + h(i+1,j,k))
+      h_u(I,j) = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k))
     enddo ; enddo
     do J=Jsq-1,Jeq+1 ; do i=is-2,ie+2
-      h_v(i,J) = 0.5 * (h(i,j,k) + h(i,j+1,k))
+      h_v(i,J) = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k))
     enddo ; enddo
 
     ! Line 1187 of MOM_hor_visc.F90
@@ -198,7 +196,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
 
     ! Form S_11 and S_22 tensors
     ! Indices - intersection of loops for
-    ! _center and sh_xx
+    ! sh_xy_center and sh_xx
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
       sum_sq = 0.5 * &
       (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j)**2)
@@ -216,19 +214,20 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     enddo ; enddo
 
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
+    ! Note that reduction is removed
     do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      S_11(i,j) = S_11(i,j) * (h(i,j,k) * reduction_xx(i,j))
-      S_22(i,j) = S_22(i,j) * (h(i,j,k) * reduction_xx(i,j))
+      S_11(i,j) = S_11(i,j) * h(i,j,k)
+      S_22(i,j) = S_22(i,j) * h(i,j,k)
     enddo ; enddo
 
     ! Free slip (Line 1487 of MOM_hor_visc.F90)
     do J=js-1,Jeq ; do I=is-1,Ieq
-      S_12(I,J) = S_12(I,J) * (hq(I,J) * G%mask2dBu(I,J) * reduction_xy(I,J))
+      S_12(I,J) = S_12(I,J) * (hq(I,J) * G%mask2dBu(I,J))
     enddo ; enddo
 
     ! Evaluate 1/h x.Div(h S) (Line 1495 of MOM_hor_visc.F90)
     ! Minus occurs because in original file (du/dt) = - div(S),
-    ! but I have div(S)
+    ! but here is the discretization of div(S)
     do j=js,je ; do I=Isq,Ieq
       fx(I,j,k) = - ((G%IdyCu(I,j)*(dy2h(i,j)  *S_11(i,j) - &
                                     dy2h(i+1,j)*S_11(i+1,j)) + &
