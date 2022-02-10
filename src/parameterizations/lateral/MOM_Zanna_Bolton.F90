@@ -1,8 +1,12 @@
 ! > Calculates Zanna and Bolton 2020 parameterization
 module MOM_Zanna_Bolton
 
-use MOM_grid,                  only : ocean_grid_type
-use MOM_verticalGrid,          only : verticalGrid_type
+use MOM_grid,          only : ocean_grid_type
+use MOM_verticalGrid,  only : verticalGrid_type
+use MOM_diag_mediator, only : diag_ctrl, time_type
+use MOM_file_parser,   only : get_param, log_version, param_file_type
+use MOM_unit_scaling,  only : unit_scale_type
+use MOM_diag_mediator, only : post_data, register_diag_field
 
 implicit none ; private
 
@@ -10,7 +14,57 @@ implicit none ; private
 
 public Zanna_Bolton_2020
 
+!> Control structure that contains MEKE parameters and diagnostics handles
+type, public :: ZB2020_CS ; private
+  ! Parameters
+  logical   :: use_ZB2020 !< If true, parameterization works
+  real      :: FGR        !< Filter to grid width ratio, nondimensional, 
+                          ! k_bc = - FGR^2 * dx * dy / 24
+  integer   :: ZB_type    !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
+
+  type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
+  !>@{ Diagnostic handles
+  integer :: id_ZB2020u = -1, id_ZB2020v = -1
+  !>@}
+
+end type ZB2020_CS
+
 contains
+
+subroutine ZB_2020_init(Time, US, param_file, diag, CS)
+  type(time_type),         intent(in)    :: Time       !< The current model time.
+  type(unit_scale_type),   intent(in)    :: US         !< A dimensional unit scaling type
+  type(param_file_type),   intent(in)    :: param_file !< Parameter file parser structure.
+  type(diag_ctrl), target, intent(inout) :: diag       !< Diagnostics structure.
+  type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
+
+  ! This include declares and sets the variable "version".
+#include "version_variable.h"
+  character(len=40)  :: mdl = "MOM_Zanna_Bolton" ! This module's name.
+
+  call log_version(param_file, mdl, version, "")
+  
+  call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
+                 "If true, turns on Zanna-Bolton 2020 parameterization", &
+                 default=.false.)
+
+  call get_param(param_file, mdl, "FGR", CS%FGR, &
+                 "The ratio of assumed filter width to grid step", &
+                 units="nondim", default=1.)
+  
+  call get_param(param_file, mdl, "ZB_type", CS%ZB_type, &
+                 "Type of parameterization: 0 = ZB2020, 1 = AZ2017", &
+                 default=0)
+  
+  ! Register fields for output from this module.
+  CS%diag => diag
+
+  CS%id_ZB2020u = register_diag_field('ocean_model', 'ZB2020u', diag%axesCuL, Time, &
+      'Zonal Acceleration from Horizontal Viscosity', 'm s-2', conversion=US%L_T2_to_m_s2)
+  CS%id_ZB2020v = register_diag_field('ocean_model', 'ZB2020v', diag%axesCvL, Time, &
+      'Meridional Acceleration from Horizontal Viscosity', 'm s-2', conversion=US%L_T2_to_m_s2)
+  
+end subroutine ZB_2020_init
 
 !> Baroclinic parameterization is as follows:
 !! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
@@ -103,10 +157,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
   real :: sum_sq     ! squared sum, i.e. 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2)
   real :: vort_sh    ! multiplication of vort_xt and sh_xy
 
-  real k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2
-  real FGR  ! Filter to grid width ratio, k_bc = - FGR^2 * dx * dy / 24
-
-  FGR = 1.
+  real :: k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2
+  real :: FGR = 0.
 
   ! Line 407 of MOM_hor_visc.F90
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
