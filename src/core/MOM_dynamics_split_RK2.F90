@@ -49,7 +49,6 @@ use MOM_grid,                  only : ocean_grid_type
 use MOM_hor_index,             only : hor_index_type
 use MOM_hor_visc,              only : horizontal_viscosity, hor_visc_CS
 use MOM_hor_visc,              only : hor_visc_init, hor_visc_end
-use MOM_Zanna_Bolton,          only : Zanna_Bolton_2020
 use MOM_interface_heights,     only : find_eta
 use MOM_lateral_mixing_coeffs, only : VarMix_CS
 use MOM_MEKE_types,            only : MEKE_type
@@ -79,15 +78,13 @@ type, public :: MOM_dyn_split_RK2_CS ; private
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_,NKMEM_) :: &
     CAu, &    !< CAu = f*v - u.grad(u) [L T-2 ~> m s-2]
     PFu, &    !< PFu = -dM/dx [L T-2 ~> m s-2]
-    diffu, &  !< Zonal acceleration due to convergence of the along-isopycnal stress tensor [L T-2 ~> m s-2]
-    ZB2020u   !< Zonal acceleration due to Zanna-Bolton-2020 parameterization [L T-2 ~> m s-2]
+    diffu     !< Zonal acceleration due to convergence of the along-isopycnal stress tensor [L T-2 ~> m s-2]
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_,NKMEM_) :: &
     CAv, &    !< CAv = -f*u - u.grad(v) [L T-2 ~> m s-2]
     PFv, &    !< PFv = -dM/dy [L T-2 ~> m s-2]
-    diffv, &  !< Meridional acceleration due to convergence of the along-isopycnal stress tensor [L T-2 ~> m s-2]
-    ZB2020v   !< Meridional acceleration due to Zanna-Bolton-2020 parameterization [L T-2 ~> m s-2]
-  
+    diffv     !< Meridional acceleration due to convergence of the along-isopycnal stress tensor [L T-2 ~> m s-2]
+
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_,NKMEM_) :: visc_rem_u
               !< Both the fraction of the zonal momentum originally in a
               !! layer that remains after a time-step of viscosity, and the
@@ -469,17 +466,15 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   call cpu_clock_end(id_clock_Cor)
   if (showCallTree) call callTree_wayPoint("done with CorAdCalc (step_MOM_dyn_split_RK2)")
 
-! u_bc_accel = CAu + PFu + diffu(u[n-1]) + ZB2020u
+! u_bc_accel = CAu + PFu + diffu(u[n-1])
   call cpu_clock_begin(id_clock_btforce)
   !$OMP parallel do default(shared)
   do k=1,nz
     do j=js,je ; do I=Isq,Ieq
-      u_bc_accel(I,j,k) = (CS%CAu(I,j,k) + CS%PFu(I,j,k)) + CS%diffu(I,j,k) &
-                        + CS%ZB2020u(I,j,k)
+      u_bc_accel(I,j,k) = (CS%CAu(I,j,k) + CS%PFu(I,j,k)) + CS%diffu(I,j,k)
     enddo ; enddo
     do J=Jsq,Jeq ; do i=is,ie
-      v_bc_accel(i,J,k) = (CS%CAv(i,J,k) + CS%PFv(i,J,k)) + CS%diffv(i,J,k) &
-                        + CS%ZB2020v(i,J,k)
+      v_bc_accel(i,J,k) = (CS%CAv(i,J,k) + CS%PFv(i,J,k)) + CS%diffv(i,J,k)
     enddo ; enddo
   enddo
   if (associated(CS%OBC)) then
@@ -716,9 +711,6 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
                             ADp=CS%ADp)
   call cpu_clock_end(id_clock_horvisc)
   if (showCallTree) call callTree_wayPoint("done with horizontal_viscosity (step_MOM_dyn_split_RK2)")
-
-! ZB2020 = Zanna_Bolton_2020 (u_av)
-  call Zanna_Bolton_2020(u_av, v_av, h_av, CS%ZB2020u, CS%ZB2020v, G, GV)
 
 ! CAu = -(f+zeta_av)/h_av vh + d/dx KE_av
   call cpu_clock_begin(id_clock_Cor)
@@ -1014,7 +1006,7 @@ subroutine register_restarts_dyn_split_RK2(HI, GV, param_file, CS, restart_CS, u
   ALLOC_(CS%CAv(isd:ied,JsdB:JedB,nz))   ; CS%CAv(:,:,:)   = 0.0
   ALLOC_(CS%PFu(IsdB:IedB,jsd:jed,nz))   ; CS%PFu(:,:,:)   = 0.0
   ALLOC_(CS%PFv(isd:ied,JsdB:JedB,nz))   ; CS%PFv(:,:,:)   = 0.0
-  
+
   ALLOC_(CS%eta(isd:ied,jsd:jed))       ; CS%eta(:,:)    = 0.0
   ALLOC_(CS%u_av(IsdB:IedB,jsd:jed,nz)) ; CS%u_av(:,:,:) = 0.0
   ALLOC_(CS%v_av(isd:ied,JsdB:JedB,nz)) ; CS%v_av(:,:,:) = 0.0
@@ -1170,9 +1162,6 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
 
   allocate(CS%taux_bot(IsdB:IedB,jsd:jed), source=0.0)
   allocate(CS%tauy_bot(isd:ied,JsdB:JedB), source=0.0)
-
-  ALLOC_(CS%ZB2020u(IsdB:IedB,jsd:jed,nz)) ; CS%ZB2020u(:,:,:) = 0.0
-  ALLOC_(CS%ZB2020v(isd:ied,JsdB:JedB,nz)) ; CS%ZB2020v(:,:,:) = 0.0
 
   ALLOC_(CS%uhbt(IsdB:IedB,jsd:jed))          ; CS%uhbt(:,:)         = 0.0
   ALLOC_(CS%vhbt(isd:ied,JsdB:JedB))          ; CS%vhbt(:,:)         = 0.0
@@ -1533,8 +1522,6 @@ subroutine end_dyn_split_RK2(CS)
   DEALLOC_(CS%diffu) ; DEALLOC_(CS%diffv)
   DEALLOC_(CS%CAu)   ; DEALLOC_(CS%CAv)
   DEALLOC_(CS%PFu)   ; DEALLOC_(CS%PFv)
-
-  DEALLOC_(CS%ZB2020u) ; DEALLOC_(CS%ZB2020v)
 
   if (associated(CS%taux_bot)) deallocate(CS%taux_bot)
   if (associated(CS%tauy_bot)) deallocate(CS%tauy_bot)
