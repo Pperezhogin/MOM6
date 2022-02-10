@@ -1,0 +1,25 @@
+1. Parameter fetching.
+Each module defines control structure, containing the following information:
+- Parameterizations state (if exist, see MOM_MEKE_types.F90)
+- All parameters
+- is turn on or turn off
+- flag "initialized"
+- pointer to type(diag_ctrl)
+- Diagnostic handles, like "integer :: id_MEKE = -1"
+
+This control structure is allocated in 
+MOM.F90, see type(MEKE_CS) and type(thickness_diffuse_CS)
+
+Parameters are defined in _init subroutine. 
+- It reads whether parameterisation works and stores it in control structure,
+see CS%thickness_diffuse in MOM_thickness_diffuse.F90
+- if CS%thickness_diffuse == False, subroutine returns
+- Reads all needed parameters with get_param. Parameter need not to be declared elsewhere.
+
+Init function is USUALLY (except of hor_visc_init) called in MOM.F90:
+see MEKE_init, thickness_diffuse_init
+
+Fields are offered for output with function register_diag_field
+Fields are sended to output with  call post_data(CS%id_Ue, tmp, CS%diag). 
+This function requires id_Ue and diag in control structure
+Diagnostic fields are 3D stack variables. They are collected in 3D loop.
