@@ -1637,16 +1637,17 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   enddo ! end of k loop
 
-  
-  call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
+  if (CS%ZB2020%use_ZB2020) then
+    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
 
-  do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-    diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
-  enddo ; enddo ; enddo
+    do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
+    enddo ; enddo ; enddo
 
-  do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-    diffv(i,J,k) = diffv(i,J,k) + ZB2020v(i,J,k)
-  enddo ; enddo ; enddo
+    do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      diffv(i,J,k) = diffv(i,J,k) + ZB2020v(i,J,k)
+    enddo ; enddo ; enddo
+  endif
 
   ! Offer fields for diagnostic averaging.
   if (CS%id_normstress > 0) call post_data(CS%id_normstress, NoSt, CS%diag)
