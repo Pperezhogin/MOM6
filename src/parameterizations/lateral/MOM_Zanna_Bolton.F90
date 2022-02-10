@@ -102,9 +102,11 @@ end subroutine ZB_2020_init
 !! The following interpolations are required:
 !! sh_xx center -> corner
 !! vort_xy, sh_xy corner -> center
-subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
+subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
+  type(ZB2020_CS),             intent(inout) :: CS     !< ZB2020 control structure.
+
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
                                  intent(in)  :: u      !< The zonal velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
@@ -113,10 +115,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
                                  intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2].
   
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(out) :: fx  !< Zonal acceleration due to convergence of
+                                 intent(out) :: fx     !< Zonal acceleration due to convergence of
                                                        !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(out) :: fy  !< Meridional acceleration due to convergence
+                                 intent(out) :: fy     !< Meridional acceleration due to convergence
                                                        !! of along-coordinate stress tensor [L T-2 ~> m s-2].
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
@@ -158,7 +160,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
   real :: vort_sh    ! multiplication of vort_xt and sh_xy
 
   real :: k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2
-  real :: FGR = 0.
 
   ! Line 407 of MOM_hor_visc.F90
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -253,7 +254,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
       sum_sq = 0.5 * &
       (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j)**2)
       vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
-      k_bc = - FGR**2 * G%areaT(i,j) / 24.
+      k_bc = - CS%FGR**2 * G%areaT(i,j) / 24.
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
       S_22(i,j) = k_bc * (+ vort_sh + sum_sq)
     enddo ; enddo
@@ -261,7 +262,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     ! Form S_12 tensor
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-      k_bc = - FGR**2 * G%areaBu(i,j) / 24.
+      k_bc = - CS%FGR**2 * G%areaBu(i,j) / 24.
       S_12(I,J) = vort_xy(I,J) * sh_xx_corner(I,J)
     enddo ; enddo
 
@@ -298,6 +299,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV)
     enddo ; enddo
 
   enddo ! end of k loop
+
+  if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, fx, CS%diag)
+  if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, fy, CS%diag)
 
 end subroutine Zanna_Bolton_2020
 
