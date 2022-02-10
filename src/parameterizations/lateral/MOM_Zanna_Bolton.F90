@@ -12,7 +12,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public Zanna_Bolton_2020
+public Zanna_Bolton_2020, ZB_2020_init
 
 !> Control structure that contains MEKE parameters and diagnostics handles
 type, public :: ZB2020_CS ; private
@@ -105,7 +105,7 @@ end subroutine ZB_2020_init
 subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
-  type(ZB2020_CS),             intent(inout) :: CS     !< ZB2020 control structure.
+  type(ZB2020_CS),               intent(in)  :: CS     !< ZB2020 control structure.
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
                                  intent(in)  :: u      !< The zonal velocity [L T-1 ~> m s-1].
@@ -119,7 +119,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
                                                        !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                                  intent(out) :: fy     !< Meridional acceleration due to convergence
-                                                       !! of along-coordinate stress tensor [L T-2 ~> m s-2].
+                                                       !! of along-coordinate stress tensor [L T-2 ~> m s-2]
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
     dx_dyT, &          !< Pre-calculated dx/dy at h points [nondim]
