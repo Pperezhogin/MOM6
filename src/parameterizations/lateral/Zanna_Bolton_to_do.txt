@@ -23,3 +23,17 @@ Fields are offered for output with function register_diag_field
 Fields are sended to output with  call post_data(CS%id_Ue, tmp, CS%diag). 
 This function requires id_Ue and diag in control structure
 Diagnostic fields are 3D stack variables. They are collected in 3D loop.
+
+2. Diagnostics
+Dimensions are seend in netcdf files
+Kinetic energy definition [In Joules]:
+KE_tot = factor1 * 0.5 * dx*dy*h * (u^2 + v^2)
+Total mass [in kg]:
+mass = factor2 * dx*dy*h
+Kinetic energy [in m^2/s2]:
+KE_tot / mass, i.e.
+int(0.5 * (u^2 + v^2) * h, dxdy) / int(h, dxdy)
+Kinetic energy rate of change [in m^3/s^3]:
+h * (u*diffu + v*diffv)
+Kinetic energy rate of change (total, in m^2/s^3):
+int((u*diffu + v*diffv)*h, dxdy) / int(h, dxdy)
