@@ -122,117 +122,98 @@ PASS: Solutions tc1.b.openmp agree.
 
 [pp2681@gr053 .testing]$ make -j test.dim
 PASS: Solutions tc3.dim.t agree.
-PASS: Solutions tc2.a.dim.t agree.
 PASS: Diagnostics tc3.dim.t.diag agree.
+PASS: Solutions tc2.a.dim.t agree.
 PASS: Diagnostics tc2.a.dim.t.diag agree.
-PASS: Diagnostics tc2.dim.t.diag agree.
 PASS: Solutions tc2.dim.t agree.
-PASS: Diagnostics tc0.dim.t.diag agree.
+PASS: Diagnostics tc2.dim.t.diag agree.
 PASS: Solutions tc0.dim.t agree.
-PASS: Diagnostics tc1.a.dim.t.diag agree.
+PASS: Diagnostics tc0.dim.t.diag agree.
 PASS: Solutions tc1.a.dim.t agree.
-PASS: Diagnostics tc1.dim.t.diag agree.
+PASS: Diagnostics tc1.a.dim.t.diag agree.
 PASS: Solutions tc1.dim.t agree.
-PASS: Diagnostics tc4.dim.t.diag agree.
+PASS: Diagnostics tc1.dim.t.diag agree.
 PASS: Solutions tc4.dim.t agree.
-work/tc3/symmetric/chksum_diag work/tc3/dim.l/chksum_diag differ: byte 19604, line 239
-PASS: Diagnostics tc1.b.dim.t.diag agree.
+PASS: Diagnostics tc4.dim.t.diag agree.
 PASS: Solutions tc1.b.dim.t agree.
-work/tc3/symmetric/ocean.stats work/tc3/dim.l/ocean.stats differ: byte 377, line 4
-work/tc2.a/symmetric/chksum_diag work/tc2.a/dim.l/chksum_diag differ: byte 32607, line 391
-work/tc2.a/symmetric/ocean.stats work/tc2.a/dim.l/ocean.stats differ: byte 514, line 4
-239,240c239,240
-< u-point: mean=   3.4192600314508869E-12 min=  -1.2947887930542254E-05 max=   1.2947887930542254E-05 ocean_model-ZB2020u
-< u-point: c=     22834 ocean_model-ZB2020u
----
-> u-point: mean=   3.4192600314508869E-12 min=  -1.2909210234086282E-05 max=   1.2909210234086282E-05 ocean_model-ZB2020u
-> u-point: c=     22934 ocean_model-ZB2020u
-243,244c243,244
-< u-point: mean=   3.4192600314508097E-12 min=  -1.2560391637327881E-05 max=   1.2560391637327881E-05 ocean_model_z-ZB2020u
-< u-point: c=     22942 ocean_model_z-ZB2020u
----
-> u-point: mean=   3.4192600314508097E-12 min=  -1.2522346762529298E-05 max=   1.2522346762529298E-05 ocean_model_z-ZB2020u
-> u-point: c=     22986 ocean_model_z-ZB2020u
-247,248c247,248
-< v-point: mean=   1.0106527812812478E-10 min=  -1.1237380445569614E-05 max=   1.1237380445569614E-05 ocean_model-ZB2020v
-< v-point: c=     22362 ocean_model-ZB2020v
----
-> v-point: mean=   1.0106527812812478E-10 min=  -1.1193372155067757E-05 max=   1.1193372155067757E-05 ocean_model-ZB2020v
-> v-point: c=     22534 ocean_model-ZB2020v
-251,252c251,252
-< v-point: mean=   1.0106527812812438E-10 min=  -1.0968947574919382E-05 max=   1.0968947574919382E-05 ocean_model_z-ZB2020v
-FAIL: Diagnostics tc3.dim.l.diag have changed.
-4,5c4,5
-<      3,       3.000,     0, En 3.9843096033747649E-01, CFL  0.01364, SL -2.5561E+00, Mass 6.15965E+15, Me  2.14E-04
-<      6,       6.000,     0, En 1.2432136988543331E-01, CFL  0.00699, SL  8.8026E-01, Mass 6.19508E+15, Me  5.72E-03
----
->      3,       3.000,     0, En 3.9843078959504019E-01, CFL  0.01364, SL -2.5561E+00, Mass 6.15965E+15, Me  2.14E-04
->      6,       6.000,     0, En 1.2432135714767578E-01, CFL  0.00699, SL  8.8026E-01, Mass 6.19508E+15, Me  5.72E-03
-FAIL: Solutions tc3.dim.l have changed.
-work/tc2/symmetric/chksum_diag work/tc2/dim.l/chksum_diag differ: byte 32767, line 393
-4,5c4,5
-<     12,       0.500,     0, En 4.9405877283677048E-06, CFL  0.00014, SL -3.4106E-13, M 1.28612E+20, S 35.0000, T 13.3484, Me  1.65E-17, Se  2.66E-15, Te  4.85E-16
-<     24,       1.000,     0, En 1.6236536597759294E-05, CFL  0.00027, SL -3.4106E-13, M 1.28612E+20, S 35.0000, T 13.3486, Me -2.20E-18, Se -1.51E-15, Te -2.28E-16
----
->     12,       0.500,     0, En 4.9392365837738674E-06, CFL  0.00014, SL -3.4106E-13, M 1.28612E+20, S 35.0000, T 13.3484, Me -3.00E-17, Se -2.87E-16, Te -3.40E-16
->     24,       1.000,     0, En 1.6235627786922381E-05, CFL  0.00027, SL -3.4106E-13, M 1.28612E+20, S 35.0000, T 13.3486, Me  1.58E-17, Se  5.10E-16, Te  4.28E-16
-FAIL: Solutions tc2.a.dim.l have changed.
-work/tc2/symmetric/ocean.stats work/tc2/dim.l/ocean.stats differ: byte 516, line 4
-make: *** [Makefile:494: tc3.dim.l.diag] Error 1
-make: *** Waiting for unfinished jobs....
-make: *** [Makefile:495: tc3.dim.l] Error 1
-make: *** [Makefile:495: tc2.a.dim.l] Error 1
-PASS: Diagnostics tc0.dim.l.diag agree.
-4,5c4,5
-<     12,       0.500,     0, En 2.7781373682863648E-04, CFL  0.00011, SL  1.1369E-12, M 1.39637E+20, S 35.0000, T 13.3484, Me -3.29E-17, Se -2.52E-15, Te -8.52E-16
-<     24,       1.000,     0, En 2.7734247470878219E-04, CFL  0.00014, SL  1.8190E-12, M 1.39637E+20, S 35.0000, T 13.3486, Me  1.85E-17, Se -7.33E-16, Te  3.72E-16
----
->     12,       0.500,     0, En 2.7780440067662690E-04, CFL  0.00011, SL  1.8190E-12, M 1.39637E+20, S 35.0000, T 13.3484, Me -3.23E-17, Se -2.82E-15, Te -9.63E-16
->     24,       1.000,     0, En 2.7733289711123359E-04, CFL  0.00014, SL  1.1369E-12, M 1.39637E+20, S 35.0000, T 13.3486, Me -3.27E-17, Se -2.11E-15, Te -1.46E-16
-FAIL: Solutions tc2.dim.l have changed.
-make: *** [Makefile:495: tc2.dim.l] Error 1
+PASS: Diagnostics tc1.b.dim.t.diag agree.
+PASS: Solutions tc3.dim.l agree.
+PASS: Diagnostics tc3.dim.l.diag agree.
+PASS: Solutions tc2.a.dim.l agree.
+PASS: Diagnostics tc2.a.dim.l.diag agree.
+PASS: Solutions tc2.dim.l agree.
+PASS: Diagnostics tc2.dim.l.diag agree.
 PASS: Solutions tc0.dim.l agree.
-391,406c391,406
-< u-point: mean=   1.0845742291987331E-18 min=  -4.9711718836911957E-15 max=   4.9164640833327309E-15 ocean_model-ZB2020u
-< u-point: c=     20591 ocean_model-ZB2020u
-<  column: mean=   4.9246167182892995E-24 min=  -1.3880188329112976E-24 max=   4.0766187664707121E-23 ocean_model-ZB2020u_xyave
-<  column: c=       253 ocean_model-ZB2020u_xyave
-< u-point: mean=   5.2758976978682830E-19 min=  -4.9711718836911957E-15 max=   4.9164640833327309E-15 ocean_model_z-ZB2020u
-< u-point: c=     79670 ocean_model_z-ZB2020u
-<  column: mean=   2.6132006034395377E-19 min=  -1.7052677458490804E-17 max=   1.0310782371167838E-17 ocean_model_z-ZB2020u_xyave
-<  column: c=       980 ocean_model_z-ZB2020u_xyave
-< v-point: mean=   8.5084040208543543E-18 min=  -6.4998020557137819E-15 max=   6.2287763928773450E-15 ocean_model-ZB2020v
-< v-point: c=     18108 ocean_model-ZB2020v
-<  column: mean=  -6.8181476650384415E-19 min=  -4.9585740884922296E-18 max=  -2.2466774971292253E-20 ocean_model-ZB2020v_xyave
-<  column: c=       259 ocean_model-ZB2020v_xyave
-< v-point: mean=   6.3553885537801157E-18 min=  -6.4998020557137819E-15 max=   6.2287763928773450E-15 ocean_model_z-ZB2020v
-< v-point: c=     70487 ocean_model_z-ZB2020v
-<  column: mean=   6.9783731070340180E-18 min=  -7.3106415709010554E-17 max=   7.2224478396360756E-17 ocean_model_z-ZB2020v_xyave
-<  column: c=      1032 ocean_model_z-ZB2020v_xyave
----
-> u-point: mean=   1.0847063709702603E-18 min=  -4.9713474471904209E-15 max=   4.9166232993851161E-15 ocean_model-ZB2020u
-> u-point: c=     20391 ocean_model-ZB2020u
-FAIL: Diagnostics tc2.a.dim.l.diag have changed.
-make: *** [Makefile:494: tc2.a.dim.l.diag] Error 1
-393,408c393,408
-< u-point: mean=  -7.8815350275282653E-15 min=  -3.4769594778481620E-12 max=   4.0822596072339459E-12 ocean_model-ZB2020u
-< u-point: c=     20844 ocean_model-ZB2020u
-<  column: mean=  -4.6010883805430823E-18 min=  -5.4355360866954023E-18 max=  -4.2258444445000879E-18 ocean_model-ZB2020u_xyave
-<  column: c=       257 ocean_model-ZB2020u_xyave
-< u-point: mean=  -3.3547962141432574E-16 min=  -3.4769594778481616E-12 max=   4.0822596072339451E-12 ocean_model_z-ZB2020u
-< u-point: c=     80751 ocean_model_z-ZB2020u
-<  column: mean=  -2.9967036501106656E-18 min=  -6.9086049696949211E-17 max=   1.3077602505429971E-16 ocean_model_z-ZB2020u_xyave
-<  column: c=      1002 ocean_model_z-ZB2020u_xyave
-< v-point: mean=   1.2628832599777839E-14 min=  -6.7066366783326306E-12 max=   9.3291624396110522E-12 ocean_model-ZB2020v
-< v-point: c=     18249 ocean_model-ZB2020v
-<  column: mean=  -9.7521955096955125E-15 min=  -4.8006574023664609E-14 max=   1.4807941712676504E-15 ocean_model-ZB2020v_xyave
-<  column: c=       274 ocean_model-ZB2020v_xyave
-< v-point: mean=  -1.2399867212946725E-14 min=  -6.7066366783326306E-12 max=   9.3291624396110522E-12 ocean_model_z-ZB2020v
-< v-point: c=     70779 ocean_model_z-ZB2020v
-<  column: mean=  -2.7914376019510422E-14 min=  -4.8006574013709475E-14 max=   5.0204498653073621E-15 ocean_model_z-ZB2020v_xyave
-<  column: c=       959 ocean_model_z-ZB2020v_xyave
----
-> u-point: mean=  -7.8798293436397879E-15 min=  -3.4769420341514427E-12 max=   4.0822732991319806E-12 ocean_model-ZB2020u
-> u-point: c=     20886 ocean_model-ZB2020u
-FAIL: Diagnostics tc2.dim.l.diag have changed.
-make: *** [Makefile:494: tc2.dim.l.diag] Error 1
+PASS: Diagnostics tc0.dim.l.diag agree.
+PASS: Solutions tc1.a.dim.l agree.
+PASS: Diagnostics tc1.a.dim.l.diag agree.
+PASS: Solutions tc1.dim.l agree.
+PASS: Diagnostics tc1.dim.l.diag agree.
+PASS: Solutions tc4.dim.l agree.
+PASS: Diagnostics tc4.dim.l.diag agree.
+PASS: Solutions tc1.b.dim.l agree.
+PASS: Diagnostics tc1.b.dim.l.diag agree.
+PASS: Solutions tc3.dim.h agree.
+PASS: Diagnostics tc3.dim.h.diag agree.
+PASS: Solutions tc2.a.dim.h agree.
+PASS: Diagnostics tc2.a.dim.h.diag agree.
+PASS: Solutions tc2.dim.h agree.
+PASS: Diagnostics tc2.dim.h.diag agree.
+PASS: Solutions tc0.dim.h agree.
+PASS: Diagnostics tc0.dim.h.diag agree.
+PASS: Solutions tc1.a.dim.h agree.
+PASS: Diagnostics tc1.a.dim.h.diag agree.
+PASS: Solutions tc1.dim.h agree.
+PASS: Diagnostics tc1.dim.h.diag agree.
+PASS: Solutions tc4.dim.h agree.
+PASS: Diagnostics tc4.dim.h.diag agree.
+PASS: Solutions tc1.b.dim.h agree.
+PASS: Diagnostics tc1.b.dim.h.diag agree.
+PASS: Solutions tc3.dim.z agree.
+PASS: Diagnostics tc3.dim.z.diag agree.
+PASS: Solutions tc2.a.dim.z agree.
+PASS: Diagnostics tc2.a.dim.z.diag agree.
+PASS: Solutions tc2.dim.z agree.
+PASS: Diagnostics tc2.dim.z.diag agree.
+PASS: Solutions tc0.dim.z agree.
+PASS: Diagnostics tc0.dim.z.diag agree.
+PASS: Solutions tc1.a.dim.z agree.
+PASS: Diagnostics tc1.a.dim.z.diag agree.
+PASS: Solutions tc1.dim.z agree.
+PASS: Diagnostics tc1.dim.z.diag agree.
+PASS: Solutions tc4.dim.z agree.
+PASS: Diagnostics tc4.dim.z.diag agree.
+PASS: Solutions tc1.b.dim.z agree.
+PASS: Diagnostics tc1.b.dim.z.diag agree.
+PASS: Solutions tc3.dim.q agree.
+PASS: Diagnostics tc3.dim.q.diag agree.
+PASS: Solutions tc2.a.dim.q agree.
+PASS: Diagnostics tc2.a.dim.q.diag agree.
+PASS: Solutions tc2.dim.q agree.
+PASS: Diagnostics tc2.dim.q.diag agree.
+PASS: Solutions tc0.dim.q agree.
+PASS: Diagnostics tc0.dim.q.diag agree.
+PASS: Solutions tc1.a.dim.q agree.
+PASS: Diagnostics tc1.a.dim.q.diag agree.
+PASS: Solutions tc1.dim.q agree.
+PASS: Diagnostics tc1.dim.q.diag agree.
+PASS: Solutions tc4.dim.q agree.
+PASS: Diagnostics tc4.dim.q.diag agree.
+PASS: Solutions tc1.b.dim.q agree.
+PASS: Diagnostics tc1.b.dim.q.diag agree.
+PASS: Solutions tc3.dim.r agree.
+PASS: Diagnostics tc3.dim.r.diag agree.
+PASS: Solutions tc2.a.dim.r agree.
+PASS: Diagnostics tc2.a.dim.r.diag agree.
+PASS: Solutions tc2.dim.r agree.
+PASS: Diagnostics tc2.dim.r.diag agree.
+PASS: Solutions tc0.dim.r agree.
+PASS: Diagnostics tc0.dim.r.diag agree.
+PASS: Solutions tc1.a.dim.r agree.
+PASS: Diagnostics tc1.a.dim.r.diag agree.
+PASS: Solutions tc1.dim.r agree.
+PASS: Diagnostics tc1.dim.r.diag agree.
+PASS: Solutions tc4.dim.r agree.
+PASS: Diagnostics tc4.dim.r.diag agree.
+PASS: Solutions tc1.b.dim.r agree.
+PASS: Diagnostics tc1.b.dim.r.diag agree.

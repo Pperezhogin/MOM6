@@ -168,6 +168,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   h_neglect  = GV%H_subroundoff ! Line 410 on MOM_hor_visc.F90
   h_neglect3 = h_neglect**3
 
+  fx(:,:,:) = 0.
+  fy(:,:,:) = 0.
+
   ! Calculate metric terms (line 2119 of MOM_hor_visc.F90)
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     dx2q(I,J) = G%dxBu(I,J)*G%dxBu(I,J) ; dy2q(I,J) = G%dyBu(I,J)*G%dyBu(I,J)
@@ -263,7 +266,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
       k_bc = - CS%FGR**2 * G%areaBu(i,j) / 24.
-      S_12(I,J) = vort_xy(I,J) * sh_xx_corner(I,J)
+      S_12(I,J) = k_bc * vort_xy(I,J) * sh_xx_corner(I,J)
     enddo ; enddo
 
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
