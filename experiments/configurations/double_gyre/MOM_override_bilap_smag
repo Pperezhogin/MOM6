@@ -1,0 +1,5 @@
+! Blank file in which we can put "overrides" for parameters
+#override LAPLACIAN  = False
+#override BIHARMONIC = True
+#override SMAGORINSKY_AH = True
+#override SMAG_BI_CONST = 0.06
