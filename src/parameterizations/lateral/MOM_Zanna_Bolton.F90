@@ -15,7 +15,7 @@ implicit none ; private
 public Zanna_Bolton_2020, ZB_2020_init
 
 !> Control structure that contains MEKE parameters and diagnostics handles
-type, public :: ZB2020_CS ; private
+type, public :: ZB2020_CS
   ! Parameters
   logical   :: use_ZB2020 !< If true, parameterization works
   real      :: FGR        !< Filter to grid width ratio, nondimensional, 
