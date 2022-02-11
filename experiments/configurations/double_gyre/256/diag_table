@@ -3,9 +3,9 @@
 "prog_%4yr_%3dy",     5,"days",1,"days","Time",365,"days"
 "ave_prog_%4yr_%3dy", 5,"days",1,"days","Time",365,"days"
 "cont_%4yr_%3dy",     5,"days",1,"days","Time",365,"days"
-#"mom_%4yr_%3dy",      5,"days",1,"days","Time",10,"days"
+"mom_%4yr_%3dy",      5,"days",1,"days","Time",365,"days"
 #"bt_mom_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
-#"visc_%4yr_%3dy",     5,"days",1,"days","Time",10,"days"
+"visc_%4yr_%3dy",     5,"days",1,"days","Time",365,"days"
 "energy_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
 #"ML_TKE_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
 #"forcing_%4yr_%3dy",  5,"days",1,"days","Time",10,"days"
@@ -77,8 +77,8 @@
 #"ocean_model","PFv","PFv","mom_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","du_dt_visc","du_dt_visc","mom_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","dv_dt_visc","dv_dt_visc","mom_%4yr_%3dy","all",.true.,"none",2
-#"ocean_model","diffu","diffu","mom_%4yr_%3dy","all",.true.,"none",2
-#"ocean_model","diffv","diffv","mom_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","diffu","diffu","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","diffv","diffv","mom_%4yr_%3dy","all",.false.,"none",2
 #"ocean_model","dudt_dia","dudt_dia","mom_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","dvdt_dia","dvdt_dia","mom_%4yr_%3dy","all",.true.,"none",2
 # Subterms that should not be added to a closed budget.
@@ -89,8 +89,8 @@
 #"ocean_model","PFu_bc","PFu_bc","mom_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","PFv_bc","PFv_bc","mom_%4yr_%3dy","all",.true.,"none",2
 
-#"ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.true.,"none",2
-#"ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.false.,"none",2
 
 # Barotropic Momentum Balance Terms:
 # (only available with split time stepping.)
@@ -107,7 +107,7 @@
 # Viscosities and diffusivities:
 #===============================
 #"ocean_model","Kd_effective","Kd_effective","visc_%4yr_%3dy","all",.true.,"none",2
-#"ocean_model","Ahh","Ahh","visc_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","Ahh","Ahh","visc_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","Ahq","Ahq","visc_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","Khh","Khh","visc_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","Khq","Khq","visc_%4yr_%3dy","all",.true.,"none",2
