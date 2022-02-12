@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --nodes=2
+#SBATCH --nodes=6
 #SBATCH --ntasks-per-node=48
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16GB
@@ -11,20 +11,10 @@
 ## SBATCH --mail-type=END
 ## SBATCH --mail-user=pp2681@nyu.edu
 
-## Set experiment name here
-EXP_NAME=experiments/Zanna-Bolton/256
-
-## Create an output directory on scratch
-rm -rf $EXP_NAME
-mkdir -p $EXP_NAME
-cp -r configurations/double_gyre/256/* $EXP_NAME
-cd $EXP_NAME
-
 module purge
 source ~/MOM6-examples/build/intel/env
-cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 MOM6
 mpiexec ./MOM6 > out.txt
 
 ## Move output files
 mkdir -p output
-mv prog__*.nc ave_prog__*.nc cont__*.nc energy__*.nc forcing__*.nc output
+mv *.nc output
