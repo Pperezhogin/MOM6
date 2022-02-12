@@ -1,7 +1,0 @@
-! Blank file in which we can put "overrides" for parameters
-#override NIGLOBAL = 256
-#override NJGLOBAL = 256
-#override DAYMAX = 7300
-#override DT = 600.
-#override DT_FORCING = 600.
-#override KH = 0.

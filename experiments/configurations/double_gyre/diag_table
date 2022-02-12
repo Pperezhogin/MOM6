@@ -1,14 +1,14 @@
 "MOM Experiment"
 1 1 1 0 0 0
-"prog_%4yr_%3dy",     5,"days",1,"days","Time",365,"days"
-"ave_prog_%4yr_%3dy", 5,"days",1,"days","Time",365,"days"
-"cont_%4yr_%3dy",     5,"days",1,"days","Time",365,"days"
-"mom_%4yr_%3dy",      5,"days",1,"days","Time",365,"days"
+"prog_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
+"ave_prog_%4yr_%3dy", 30,"days",1,"days","Time",365,"days"
+"cont_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
+"mom_%4yr_%3dy",      30,"days",1,"days","Time",365,"days"
 #"bt_mom_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
-"visc_%4yr_%3dy",     5,"days",1,"days","Time",365,"days"
+#"visc_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
 "energy_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
 #"ML_TKE_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
-#"forcing_%4yr_%3dy",  5,"days",1,"days","Time",10,"days"
+"forcing_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
 
 #This is the field section of the diag_table.
 
@@ -107,7 +107,7 @@
 # Viscosities and diffusivities:
 #===============================
 #"ocean_model","Kd_effective","Kd_effective","visc_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","Ahh","Ahh","visc_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","Ahh","Ahh","visc_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","Ahq","Ahq","visc_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","Khh","Khh","visc_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","Khq","Khq","visc_%4yr_%3dy","all",.true.,"none",2
@@ -141,13 +141,13 @@
 
 # Surface Forcing:
 #=================
-#"ocean_model","taux","taux","forcing_%4yr_%3dy","all",.true.,"none",2
-#"ocean_model","tauy","tauy","forcing_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","taux","taux","forcing_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","tauy","tauy","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","ustar","ustar","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","PRCmE","PRCmE","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","SW","SW","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","LwLatSens","LwLatSens","forcing_%4yr_%3dy","all",.true.,"none",2
-#"ocean_model","p_surf","p_surf","forcing_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","p_surf","p_surf","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","salt_flux","salt_flux","forcing_%4yr_%3dy","all",.true.,"none",2
 #
 
