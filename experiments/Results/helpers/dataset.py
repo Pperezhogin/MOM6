@@ -88,7 +88,7 @@ class dataset_experiments:
 
     def plot_relative_vorticity_snapshot(self, exps, Time=-1, zl=0):
         nfig = len(exps)
-        plt.rcParams.update({'font.size': 16})
+        plt.rcParams.update({'font.size': 12})
 
         if nfig > 3:
             xfig = int(nfig / 2)
@@ -97,20 +97,23 @@ class dataset_experiments:
             xfig = nfig
             yfig = 1
 
-        fig = plt.figure(figsize=(xfig*4,yfig*4))
-
+        fig, ax = plt.subplots(yfig, xfig, figsize=(xfig*5,yfig*4))
+        ax = ax.reshape(-1)
         for ifig, exp in enumerate(exps):
-            plt.subplot(int(str(yfig)+str(xfig)+str(ifig+1)))
             prog = self[exp].prog
             RV = np.array(prog.RV.isel(zl=zl, Time=Time))
             param = self[exp].param
             f = np.array(param.f)
             xq = prog.xq
             yq = prog.yq
-            plt.imshow(RV / f, origin='lower', extent=[xq.min(),xq.max(),yq.min(),yq.max()], cmap='inferno')
-            plt.xlabel('Longitude')
-            plt.ylabel('Latitude')
-            plt.title(exp)
-            plt.clim(-0.2,0.2)
+            p = ax[ifig].imshow(RV / f, origin='lower',
+                extent=[xq.min(),xq.max(),yq.min(),yq.max()], 
+                cmap='bwr', vmin=-0.2, vmax = 0.2)
+            ax[ifig].set_xlabel('Longitude')
+            ax[ifig].set_title(exp)
 
-        plt.tight_layout()
+        ax[0].set_ylabel('Latitude')
+        if (yfig>1):
+            ax[xfig].set_ylabel('Latitude')
+        
+        fig.colorbar(p, ax=ax)
