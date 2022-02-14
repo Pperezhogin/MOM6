@@ -8,6 +8,7 @@ class dataset:
         self.ave = xr.open_mfdataset(folder+'/ave_*.nc', decode_times=False)
         self.prog = xr.open_mfdataset(folder+'/prog_*.nc', decode_times=False)
         self.param = xr.open_dataset(folder+'/ocean_geometry.nc', decode_times=False)
+        self.energy = xr.open_mfdataset(folder+'/energy_*.nc', decode_times=False)
 class dataset_experiments:
     def __init__(self, common_folder, exps):
         self.common_folder = common_folder
@@ -71,7 +72,7 @@ class dataset_experiments:
             plt.subplot(int(str(yfig)+str(xfig)+str(ifig+1)))
             ave = self[exp].ave
             t = ave.Time
-            ssh = ave.e.isel(zi=0)[t > tstart].mean(dim='Time')
+            ssh = ave.e.isel(zi=0)[t >= tstart].mean(dim='Time')
             xh = ave.xh
             yh = ave.yh
             X, Y = np.meshgrid(xh,yh)
@@ -116,4 +117,74 @@ class dataset_experiments:
         if (yfig>1):
             ax[xfig].set_ylabel('Latitude')
         
-        fig.colorbar(p, ax=ax)
+        fig.colorbar(p, ax=ax, label='N/D units')
+
+    def plot_KE_snapshot(self, exps, Time=-1, zl=0):
+        nfig = len(exps)
+        plt.rcParams.update({'font.size': 12})
+
+        if nfig > 3:
+            xfig = int(nfig / 2)
+            yfig = 2
+        else:
+            xfig = nfig
+            yfig = 1
+
+        fig, ax = plt.subplots(yfig, xfig, figsize=(xfig*5,yfig*4))
+        ax = ax.reshape(-1)
+        for ifig, exp in enumerate(exps):
+            energy = self[exp].energy
+            KE = np.array(energy.KE.isel(zl=zl, Time=Time))
+            xh = energy.xh
+            yh = energy.yh
+            p = ax[ifig].imshow(KE, origin='lower',
+                extent=[xh.min(),xh.max(),yh.min(),yh.max()], 
+                cmap='inferno', vmin=0, vmax=0.05)
+            ax[ifig].set_xlabel('Longitude')
+            ax[ifig].set_title(exp)
+
+        ax[0].set_ylabel('Latitude')
+        if (yfig>1):
+            ax[xfig].set_ylabel('Latitude')
+        
+        fig.colorbar(p, ax=ax, label='$m^2/s^2$')
+
+    def plot_EKE(self, exps, tstart=3650., zl=0, vmax = 0.02):
+        nfig = len(exps)
+        plt.rcParams.update({'font.size': 12})
+
+        if nfig > 3:
+            xfig = int(nfig / 2)
+            yfig = 2
+        else:
+            xfig = nfig
+            yfig = 1
+
+        fig, ax = plt.subplots(yfig, xfig, figsize=(xfig*5,yfig*4))
+        ax = ax.reshape(-1)
+        for ifig, exp in enumerate(exps):
+            energy = self[exp].energy
+            ave = self[exp].ave
+            KE_full = np.array(energy.KE.isel(zl=zl)[energy.Time>=tstart].mean(dim='Time'))
+            u = ave.u.isel(zl=zl)[ave.Time>=tstart].mean(dim='Time').data
+            v = ave.v.isel(zl=zl)[ave.Time>=tstart].mean(dim='Time').data
+            u2 = np.array(u)**2
+            v2 = np.array(v)**2
+            KE_mean = 0.25 * (u2[:,1:] + u2[:,0:-1] + v2[1:,:] + v2[0:-1,:])
+            
+            EKE = KE_full-KE_mean
+
+            xh = energy.xh
+            yh = energy.yh
+            X,Y = np.meshgrid(xh, yh)
+            p = ax[ifig].imshow(EKE, origin='lower',
+                extent=[xh.min(),xh.max(),yh.min(),yh.max()], 
+                cmap='inferno', vmin = 0, vmax = vmax)
+            ax[ifig].set_xlabel('Longitude')
+            ax[ifig].set_title(exp)
+
+        ax[0].set_ylabel('Latitude')
+        if (yfig>1):
+            ax[xfig].set_ylabel('Latitude')
+        
+        fig.colorbar(p, ax=ax, label='$m^2/s^2$')
