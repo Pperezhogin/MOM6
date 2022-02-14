@@ -1,6 +1,118 @@
 import xarray as xr
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.fft as npfft
+
+def calc_ispec(kk, ll, wv, _var_dens, averaging = True, truncate=True, nd_wavenumber=False, nfactor = 1):
+    """Compute isotropic spectrum `phr` from 2D spectrum of variable signal2d.
+
+    Parameters
+    ----------
+    var_dens : squared modulus of fourier coefficients like this:
+        np.abs(signal2d_fft)**2/m.M**2
+
+    averaging: If True, spectral density is estimated with averaging over circles,
+        otherwise summation is used and Parseval identity holds
+
+    truncate: If True, maximum wavenumber corresponds to inner circle in Fourier space,
+        otherwise - outer circle
+    
+    nd_wavenumber: If True, wavenumber is nondimensional: 
+        minimum wavenumber is 1 and corresponds to domain length/width,
+        otherwise - wavenumber is dimensional [m^-1]
+
+    nfactor: width of the bin in sqrt(dk^2+dl^2) units
+
+    Returns
+    -------
+    kr : array
+        isotropic wavenumber
+    phr : array
+        isotropic spectrum
+
+    Normalization:
+    signal2d.var()/2 = phr.sum() * (kr[1] - kr[0])
+    """
+
+    # account for complex conjugate
+    var_dens = np.copy(_var_dens)
+    var_dens[...,0] /= 2
+    var_dens[...,-1] /= 2
+
+    ll_max = np.abs(ll).max()
+    kk_max = np.abs(kk).max()
+
+    dk = kk[1] - kk[0]
+    dl = ll[1] - ll[0]
+
+    if truncate:
+        kmax = np.minimum(ll_max, kk_max)
+    else:
+        kmax = np.sqrt(ll_max**2 + kk_max**2)
+    
+    kmin = np.minimum(dk, dl)
+
+    dkr = np.sqrt(dk**2 + dl**2) * nfactor
+
+    # left border of bins
+    kr = np.arange(kmin, kmax, dkr)
+    
+    phr = np.zeros(kr.size)
+
+    for i in range(kr.size):
+        if averaging:
+            fkr =  (wv>=kr[i]) & (wv<=kr[i]+dkr)    
+            if fkr.sum() == 0:
+                phr[i] = 0.
+            else:
+                phr[i] = var_dens[fkr].mean() * (kr[i]+dkr/2) * np.pi / (dk * dl)
+        else:
+            fkr =  (wv>=kr[i]) & (wv<kr[i]+dkr)
+            phr[i] = var_dens[fkr].sum() / dkr
+    
+    # convert left border of the bin to center
+    kr = kr + dkr/2
+
+    # convert to non-dimensional wavenumber 
+    # preserving integral over spectrum
+    if nd_wavenumber:
+        kr = kr / kmin
+        phr = phr * kmin
+
+    return kr, phr
+
+def compute_spectrum(u, dx=1, dy=1, **kw):
+    uf = npfft.rfftn(np.nan_to_num(u), axes=(-2,-1))
+    M = u.shape[-1] * u.shape[-2] # total number of points
+
+    u2 = (np.abs(uf)**2 / M**2)
+
+    if len(u2.shape) == 3:
+        u2 = u2.mean(axis=0)
+    elif len(u2.shape) > 3:
+        print('error')
+
+    Lx = u.shape[-1] * dx
+    Ly = u.shape[-2] * dy
+
+    kx_max = np.pi/dx
+    kx_step = 2*np.pi/Lx
+    ky_max = np.pi/dy
+    ky_step = 2*np.pi/Ly
+
+    if u.shape[-1] % 2 == 0:
+        kx = np.arange(0,kx_max+kx_step,kx_step)
+    else:
+        kx = np.arange(0,kx_max,kx_step)
+    if u.shape[-2] % 2 == 0:
+        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max+ky_step,ky_step))])    
+    else:
+        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max,ky_step))])
+
+    Kx, Ky = np.meshgrid(kx, ky)
+    K = np.sqrt(Kx**2+Ky**2)
+
+    return calc_ispec(kx, ky, K, u2, nd_wavenumber=True, **kw)
 
 class dataset:
     def __init__(self, folder):
@@ -188,3 +300,36 @@ class dataset_experiments:
             ax[xfig].set_ylabel('Latitude')
         
         fig.colorbar(p, ax=ax, label='$m^2/s^2$')
+
+    def plot_KE_spectrum(self, exps, tstart = 7200., **kw):
+        fig = plt.figure(figsize=(13,5))
+        plt.rcParams.update({'font.size': 18})
+        for exp in exps:
+            prog = self[exp].prog
+            t = prog.Time
+            u = np.array(prog.u[t >= tstart])
+            v = np.array(prog.v[t >= tstart])
+
+            uh = 0.5 * (u[:,:,:,1:] + u[:,:,:,0:-1])
+            vh = 0.5 * (v[:,:,1:,:] + v[:,:,0:-1,:])
+
+            plt.subplot(121)
+            k, Eu = compute_spectrum(uh[:,0,:,:], **kw)
+            k, Ev = compute_spectrum(vh[:,0,:,:], **kw)
+            plt.loglog(k,Eu+Ev, label=exp)
+            plt.xlabel('$k$, wavenumber')
+            plt.ylabel('$E(k)$')
+            plt.title('Upper layer')
+            plt.xlim((1,800))
+            plt.legend()
+
+            plt.subplot(122)
+            k, Eu = compute_spectrum(uh[:,1,:,:], **kw)
+            k, Ev = compute_spectrum(vh[:,1,:,:], **kw)
+            plt.loglog(k,Eu+Ev, label=exp)
+            plt.xlabel('$k$, wavenumber')
+            plt.ylabel('$E(k)$')
+            plt.title('Lower layer')
+            plt.xlim((1,800))
+
+        plt.tight_layout()
