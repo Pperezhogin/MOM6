@@ -114,6 +114,45 @@ def compute_spectrum(u, dx=1, dy=1, **kw):
 
     return calc_ispec(kx, ky, K, u2, nd_wavenumber=True, **kw)
 
+def compute_cospectrum(u, f, dx=1, dy=1, **kw):
+    uf = npfft.rfftn(np.nan_to_num(u), axes=(-2,-1))
+    ff = npfft.rfftn(np.nan_to_num(f), axes=(-2,-1))
+    M = u.shape[-1] * u.shape[-2] # total number of points
+
+    cosp = np.real(uf * np.conj(ff) / M**2)
+
+    if len(cosp.shape) == 3:
+        cosp = cosp.mean(axis=0)
+    elif len(u2.shape) > 3:
+        print('error')
+
+    Lx = u.shape[-1] * dx
+    Ly = u.shape[-2] * dy
+
+    kx_max = np.pi/dx
+    kx_step = 2*np.pi/Lx
+    ky_max = np.pi/dy
+    ky_step = 2*np.pi/Ly
+
+    if u.shape[-1] % 2 == 0:
+        kx = np.arange(0,kx_max+kx_step,kx_step)
+    else:
+        kx = np.arange(0,kx_max,kx_step)
+    if u.shape[-2] % 2 == 0:
+        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max+ky_step,ky_step))])    
+    else:
+        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max,ky_step))])
+
+    Kx, Ky = np.meshgrid(kx, ky)
+    K = np.sqrt(Kx**2+Ky**2)
+
+    return calc_ispec(kx, ky, K, 2*cosp, nd_wavenumber=True, **kw)
+
+def compute_cospectrum_uv(u, v, fx, fy, **kw):
+    kx, Ekx = compute_cospectrum(u, fx, **kw)
+    ky, Eky = compute_cospectrum(v, fy, **kw)
+    return kx, Ekx+Eky
+
 class dataset:
     def __init__(self, folder):
         self.series = xr.open_dataset(folder+'/ocean.stats.nc', decode_times=False)
@@ -122,6 +161,7 @@ class dataset:
         self.param = xr.open_dataset(folder+'/ocean_geometry.nc', decode_times=False)
         self.energy = xr.open_mfdataset(folder+'/energy_*.nc', decode_times=False)
         self.forcing = xr.open_mfdataset(folder+'/forcing_*.nc', decode_times=False)
+        self.mom = xr.open_mfdataset(folder+'/mom_*.nc', decode_times=False)
 
 class dataset_experiments:
     def __init__(self, common_folder, exps, exps_names=None):
@@ -376,7 +416,7 @@ class dataset_experiments:
 
     def plot_KE_spectrum(self, exps, tstart = 7200., **kw):
         fig = plt.figure(figsize=(13,5))
-        plt.rcParams.update({'font.size': 18})
+        plt.rcParams.update({'font.size': 16})
         for exp in exps:
             prog = self[exp].prog
             t = prog.Time
@@ -404,5 +444,184 @@ class dataset_experiments:
             plt.ylabel('$E(k)$')
             plt.title('Lower layer')
             plt.xlim((1,800))
+
+        plt.subplot(121)
+        k = [20, 300]
+        E = [2e-4, 0]
+        E[1] = E[0] * (k[1]/k[0])**(-3)
+        plt.loglog(k,E,'--k')
+        plt.text(100, 1e-5, '$k^{-3}$')
+
+        plt.subplot(122)
+        k = [70, 300]
+        E = [2e-6, 0]
+        E[1] = E[0] * (k[1]/k[0])**(-3)
+        plt.loglog(k,E,'--k')
+        plt.text(100, 2e-6, '$k^{-3}$')
+
+        plt.tight_layout()
+
+    def plot_cospectrum(self, exps, tstart = 7200., print_diagnostics = False, **kw):
+        fig = plt.figure(figsize=(13,5))
+        plt.rcParams.update({'font.size': 16})
+        for exp in exps:
+            prog = self[exp].prog
+            mom = self[exp].mom
+
+            t = prog.Time
+            u = np.array(prog.u[t >= tstart])
+            v = np.array(prog.v[t >= tstart])
+            fx = np.array(mom.diffu[t >= tstart])
+            fy = np.array(mom.diffv[t >= tstart])
+            h = np.array(prog.h[t >= tstart])
+
+            uh = 0.5 * (u[:,:,:,1:] + u[:,:,:,0:-1])
+            vh = 0.5 * (v[:,:,1:,:] + v[:,:,0:-1,:])
+            fxh = 0.5 * (fx[:,:,:,1:] + fx[:,:,:,0:-1])
+            fyh = 0.5 * (fy[:,:,1:,:] + fy[:,:,0:-1,:])
+
+            if print_diagnostics:
+                print('Check integrals:')
+                print('mean(u * fx + v * fy) = ', 
+                    np.nanmean(uh*fxh, axis=(0,2,3)) +
+                    np.nanmean(vh*fyh, axis=(0,2,3)))
+                print('mean(h * u * fx + h * v * fy) / mean(h) = ', 
+                    np.nanmean(h*uh*fxh, axis=(0,2,3)) / np.nanmean(h, axis=(0,2,3)) + 
+                    np.nanmean(h*vh*fyh, axis=(0,2,3)) / np.nanmean(h, axis=(0,2,3)))
+
+            plt.subplot(121)
+            k, E = compute_cospectrum_uv(uh[:,0,:,:], vh[:,0,:,:], fxh[:,0,:,:], fyh[:,0,:,:], **kw)
+            plt.semilogx(k,E*k, label=self.names[exp])
+            plt.xlabel('$k$, wavenumber')
+            plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk$')
+            plt.title('Upper layer')
+            if print_diagnostics:
+                print('Integral upper layer:', E.sum() * (k[1]-k[0]))
+
+            plt.subplot(122)
+            k, E = compute_cospectrum_uv(uh[:,1,:,:], vh[:,1,:,:], fxh[:,1,:,:], fyh[:,1,:,:], **kw)
+            plt.semilogx(k,E*k, label=self.names[exp])
+            plt.xlabel('$k$, wavenumber')
+            plt.title('Lower layer')
+            plt.legend()
+            if print_diagnostics:
+                print('Integral lower layer:', E.sum() * (k[1]-k[0]))
+
+        plt.tight_layout()
+
+    def plot_cospectrum_componentwise(self, exps, tstart = 7200., print_diagnostics = False, **kw):
+        fig = plt.figure(figsize=(13,5))
+        plt.rcParams.update({'font.size': 16})
+        for exp in exps:
+            prog = self[exp].prog
+            mom = self[exp].mom
+
+            t = prog.Time
+            u = np.array(prog.u[t >= tstart])
+            v = np.array(prog.v[t >= tstart])
+            fx = np.array(mom.diffu[t >= tstart])
+            fy = np.array(mom.diffv[t >= tstart])
+            h = np.array(prog.h[t >= tstart])
+            ZBx = np.array(mom.ZB2020u[t >= tstart])
+            ZBy = np.array(mom.ZB2020v[t >= tstart])
+
+            uh = 0.5 * (u[:,:,:,1:] + u[:,:,:,0:-1])
+            vh = 0.5 * (v[:,:,1:,:] + v[:,:,0:-1,:])
+            fxh = 0.5 * (fx[:,:,:,1:] + fx[:,:,:,0:-1])
+            fyh = 0.5 * (fy[:,:,1:,:] + fy[:,:,0:-1,:])
+            ZBxh = 0.5 * (ZBx[:,:,:,1:] + ZBx[:,:,:,0:-1])
+            ZByh = 0.5 * (ZBy[:,:,1:,:] + ZBy[:,:,0:-1,:])
+            
+            plt.subplot(121)
+            k, E = compute_cospectrum_uv(uh[:,0,:,:], vh[:,0,:,:], fxh[:,0,:,:], fyh[:,0,:,:], **kw)
+            k, EZB = compute_cospectrum_uv(uh[:,0,:,:], vh[:,0,:,:], ZBxh[:,0,:,:], ZByh[:,0,:,:], **kw)
+            Esmag = E - EZB
+            plt.semilogx(k,E*k, label='sum')
+            plt.semilogx(k,EZB*k, '--', label='ZB2020')
+            plt.semilogx(k,Esmag*k, '-.', label='Smag')
+            plt.axhline(y=0,color='k', linestyle='--', alpha=0.5)
+            plt.xlabel('$k$, wavenumber')
+            plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk$')
+            plt.title('Upper layer')
+            if print_diagnostics:
+                print('Integral upper layer:', E.sum() * (k[1]-k[0]))
+
+            plt.subplot(122)
+            k, E = compute_cospectrum_uv(uh[:,1,:,:], vh[:,1,:,:], fxh[:,1,:,:], fyh[:,1,:,:], **kw)
+            k, EZB = compute_cospectrum_uv(uh[:,1,:,:], vh[:,1,:,:], ZBxh[:,1,:,:], ZByh[:,1,:,:], **kw)
+            Esmag = E - EZB
+            plt.semilogx(k,E*k, label='sum')
+            plt.semilogx(k,EZB*k, '--', label='ZB2020')
+            plt.semilogx(k,Esmag*k, '-.', label='Smag')
+            plt.axhline(y=0,color='k', linestyle='--', alpha=0.5)
+            plt.xlabel('$k$, wavenumber')
+            plt.title('Lower layer')
+            plt.legend()
+            if print_diagnostics:
+                print('Integral lower layer:', E.sum() * (k[1]-k[0]))
+
+        plt.tight_layout()
+
+    def plot_SGS_snapshot(self, exp):
+        fig = plt.figure(figsize=(15,7.5))
+        plt.rcParams.update({'font.size': 16})
+        
+        mom = self[exp].mom
+        fx = mom.diffu.isel(Time=-1)
+        fy = mom.diffv.isel(Time=-1)
+        ZBx = mom.ZB2020u.isel(Time=-1)
+        ZBy = mom.ZB2020v.isel(Time=-1)
+        smagx = fx - ZBx
+        smagy = fy - ZBy
+
+        plt.subplot(241)
+        plt.imshow(smagx.isel(zl=0), origin='lower', cmap='bwr')
+        plt.title('diffu')
+        plt.ylabel('Upper Layer')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(242)
+        plt.imshow(smagy.isel(zl=0), origin='lower', cmap='bwr')
+        plt.title('diffv')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(243)
+        plt.imshow(ZBx.isel(zl=0), origin='lower', cmap='bwr')
+        plt.title('ZB2020u')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(244)
+        plt.imshow(ZBy.isel(zl=0), origin='lower', cmap='bwr')
+        plt.title('ZB2020v')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(245)
+        plt.imshow(smagx.isel(zl=1), origin='lower', cmap='bwr')
+        plt.title('diffu')
+        plt.ylabel('Lower Layer')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(246)
+        plt.imshow(smagy.isel(zl=1), origin='lower', cmap='bwr')
+        plt.title('diffv')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(247)
+        plt.imshow(ZBx.isel(zl=1), origin='lower', cmap='bwr')
+        plt.title('ZB2020u')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
+
+        plt.subplot(248)
+        plt.imshow(ZBy.isel(zl=1), origin='lower', cmap='bwr')
+        plt.title('ZB2020v')
+        plt.colorbar()
+        plt.clim(-1e-7, 1e-7)
 
         plt.tight_layout()
