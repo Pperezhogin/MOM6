@@ -137,6 +137,47 @@ class dataset_experiments:
         except:
             print('item not found')
 
+    def plot_domain(self, exp):
+        def plot(axes, xangle, yangle):
+            prog = self[exp].prog
+
+            topography = prog.e.isel(zi=2, Time=-1)
+            free_surface = prog.e.isel(zi=0, Time=-1)
+            interface = prog.e.isel(zi=1, Time=-1)
+            xh = prog.xh
+            yh = prog.yh
+            X, Y = np.meshgrid(xh, yh)
+
+            plt.rcParams.update({'font.size': 12})
+            p1 = axes.plot_surface(X,Y,topography, label='topography', edgecolor='none')
+            p2 = axes.plot_surface(X,Y,interface, label='interface', edgecolor='none')
+            p3 = axes.plot_surface(X,Y,free_surface, label='free surface', edgecolor='none')
+            # https://stackoverflow.com/questions/55531760/is-there-a-way-to-label-multiple-3d-surfaces-in-matplotlib/55534939
+
+            axes.view_init(xangle, yangle)
+
+            p1._facecolors2d = p1._facecolor3d
+            p1._edgecolors2d = p1._facecolor3d
+
+            p2._facecolors2d = p2._facecolor3d
+            p2._edgecolors2d = p2._facecolor3d
+
+            p3._facecolors2d = p3._facecolor3d
+            p3._edgecolors2d = p3._facecolor3d
+                
+            axes.set_xlabel('Longitude')
+            axes.set_ylabel('Latitude')
+            axes.set_zlabel('depth, $m$')
+            axes.set_yticks([30,35,40,45,50])
+            axes.set_zticks([0, -500, -1000, -1500, -2000])
+            axes.legend()
+
+        fig = plt.figure(figsize=(10,5), tight_layout = True)
+        axes = fig.add_subplot(1, 2, 1, projection='3d')
+        plot(axes, 20, 200)
+        axes = fig.add_subplot(1, 2, 2, projection='3d')
+        plot(axes, 20, 240)
+
     def plot_KE(self, exps, tstart=3650.):
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 18})
