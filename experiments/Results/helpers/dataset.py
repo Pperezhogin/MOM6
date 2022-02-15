@@ -124,14 +124,21 @@ class dataset:
         self.forcing = xr.open_mfdataset(folder+'/forcing_*.nc', decode_times=False)
 
 class dataset_experiments:
-    def __init__(self, common_folder, exps):
+    def __init__(self, common_folder, exps, exps_names=None):
         self.common_folder = common_folder
         self.exps = exps
 
+        if exps_names is None:
+            self.exps_names = exps
+        else:
+            self.exps_names = exps_names
+
         self.ds = {}
+        self.names = {}
         for i in range(len(exps)):
             folder = common_folder + '/' + exps[i] + '/output'
             self.ds[exps[i]] = dataset(folder)
+            self.names[exps[i]] = self.exps_names[i] # convert array to dictionary
 
     def __getitem__(self, q):
         try:
@@ -212,7 +219,7 @@ class dataset_experiments:
             t = series.Time
             KE = series.KE.isel(Layer=0) / series.Mass
             KE_mean = KE[t >= tstart].mean()
-            p = plt.plot(t/365, KE, label=exp)
+            p = plt.plot(t/365, KE, label=self.names[exp])
             color = p[0].get_color()
             plt.axhline(y = KE_mean, linestyle='--', color=color)
             plt.xlabel('Time, years')
@@ -225,7 +232,7 @@ class dataset_experiments:
             t = series.Time
             KE = series.KE.isel(Layer=1) / series.Mass
             KE_mean = KE[t >= tstart].mean()
-            p = plt.plot(t/365, KE, label=exp)
+            p = plt.plot(t/365, KE, label=self.names[exp])
             color = p[0].get_color()
             plt.axhline(y = KE_mean, linestyle='--', color=color)
             plt.xlabel('Time, years')
@@ -261,7 +268,7 @@ class dataset_experiments:
             plt.yticks((30, 35, 40, 45, 50))
             plt.xlabel('Longitude')
             plt.ylabel('Latitude')
-            plt.title(exp)
+            plt.title(self.names[exp])
 
         plt.tight_layout()
 
@@ -289,7 +296,7 @@ class dataset_experiments:
                 extent=[xq.min(),xq.max(),yq.min(),yq.max()], 
                 cmap='bwr', vmin=-0.2, vmax = 0.2)
             ax[ifig].set_xlabel('Longitude')
-            ax[ifig].set_title(exp)
+            ax[ifig].set_title(self.names[exp])
 
         ax[0].set_ylabel('Latitude')
         if (yfig>1):
@@ -319,7 +326,7 @@ class dataset_experiments:
                 extent=[xh.min(),xh.max(),yh.min(),yh.max()], 
                 cmap='inferno', vmin=0, vmax=0.05)
             ax[ifig].set_xlabel('Longitude')
-            ax[ifig].set_title(exp)
+            ax[ifig].set_title(self.names[exp])
 
         ax[0].set_ylabel('Latitude')
         if (yfig>1):
@@ -359,7 +366,7 @@ class dataset_experiments:
                 extent=[xh.min(),xh.max(),yh.min(),yh.max()], 
                 cmap='inferno', vmin = 0, vmax = vmax)
             ax[ifig].set_xlabel('Longitude')
-            ax[ifig].set_title(exp)
+            ax[ifig].set_title(self.names[exp])
 
         ax[0].set_ylabel('Latitude')
         if (yfig>1):
@@ -382,7 +389,7 @@ class dataset_experiments:
             plt.subplot(121)
             k, Eu = compute_spectrum(uh[:,0,:,:], **kw)
             k, Ev = compute_spectrum(vh[:,0,:,:], **kw)
-            plt.loglog(k,Eu+Ev, label=exp)
+            plt.loglog(k,Eu+Ev, label=self.names[exp])
             plt.xlabel('$k$, wavenumber')
             plt.ylabel('$E(k)$')
             plt.title('Upper layer')
@@ -392,7 +399,7 @@ class dataset_experiments:
             plt.subplot(122)
             k, Eu = compute_spectrum(uh[:,1,:,:], **kw)
             k, Ev = compute_spectrum(vh[:,1,:,:], **kw)
-            plt.loglog(k,Eu+Ev, label=exp)
+            plt.loglog(k,Eu+Ev, label=self.names[exp])
             plt.xlabel('$k$, wavenumber')
             plt.ylabel('$E(k)$')
             plt.title('Lower layer')
