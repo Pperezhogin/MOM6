@@ -121,6 +121,8 @@ class dataset:
         self.prog = xr.open_mfdataset(folder+'/prog_*.nc', decode_times=False)
         self.param = xr.open_dataset(folder+'/ocean_geometry.nc', decode_times=False)
         self.energy = xr.open_mfdataset(folder+'/energy_*.nc', decode_times=False)
+        self.forcing = xr.open_mfdataset(folder+'/forcing_*.nc', decode_times=False)
+
 class dataset_experiments:
     def __init__(self, common_folder, exps):
         self.common_folder = common_folder
@@ -137,25 +139,46 @@ class dataset_experiments:
         except:
             print('item not found')
 
-    def plot_domain(self, exp):
+    def plot_domain(self, exp, tstart=3650.):
         def plot(axes, xangle, yangle):
-            prog = self[exp].prog
+            ave = self[exp].ave
+            forcing = self[exp].forcing
 
-            topography = prog.e.isel(zi=2, Time=-1)
-            free_surface = prog.e.isel(zi=0, Time=-1)
-            interface = prog.e.isel(zi=1, Time=-1)
-            xh = prog.xh
-            yh = prog.yh
+            topography = ave.e.isel(zi=2)[ave.Time>tstart].mean(dim='Time')
+            free_surface = ave.e.isel(zi=0)[ave.Time>tstart].mean(dim='Time')
+            interface = ave.e.isel(zi=1)[ave.Time>tstart].mean(dim='Time')
+            h = ave.h.isel(zl=1)[ave.Time>tstart].mean(dim='Time')
+            taux = forcing.taux.isel(Time=-1,xq=1)
+
+            mask_interface = np.ones_like(h)
+            mask_interface[h<0.0001] = np.nan
+
+            xh = ave.xh
+            yh = ave.yh
             X, Y = np.meshgrid(xh, yh)
 
             plt.rcParams.update({'font.size': 12})
-            p1 = axes.plot_surface(X,Y,topography, label='topography', edgecolor='none')
-            p2 = axes.plot_surface(X,Y,interface, label='interface', edgecolor='none')
-            p3 = axes.plot_surface(X,Y,free_surface, label='free surface', edgecolor='none')
-            # https://stackoverflow.com/questions/55531760/is-there-a-way-to-label-multiple-3d-surfaces-in-matplotlib/55534939
+            p1 = axes.plot_surface(X,Y,topography, label='topography', edgecolor='none', alpha=0.3)
+            p2 = axes.plot_surface(X,Y,interface * mask_interface, label='interface', edgecolor='none', alpha=0.7)
+            p3 = axes.plot_surface(X,Y,free_surface, label='free surface', edgecolor='none', alpha=0.3)
+
+            import pdb
+            #pdb.set_trace()
+
+            yy = yh
+            xx = np.ones_like(yy) * float(xh.min())
+            zz = np.ones_like(yy) * 100
+
+            skip = slice(None, None, 25)
+
+            axes.quiver(xx[skip], yy[skip], zz[skip], taux[skip], taux[skip]*0, taux[skip]*0, length = 100, alpha=1.0, linewidth=2)
+
+            axes.contour3D(X, Y, free_surface, levels=np.arange(-4,4,0.5),colors='k')
 
             axes.view_init(xangle, yangle)
 
+            # https://stackoverflow.com/questions/55531760/is-there-a-way-to-label-multiple-3d-surfaces-in-matplotlib/55534939
+            
             p1._facecolors2d = p1._facecolor3d
             p1._edgecolors2d = p1._facecolor3d
 
@@ -164,7 +187,7 @@ class dataset_experiments:
 
             p3._facecolors2d = p3._facecolor3d
             p3._edgecolors2d = p3._facecolor3d
-                
+             
             axes.set_xlabel('Longitude')
             axes.set_ylabel('Latitude')
             axes.set_zlabel('depth, $m$')
@@ -172,10 +195,12 @@ class dataset_experiments:
             axes.set_zticks([0, -500, -1000, -1500, -2000])
             axes.legend()
 
-        fig = plt.figure(figsize=(10,5), tight_layout = True)
-        axes = fig.add_subplot(1, 2, 1, projection='3d')
+        fig = plt.figure(figsize=(15,5), tight_layout = True)
+        axes = fig.add_subplot(1, 3, 1, projection='3d')
+        plot(axes, 50, 200)
+        axes = fig.add_subplot(1, 3, 2, projection='3d')
         plot(axes, 20, 200)
-        axes = fig.add_subplot(1, 2, 2, projection='3d')
+        axes = fig.add_subplot(1, 3, 3, projection='3d')
         plot(axes, 20, 240)
 
     def plot_KE(self, exps, tstart=3650.):
