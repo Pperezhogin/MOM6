@@ -21,6 +21,7 @@ type, public :: ZB2020_CS
   real      :: FGR        !< Filter to grid width ratio, nondimensional, 
                           ! k_bc = - FGR^2 * dx * dy / 24
   integer   :: ZB_type    !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
+  logical   :: ZB_sign    !< if true, sign corresponds to ZB2020
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -55,6 +56,10 @@ subroutine ZB_2020_init(Time, US, param_file, diag, CS)
   call get_param(param_file, mdl, "ZB_type", CS%ZB_type, &
                  "Type of parameterization: 0 = ZB2020, 1 = AZ2017", &
                  default=0)
+
+  call get_param(param_file, mdl, "ZB_sign", CS%ZB_sign, &
+                 "If true, sign as in Zanna-Bolton2020, false - is negative", &
+                 default=.true.)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -254,8 +259,13 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! Indices - intersection of loops for
     ! sh_xy_center and sh_xx
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
-      sum_sq = 0.5 * &
-      (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j)**2)
+      if (CS%ZB_type == 0) then
+        sum_sq = 0.5 * &
+        (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j)**2)
+      elseif (CS%ZB_type == 1) then
+        sum_sq = 0.
+      endif
+        
       vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
       k_bc = - CS%FGR**2 * G%areaT(i,j) / 24.
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
@@ -302,6 +312,11 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     enddo ; enddo
 
   enddo ! end of k loop
+
+  if (not(CS%ZB_sign)) then
+    fx(:,:,:) = - fx(:,:,:)
+    fy(:,:,:) = - fy(:,:,:)
+  endif
 
   if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, fx, CS%diag)
   if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, fy, CS%diag)
