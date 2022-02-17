@@ -434,7 +434,7 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
     global_integral = reproducing_sum(tmp)
 
-    write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
+    !write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
 
     call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
   endif
