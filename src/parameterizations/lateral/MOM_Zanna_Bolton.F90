@@ -7,6 +7,9 @@ use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
+use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
+use MOM_domains,       only : To_North, To_East
+use MOM_coms,          only : reproducing_sum
 
 implicit none ; private
 
@@ -22,18 +25,20 @@ type, public :: ZB2020_CS
                           ! k_bc = - FGR^2 * dx * dy / 24
   integer   :: ZB_type    !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
   logical   :: ZB_sign    !< if true, sign corresponds to ZB2020
+  logical   :: ZB_cons    !< if true, apply conservative approximation
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
-  integer :: id_ZB2020u = -1, id_ZB2020v = -1
+  integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1
   !>@}
 
 end type ZB2020_CS
 
 contains
 
-subroutine ZB_2020_init(Time, US, param_file, diag, CS)
+subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   type(time_type),         intent(in)    :: Time       !< The current model time.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)    :: US         !< A dimensional unit scaling type
   type(param_file_type),   intent(in)    :: param_file !< Parameter file parser structure.
   type(diag_ctrl), target, intent(inout) :: diag       !< Diagnostics structure.
@@ -60,6 +65,10 @@ subroutine ZB_2020_init(Time, US, param_file, diag, CS)
   call get_param(param_file, mdl, "ZB_sign", CS%ZB_sign, &
                  "If true, sign as in Zanna-Bolton2020, false - is negative", &
                  default=.true.)
+
+  call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
+                 "If true, conservative approximation is used", &
+                 default=.true.)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -68,6 +77,9 @@ subroutine ZB_2020_init(Time, US, param_file, diag, CS)
       'Zonal Acceleration from Zanna-Bolton 2020', 'm s-2', conversion=US%L_T2_to_m_s2)
   CS%id_ZB2020v = register_diag_field('ocean_model', 'ZB2020v', diag%axesCvL, Time, &
       'Meridional Acceleration from Zanna-Bolton 2020', 'm s-2', conversion=US%L_T2_to_m_s2)
+  CS%id_KE_ZB2020 = register_diag_field('ocean_model', 'KE_ZB2020', diag%axesTL, Time, &
+      'Kinetic Energy Source from Horizontal Viscosity', &
+      'm3 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2)*US%s_to_T)
   
 end subroutine ZB_2020_init
 
@@ -265,8 +277,17 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       elseif (CS%ZB_type == 1) then
         sum_sq = 0.
       endif
-        
-      vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
+      
+      if (CS%ZB_cons) then
+        vort_sh = 0.25 * (                                        &
+          G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1) + &
+          G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  ) + &
+          G%areaBu(I-1,J  ) * vort_xy(I-1,J  ) * sh_xy(I-1,J  ) + &
+          G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1)   &
+          ) * G%IareaT(i,j)
+      else
+        vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
+      endif
       k_bc = - CS%FGR**2 * G%areaT(i,j) / 24.
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
       S_22(i,j) = k_bc * (+ vort_sh + sum_sq)
@@ -275,8 +296,18 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! Form S_12 tensor
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+      if (CS%ZB_cons) then
+        vort_sh = vort_xy(I,J) * 0.25 * (                      &
+          G%mask2dT(i+1,j+1) * h(i+1,j+1,k) * sh_xx(i+1,j+1) + &
+          G%mask2dT(i  ,j  ) * h(i  ,j  ,k) * sh_xx(i  ,j  ) + &
+          G%mask2dT(i+1,j  ) * h(i+1,j  ,k) * sh_xx(i+1,j  ) + &
+          G%mask2dT(i  ,j+1) * h(i  ,j+1,k) * sh_xx(i  ,j+1)   &
+        ) / (hq(I,J) + h_neglect)
+      else
+        vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
+      endif
       k_bc = - CS%FGR**2 * G%areaBu(i,j) / 24.
-      S_12(I,J) = k_bc * vort_xy(I,J) * sh_xx_corner(I,J)
+      S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
@@ -321,6 +352,88 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, fx, CS%diag)
   if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, fy, CS%diag)
 
+  call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
+
 end subroutine Zanna_Bolton_2020
+
+! This is copy-paste from MOM_diagnostics.F90, specifically 1125 line
+subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
+  type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
+  type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
+  type(ZB2020_CS),               intent(in)  :: CS     !< ZB2020 control structure.
+
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                                 intent(in)  :: u      !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                                 intent(in)  :: v      !< The meridional velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                                 intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2].
+  
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                                 intent(in) :: fx     !< Zonal acceleration due to convergence of
+                                                      !! along-coordinate stress tensor [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                                 intent(in) :: fy     !< Meridional acceleration due to convergence
+                                                      !! of along-coordinate stress tensor [L T-2 ~> m s-2]
+  
+  real :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) ! A term in the kinetic energy budget
+                                 ! [H L2 T-3 ~> m3 s-3 or W m-2]
+  real :: tmp(SZI_(G),SZJ_(G),SZK_(GV)) ! temporary array for integration
+  real :: KE_u(SZIB_(G),SZJ_(G)) ! The area integral of a KE term in a layer at u-points
+                                 ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  real :: KE_v(SZI_(G),SZJB_(G)) ! The area integral of a KE term in a layer at v-points
+                                 ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+
+  type(group_pass_type) :: pass_KE_uv !< A handle used for group halo passes
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k
+
+  real :: uh !< Transport through zonal faces = u*h*dy,
+             !! [H L2 T-1 ~> m3 s-1 or kg s-1].
+  real :: vh !< Transport through meridional faces = v*h*dx,
+             !! [H L2 T-1 ~> m3 s-1 or kg s-1].
+  real :: global_integral !< Global integral of the energy effect of ZB2020 [W]
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  
+  if (CS%id_KE_ZB2020 > 0) then
+    if (.not.G%symmetric) then
+      call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
+    endif
+    
+    KE_term(:,:,:) = 0.
+    tmp(:,:,:) = 0.
+    ! Calculate the KE source from Zanna-Bolton2020 [H L2 T-3 ~> m3 s-3].
+    do k=1,nz
+      do j=js,je ; do I=Isq,Ieq
+        uh = u(I,j,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) * &
+          G%dyCu(I,j)
+        KE_u(I,j) = uh * G%dxCu(I,j) * fx(I,j,k)
+      enddo ; enddo
+      do J=Jsq,Jeq ; do i=is,ie
+        vh = v(i,J,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) * &
+          G%dxCv(i,J)
+        KE_v(i,J) = vh * G%dyCv(i,J) * fy(i,J,k)
+      enddo ; enddo
+      if (.not.G%symmetric) &
+        call do_group_pass(pass_KE_uv, G%domain)
+      do j=js,je ; do i=is,ie
+        KE_term(i,j,k) = 0.5 * G%IareaT(i,j) &
+            * (KE_u(I,j) + KE_u(I-1,j) + KE_v(i,J) + KE_v(i,J-1))
+        ! copy-paste from MOM_spatial_means.F90, line 42
+        tmp(i,j,k) = KE_term(i,j,k) * G%areaT(i,j) * G%mask2dT(i,j)
+      enddo ; enddo
+    enddo
+
+    global_integral = reproducing_sum(tmp)
+
+    write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
+
+    call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
+  endif
+
+end subroutine compute_energy_source
 
 end module MOM_Zanna_Bolton
