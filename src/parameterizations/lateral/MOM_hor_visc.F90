@@ -1786,7 +1786,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   ! init control structure
-  call ZB_2020_init(Time, US, param_file, diag, CS%ZB2020)
+  call ZB_2020_init(Time, GV, US, param_file, diag, CS%ZB2020)
 
   CS%initialized = .true.
 
