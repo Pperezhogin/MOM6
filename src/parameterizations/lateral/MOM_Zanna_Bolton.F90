@@ -25,7 +25,8 @@ type, public :: ZB2020_CS
                           ! k_bc = - FGR^2 * dx * dy / 24
   integer   :: ZB_type    !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
   logical   :: ZB_sign    !< if true, sign corresponds to ZB2020
-  logical   :: ZB_cons    !< if true, apply conservative approximation
+  integer   :: ZB_cons    !< 0: nonconservative; 1: conservative without interface;
+                          !  2: conservative with height
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -67,8 +68,9 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  default=.true.)
 
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
-                 "If true, conservative approximation is used", &
-                 default=.true.)
+                 "0: nonconservative; 1: conservative without interface; " //&
+                 "2: conservative with height", &
+                 default=0)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -202,6 +204,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
   do k=1,nz
 
+    sh_xx(:,:) = 0.
+    sh_xy(:,:) = 0.
+    vort_xy(:,:) = 0.
+
     ! Calculate horizontal tension (line 590 of MOM_hor_visc.F90)
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
       dudx(i,j) = DY_dxT(i,j)*(G%IdyCu(I,j) * u(I,j,k) - &
@@ -278,14 +284,14 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
         sum_sq = 0.
       endif
       
-      if (CS%ZB_cons) then
-        vort_sh = 0.25 * (                                        &
-          G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1) + &
-          G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  ) + &
-          G%areaBu(I-1,J  ) * vort_xy(I-1,J  ) * sh_xy(I-1,J  ) + &
-          G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1)   &
+      if (CS%ZB_cons == 1 .or. CS%ZB_cons == 2) then
+        vort_sh = 0.25 * (                                          &
+          (G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1)  + &
+           G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  )) + &
+          (G%areaBu(I-1,J  ) * vort_xy(I-1,J  ) * sh_xy(I-1,J  )  + &
+           G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1))   &
           ) * G%IareaT(i,j)
-      else
+      else if (CS%ZB_cons == 0) then
         vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
       endif
       k_bc = - CS%FGR**2 * G%areaT(i,j) / 24.
@@ -295,15 +301,15 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
     ! Form S_12 tensor
     ! indices correspond to sh_xx_corner loop
-    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-      if (CS%ZB_cons) then
-        vort_sh = vort_xy(I,J) * 0.25 * (                      &
-          G%mask2dT(i+1,j+1) * h(i+1,j+1,k) * sh_xx(i+1,j+1) + &
-          G%mask2dT(i  ,j  ) * h(i  ,j  ,k) * sh_xx(i  ,j  ) + &
-          G%mask2dT(i+1,j  ) * h(i+1,j  ,k) * sh_xx(i+1,j  ) + &
-          G%mask2dT(i  ,j+1) * h(i  ,j+1,k) * sh_xx(i  ,j+1)   &
+    do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
+      if (CS%ZB_cons == 2) then
+        vort_sh = vort_xy(I,J) * 0.25 * (   &
+          (h(i+1,j+1,k) * sh_xx(i+1,j+1)  + &
+           h(i  ,j  ,k) * sh_xx(i  ,j  )) + &
+          (h(i+1,j  ,k) * sh_xx(i+1,j  )  + &
+           h(i  ,j+1,k) * sh_xx(i  ,j+1))   &
         ) / (hq(I,J) + h_neglect)
-      else
+      else if (CS%ZB_cons == 0 .or. CS%ZB_cons == 1) then
         vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
       endif
       k_bc = - CS%FGR**2 * G%areaBu(i,j) / 24.
@@ -399,14 +405,14 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   
   if (CS%id_KE_ZB2020 > 0) then
-    if (.not.G%symmetric) then
-      call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
-    endif
+    call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
     
     KE_term(:,:,:) = 0.
     tmp(:,:,:) = 0.
     ! Calculate the KE source from Zanna-Bolton2020 [H L2 T-3 ~> m3 s-3].
     do k=1,nz
+      KE_u(:,:) = 0.
+      KE_v(:,:) = 0.
       do j=js,je ; do I=Isq,Ieq
         uh = u(I,j,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) * &
           G%dyCu(I,j)
@@ -417,8 +423,7 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
           G%dxCv(i,J)
         KE_v(i,J) = vh * G%dyCv(i,J) * fy(i,J,k)
       enddo ; enddo
-      if (.not.G%symmetric) &
-        call do_group_pass(pass_KE_uv, G%domain)
+      call do_group_pass(pass_KE_uv, G%domain)
       do j=js,je ; do i=is,ie
         KE_term(i,j,k) = 0.5 * G%IareaT(i,j) &
             * (KE_u(I,j) + KE_u(I-1,j) + KE_v(i,J) + KE_v(i,J-1))
