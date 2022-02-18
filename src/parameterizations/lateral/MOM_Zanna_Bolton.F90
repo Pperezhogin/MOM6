@@ -53,7 +53,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   
   call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
-                 default=.true.)
+                 default=.false.)
 
   call get_param(param_file, mdl, "FGR", CS%FGR, &
                  "The ratio of assumed filter width to grid step", &
@@ -70,7 +70,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
                  "0: nonconservative; 1: conservative without interface; " //&
                  "2: conservative with height", &
-                 default=2)
+                 default=0)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -445,7 +445,7 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
     global_integral = reproducing_sum(tmp)
 
-    write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
+    !write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
 
     call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
   endif
