@@ -562,15 +562,15 @@ class dataset_experiments:
 
         plt.tight_layout()
 
-    def plot_SGS_snapshot(self, exp):
+    def plot_SGS_snapshot(self, exp, Time = -1):
         fig = plt.figure(figsize=(15,7.5))
         plt.rcParams.update({'font.size': 16})
         
         mom = self[exp].mom
-        fx = mom.diffu.isel(Time=-1)
-        fy = mom.diffv.isel(Time=-1)
-        ZBx = mom.ZB2020u.isel(Time=-1)
-        ZBy = mom.ZB2020v.isel(Time=-1)
+        fx = mom.diffu.isel(Time=Time)
+        fy = mom.diffv.isel(Time=Time)
+        ZBx = mom.ZB2020u.isel(Time=Time)
+        ZBy = mom.ZB2020v.isel(Time=Time)
         smagx = fx - ZBx
         smagy = fy - ZBy
 
@@ -625,3 +625,49 @@ class dataset_experiments:
         plt.clim(-1e-7, 1e-7)
 
         plt.tight_layout()
+
+    def plot_energy_tendency(self, exps):
+        nfig = len(exps)
+        plt.rcParams.update({'font.size': 12})
+
+        if nfig > 3:
+            xfig = int(nfig / 2)
+            yfig = 2
+        else:
+            xfig = nfig
+            yfig = 1
+
+        fig, ax = plt.subplots(yfig, xfig, figsize=(xfig*5,yfig*4))
+        ax = ax.reshape(-1)
+        for ifig, exp in enumerate(exps):
+            energy = self[exp].energy
+            param = self[exp].param
+            dx = param.dxT
+            dy = param.dyT
+            time = energy.Time
+
+            dKE = np.array(energy.KE_horvisc)
+            dKE_ZB = np.array(energy.KE_ZB2020)
+            dKE_horvisc = dKE - dKE_ZB
+
+            Nt, Nz = dKE.shape[0], dKE.shape[1]
+            
+            dKE_ZB_time = np.zeros(Nt)
+            dKE_horvisc_time = np.zeros(Nt)
+            for nt in range(Nt):
+                for nz in range(Nz):
+                    dKE_ZB_time[nt] += np.sum(dKE_ZB[nt,nz,:,:] * dx * dy)
+                    dKE_horvisc_time[nt] += np.sum(dKE_horvisc[nt,nz,:,:] * dx * dy)
+
+            plt.subplot(121)
+            plt.plot(time, dKE_horvisc_time)
+            plt.xlabel('Time, days')
+            plt.title('Energy tendency due to eddy viscosity')
+            plt.ylabel('$m^5/s^3$')
+            
+            plt.subplot(122)
+            plt.semilogy(time, np.abs(dKE_ZB_time), label=self.names[exp])
+            plt.xlabel('Time, days')
+            plt.title('ABS energy tendency due to ZB')
+            plt.ylabel('$m^5/s^3$')
+            plt.legend()

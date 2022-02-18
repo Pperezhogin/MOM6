@@ -27,6 +27,7 @@ type, public :: ZB2020_CS
   logical   :: ZB_sign    !< if true, sign corresponds to ZB2020
   integer   :: ZB_cons    !< 0: nonconservative; 1: conservative without interface;
                           !  2: conservative with height
+  logical   :: ZB_smooth  !< If true, smooth vorticity in ZB2020 tensor
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -70,7 +71,11 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
                  "0: nonconservative; 1: conservative without interface; " //&
                  "2: conservative with height", &
-                 default=0)
+                 default=1)
+
+  call get_param(param_file, mdl, "ZB_smooth", CS%ZB_smooth, &
+                 "If true, apply smoothing for vorticity in ZB2020 tensor", &
+                 default=.false.)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -256,6 +261,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
                                  + (sh_xx(i+1,j) + sh_xx(i,j+1)))
     enddo ; enddo
 
+    if (CS%ZB_smooth) then
+      call smooth_q(G, vort_xy)
+    end if
+
     ! WITH land mask (line 622 of MOM_hor_visc.F90)
     ! Use of mask eliminates dependence on the 
     ! values on land
@@ -277,7 +286,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! Form S_11 and S_22 tensors
     ! Indices - intersection of loops for
     ! sh_xy_center and sh_xx
-    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       if (CS%ZB_type == 0) then
         sum_sq = 0.5 * &
         (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j)**2)
@@ -372,6 +381,33 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
 end subroutine Zanna_Bolton_2020
+
+!> Copy paste from smooth_GME, MOM_hor_visc.F90
+subroutine smooth_q(G, q)
+  type(ocean_grid_type),              intent(in)    :: G !< Ocean grid
+  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: q !< any field at q points
+  ! local variables
+  real, dimension(SZIB_(G),SZJB_(G)) :: q_original
+  real :: wc, ww, we, wn, ws ! averaging weights for smoothing
+  integer :: i, j, k
+
+  q_original(:,:) = q(:,:)
+  do J = G%JscB-1, G%JecB+1
+    do I = G%IscB-1, G%IecB+1
+      ! compute weights
+      ww = 0.125 * G%mask2dT(i-1,j)
+      we = 0.125 * G%mask2dT(i+1,j)
+      ws = 0.125 * G%mask2dT(i,j-1)
+      wn = 0.125 * G%mask2dT(i,j+1)
+      wc = 1.0 - (ww+we+wn+ws)
+      q(I,J) =  wc * q_original(I,J)   &
+              + ww * q_original(I-1,J) &
+              + we * q_original(I+1,J) &
+              + ws * q_original(I,J-1) &
+              + wn * q_original(I,J+1)
+    enddo
+  enddo
+end subroutine smooth_q
 
 ! This is copy-paste from MOM_diagnostics.F90, specifically 1125 line
 subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
