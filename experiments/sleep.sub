@@ -1,0 +1,10 @@
+#!/bin/bash
+
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=10
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=10GB
+#SBATCH --time=01:00:00
+#SBATCH --job-name="Sleep10"
+
+sleep 100000000000000000

@@ -9,6 +9,7 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,       only : To_North, To_East
+use MOM_domains,       only : pass_var, CORNER
 use MOM_coms,          only : reproducing_sum
 
 implicit none ; private
@@ -71,7 +72,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
                  "0: nonconservative; 1: conservative without interface; " //&
                  "2: conservative with height", &
-                 default=1)
+                 default=0)
 
   call get_param(param_file, mdl, "ZB_smooth", CS%ZB_smooth, &
                  "If true, apply smoothing for vorticity in ZB2020 tensor", &
@@ -392,8 +393,9 @@ subroutine smooth_q(G, q)
   integer :: i, j, k
 
   q_original(:,:) = q(:,:)
-  do J = G%JscB-1, G%JecB+1
-    do I = G%IscB-1, G%IecB+1
+  q(:,:) = 0.
+  do J = G%JscB, G%JecB
+    do I = G%IscB, G%IecB
       ! compute weights
       ww = 0.125 * G%mask2dT(i-1,j)
       we = 0.125 * G%mask2dT(i+1,j)
@@ -407,6 +409,7 @@ subroutine smooth_q(G, q)
               + wn * q_original(I,J+1)
     enddo
   enddo
+  call pass_var(q, G%Domain, position=CORNER, complete=.true.)
 end subroutine smooth_q
 
 ! This is copy-paste from MOM_diagnostics.F90, specifically 1125 line
