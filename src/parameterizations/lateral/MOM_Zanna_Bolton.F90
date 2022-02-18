@@ -53,7 +53,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   
   call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
-                 default=.false.)
+                 default=.true.)
 
   call get_param(param_file, mdl, "FGR", CS%FGR, &
                  "The ratio of assumed filter width to grid step", &
@@ -70,7 +70,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
                  "0: nonconservative; 1: conservative without interface; " //&
                  "2: conservative with height", &
-                 default=0)
+                 default=2)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -179,6 +179,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   real :: vort_sh    ! multiplication of vort_xt and sh_xy
 
   real :: k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2
+  real :: c_h  
 
   ! Line 407 of MOM_hor_visc.F90
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -303,11 +304,21 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
       if (CS%ZB_cons == 2) then
+        if (h(i+1,j+1,k) < h_neglect * 1e+27 .or. &
+            h(i  ,j  ,k) < h_neglect * 1e+27 .or. &
+            h(i+1,j  ,k) < h_neglect * 1e+27 .or. &
+            h(i  ,j+1,k) < h_neglect * 1e+27      &
+        ) then
+          c_h = 0.
+        else
+          c_h = 1.
+        endif
+
         vort_sh = vort_xy(I,J) * 0.25 * (   &
-          (h(i+1,j+1,k) * sh_xx(i+1,j+1)  + &
-           h(i  ,j  ,k) * sh_xx(i  ,j  )) + &
-          (h(i+1,j  ,k) * sh_xx(i+1,j  )  + &
-           h(i  ,j+1,k) * sh_xx(i  ,j+1))   &
+          ((c_h * h(i+1,j+1,k) + (1.-c_h) * hq(I,J)) * sh_xx(i+1,j+1)  + &
+           (c_h * h(i  ,j  ,k) + (1.-c_h) * hq(I,J)) * sh_xx(i  ,j  )) + &
+          ((c_h * h(i+1,j  ,k) + (1.-c_h) * hq(I,J)) * sh_xx(i+1,j  )  + &
+           (c_h * h(i  ,j+1,k) + (1.-c_h) * hq(I,J)) * sh_xx(i  ,j+1))   &
         ) / (hq(I,J) + h_neglect)
       else if (CS%ZB_cons == 0 .or. CS%ZB_cons == 1) then
         vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
@@ -434,7 +445,7 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
     global_integral = reproducing_sum(tmp)
 
-    !write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
+    write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
 
     call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
   endif
