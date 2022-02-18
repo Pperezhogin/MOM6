@@ -244,6 +244,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) ) ! corner of the cell
     enddo ; enddo
 
+    if (CS%ZB_smooth) then
+      call smooth_q(G, vort_xy)
+    end if
+
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
     ! lower index as in loop for sh_xy, but minus 1
     ! upper index is identical 
@@ -261,10 +265,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       sh_xx_corner(I,J) = 0.25 * ( (sh_xx(i+1,j+1) + sh_xx(i,j)) &
                                  + (sh_xx(i+1,j) + sh_xx(i,j+1)))
     enddo ; enddo
-
-    if (CS%ZB_smooth) then
-      call smooth_q(G, vort_xy)
-    end if
 
     ! WITH land mask (line 622 of MOM_hor_visc.F90)
     ! Use of mask eliminates dependence on the 
@@ -407,6 +407,7 @@ subroutine smooth_q(G, q)
               + we * q_original(I+1,J) &
               + ws * q_original(I,J-1) &
               + wn * q_original(I,J+1)
+      q(I,J) = q(I,J) * G%mask2dBu(I,J)
     enddo
   enddo
   call pass_var(q, G%Domain, position=CORNER, complete=.true.)
