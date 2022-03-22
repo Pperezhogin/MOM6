@@ -123,7 +123,7 @@ def compute_spectrum(u, window, dx=1., dy=1., **kw):
     # see https://numpy.org/doc/stable/reference/generated/numpy.multiply.html
     u = u * Wnd
 
-    uf = npfft.rfftn(np.nan_to_num(u), axes=(-2,-1))
+    uf = npfft.rfftn(u, axes=(-2,-1))
     M = u.shape[-1] * u.shape[-2] # total number of points
 
     u2 = (np.abs(uf)**2 / M**2) / Wnd_sqr
@@ -142,43 +142,60 @@ def compute_spectrum(u, window, dx=1., dy=1., **kw):
     
     return calc_ispec(kx, ky, K, u2, **kw)
 
-def compute_cospectrum(u, f, dx=1, dy=1, **kw):
-    uf = npfft.rfftn(np.nan_to_num(u), axes=(-2,-1))
-    ff = npfft.rfftn(np.nan_to_num(f), axes=(-2,-1))
+def compute_cospectrum(u, f, window, dx=1., dy=1., **kw):
+
+    nx = u.shape[-1]
+    ny = u.shape[-2]
+
+    u = np.nan_to_num(u)
+    f = np.nan_to_num(f)
+
+    u = u - u.mean(axis=(-1,-2), keepdims=True)
+    f = f - f.mean(axis=(-1,-2), keepdims=True)
+
+    if window == 'rect':
+        Wnd = np.ones((ny,nx))
+    elif window == 'hanning':
+        Wnd = np.outer(np.hanning(ny),np.hanning(nx))
+    elif window == 'hamming':
+        Wnd = np.outer(np.hamming(ny),np.hamming(nx))
+    elif window == 'bartlett':
+        Wnd = np.outer(np.bartlett(ny),np.bartlett(nx))
+    elif window == 'blackman':
+        Wnd = np.outer(np.blackman(ny),np.blackman(nx))
+    elif window == 'kaiser':
+        Wnd = np.outer(np.kaiser(ny,14),np.kaiser(nx,14))
+    else:
+        print('wrong window')
+
+    Wnd_sqr = (Wnd**2).mean()
+
+    u = u * Wnd
+    f = f * Wnd
+
+    uf = npfft.rfftn(u, axes=(-2,-1))
+    ff = npfft.rfftn(f, axes=(-2,-1))
     M = u.shape[-1] * u.shape[-2] # total number of points
 
-    cosp = np.real(uf * np.conj(ff) / M**2)
+    cosp = np.real(uf * np.conj(ff) / M**2) / Wnd_sqr
 
     if len(cosp.shape) == 3:
         cosp = cosp.mean(axis=0)
-    elif len(u2.shape) > 3:
+    elif len(cosp.shape) > 3:
         print('error')
 
-    Lx = u.shape[-1] * dx
-    Ly = u.shape[-2] * dy
-
-    kx_max = np.pi/dx
-    kx_step = 2*np.pi/Lx
-    ky_max = np.pi/dy
-    ky_step = 2*np.pi/Ly
-
-    if u.shape[-1] % 2 == 0:
-        kx = np.arange(0,kx_max+kx_step,kx_step)
-    else:
-        kx = np.arange(0,kx_max,kx_step)
-    if u.shape[-2] % 2 == 0:
-        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max+ky_step,ky_step))])    
-    else:
-        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max,ky_step))])
+    # maximum wavenumber is 1/(2*d) = pi/dx = pi/dy
+    kx = npfft.rfftfreq(nx,d=dx/(2*np.pi))
+    ky = npfft.fftfreq(ny,d=dy/(2*np.pi))
 
     Kx, Ky = np.meshgrid(kx, ky)
     K = np.sqrt(Kx**2+Ky**2)
 
-    return calc_ispec(kx, ky, K, 2*cosp, nd_wavenumber=True, **kw)
+    return calc_ispec(kx, ky, K, 2*cosp, **kw)
 
-def compute_cospectrum_uv(u, v, fx, fy, **kw):
-    kx, Ekx = compute_cospectrum(u, fx, **kw)
-    ky, Eky = compute_cospectrum(v, fy, **kw)
+def compute_cospectrum_uv(u, v, fx, fy, window, dx, dy, **kw):
+    kx, Ekx = compute_cospectrum(u, fx, window, dx, dy, **kw)
+    ky, Eky = compute_cospectrum(v, fy, window, dx, dy, **kw)
     return kx, Ekx+Eky
 
 class dataset:
@@ -498,52 +515,47 @@ class dataset_experiments:
 
         plt.tight_layout()
 
-    def plot_cospectrum(self, exps, tstart = 7200., print_diagnostics = False, **kw):
+    def plot_cospectrum(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', print_diagnostics = False, **kw):
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 16})
         for exp in exps:
             prog = self[exp].prog
             mom = self[exp].mom
-
+            param = self[exp].param
             t = prog.Time
-            u = np.array(prog.u[t >= tstart])
-            v = np.array(prog.v[t >= tstart])
-            fx = np.array(mom.diffu[t >= tstart])
-            fy = np.array(mom.diffv[t >= tstart])
-            h = np.array(prog.h[t >= tstart])
+            xq = prog.xq
+            yq = prog.yq
+            xh = prog.xh
+            yh = prog.yh
+            dxT = param.dxT
+            dyT = param.dyT
+            lonh = param.lonh
+            lath = param.lath
 
-            uh = 0.5 * (u[:,:,:,1:] + u[:,:,:,0:-1])
-            vh = 0.5 * (v[:,:,1:,:] + v[:,:,0:-1,:])
-            fxh = 0.5 * (fx[:,:,:,1:] + fx[:,:,:,0:-1])
-            fyh = 0.5 * (fy[:,:,1:,:] + fy[:,:,0:-1,:])
-
-            if print_diagnostics:
-                print('Check integrals:')
-                print('mean(u * fx + v * fy) = ', 
-                    np.nanmean(uh*fxh, axis=(0,2,3)) +
-                    np.nanmean(vh*fyh, axis=(0,2,3)))
-                print('mean(h * u * fx + h * v * fy) / mean(h) = ', 
-                    np.nanmean(h*uh*fxh, axis=(0,2,3)) / np.nanmean(h, axis=(0,2,3)) + 
-                    np.nanmean(h*vh*fyh, axis=(0,2,3)) / np.nanmean(h, axis=(0,2,3)))
+            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                u = np.array(prog.u[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                v = np.array(prog.v[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                fx = np.array(mom.diffu[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                fy = np.array(mom.diffv[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                dx = float(dxT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+                dy = float(dyT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
 
             plt.subplot(121)
-            k, E = compute_cospectrum_uv(uh[:,0,:,:], vh[:,0,:,:], fxh[:,0,:,:], fyh[:,0,:,:], **kw)
+            k, E = compute_cospectrum_uv(u[:,0,:,:], v[:,0,:,:], fx[:,0,:,:], fy[:,0,:,:], window, dx, dy, **kw)
             plt.semilogx(k,E*k, label=self.names[exp])
             plt.xlabel('$k$, wavenumber')
             plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk$')
             plt.title('Upper layer')
-            if print_diagnostics:
-                print('Integral upper layer:', E.sum() * (k[1]-k[0]))
+            plt.ylim([-7e-10,0.5e-10])
 
             plt.subplot(122)
-            k, E = compute_cospectrum_uv(uh[:,1,:,:], vh[:,1,:,:], fxh[:,1,:,:], fyh[:,1,:,:], **kw)
+            k, E = compute_cospectrum_uv(u[:,1,:,:], v[:,1,:,:], fx[:,1,:,:], fy[:,1,:,:], window, dx, dy, **kw)
             plt.semilogx(k,E*k, label=self.names[exp])
             plt.xlabel('$k$, wavenumber')
             plt.title('Lower layer')
+            plt.ylim([-1.2e-10,0.1e-10])
             plt.legend()
-            if print_diagnostics:
-                print('Integral lower layer:', E.sum() * (k[1]-k[0]))
-
+            
         plt.tight_layout()
 
     def plot_cospectrum_componentwise(self, exps, tstart = 7200., print_diagnostics = False, **kw):
