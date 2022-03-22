@@ -107,6 +107,12 @@ def compute_spectrum(u, window, dx=1., dy=1., **kw):
         Wnd = np.outer(np.hanning(ny),np.hanning(nx))
     elif window == 'hamming':
         Wnd = np.outer(np.hamming(ny),np.hamming(nx))
+    elif window == 'bartlett':
+        Wnd = np.outer(np.bartlett(ny),np.bartlett(nx))
+    elif window == 'blackman':
+        Wnd = np.outer(np.blackman(ny),np.blackman(nx))
+    elif window == 'kaiser':
+        Wnd = np.outer(np.kaiser(ny,14),np.kaiser(nx,14))
     else:
         print('wrong window')
 
