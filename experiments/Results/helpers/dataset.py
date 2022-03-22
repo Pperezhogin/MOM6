@@ -2,6 +2,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.fft as npfft
+import dask
 
 def calc_ispec(kk, ll, wv, _var_dens, averaging = True, truncate=True, nd_wavenumber=False, nfactor = 1):
     """Compute isotropic spectrum `phr` from 2D spectrum of variable signal2d.
@@ -55,7 +56,7 @@ def calc_ispec(kk, ll, wv, _var_dens, averaging = True, truncate=True, nd_wavenu
     dkr = np.sqrt(dk**2 + dl**2) * nfactor
 
     # left border of bins
-    kr = np.arange(kmin, kmax, dkr)
+    kr = np.arange(kmin, kmax-dkr, dkr)
     
     phr = np.zeros(kr.size)
 
@@ -81,38 +82,59 @@ def calc_ispec(kk, ll, wv, _var_dens, averaging = True, truncate=True, nd_wavenu
 
     return kr, phr
 
-def compute_spectrum(u, dx=1, dy=1, **kw):
+def compute_spectrum(u, window, dx=1., dy=1., **kw):
+    '''
+    Input: np.array of size Ntimes * Nz * Ny * Nx,
+    average dx,dy over domain (in meters;
+    for spherical geometry average is given over center cells)
+    '''
+
+    nx = u.shape[-1]
+    ny = u.shape[-2]
+
+    # If NaNs (occasionally) are present (some boundary is defined as such,
+    # but not necessary it is defined with NaNs), they are changed to 0
+    u = np.nan_to_num(u)
+
+    # subtract spatial mean (as our spectra ignore this characteristic,
+    # and there may be spectral leakage in a case of window)
+    u = u - u.mean(axis=(-1,-2), keepdims=True)
+
+    # apply window
+    if window == 'rect':
+        Wnd = np.ones((ny,nx))
+    elif window == 'hanning':
+        Wnd = np.outer(np.hanning(ny),np.hanning(nx))
+    elif window == 'hamming':
+        Wnd = np.outer(np.hamming(ny),np.hamming(nx))
+    else:
+        print('wrong window')
+
+    # compensation of Parseval identity
+    Wnd_sqr = (Wnd**2).mean()
+
+    # Pointwise multiplication occurs only at last two dimensions
+    # see https://numpy.org/doc/stable/reference/generated/numpy.multiply.html
+    u = u * Wnd
+
     uf = npfft.rfftn(np.nan_to_num(u), axes=(-2,-1))
     M = u.shape[-1] * u.shape[-2] # total number of points
 
-    u2 = (np.abs(uf)**2 / M**2)
+    u2 = (np.abs(uf)**2 / M**2) / Wnd_sqr
 
     if len(u2.shape) == 3:
         u2 = u2.mean(axis=0)
     elif len(u2.shape) > 3:
         print('error')
 
-    Lx = u.shape[-1] * dx
-    Ly = u.shape[-2] * dy
-
-    kx_max = np.pi/dx
-    kx_step = 2*np.pi/Lx
-    ky_max = np.pi/dy
-    ky_step = 2*np.pi/Ly
-
-    if u.shape[-1] % 2 == 0:
-        kx = np.arange(0,kx_max+kx_step,kx_step)
-    else:
-        kx = np.arange(0,kx_max,kx_step)
-    if u.shape[-2] % 2 == 0:
-        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max+ky_step,ky_step))])    
-    else:
-        ky = np.hstack([np.arange(0,ky_max,ky_step), np.flip(np.arange(ky_step,ky_max,ky_step))])
+    # maximum wavenumber is 1/(2*d) = pi/dx = pi/dy
+    kx = npfft.rfftfreq(nx,d=dx/(2*np.pi))
+    ky = npfft.fftfreq(ny,d=dy/(2*np.pi))
 
     Kx, Ky = np.meshgrid(kx, ky)
     K = np.sqrt(Kx**2+Ky**2)
-
-    return calc_ispec(kx, ky, K, u2, nd_wavenumber=True, **kw)
+    
+    return calc_ispec(kx, ky, K, u2, **kw)
 
 def compute_cospectrum(u, f, dx=1, dy=1, **kw):
     uf = npfft.rfftn(np.nan_to_num(u), axes=(-2,-1))
@@ -414,21 +436,30 @@ class dataset_experiments:
         
         fig.colorbar(p, ax=ax, label='$m^2/s^2$')
 
-    def plot_KE_spectrum(self, exps, tstart = 7200., **kw):
+    def plot_KE_spectrum(self, exps, tstart=7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 16})
         for exp in exps:
             prog = self[exp].prog
+            param = self[exp].param
             t = prog.Time
-            u = np.array(prog.u[t >= tstart])
-            v = np.array(prog.v[t >= tstart])
-
-            uh = 0.5 * (u[:,:,:,1:] + u[:,:,:,0:-1])
-            vh = 0.5 * (v[:,:,1:,:] + v[:,:,0:-1,:])
-
+            xq = prog.xq
+            yq = prog.yq
+            xh = prog.xh
+            yh = prog.yh
+            dxT = param.dxT
+            dyT = param.dyT
+            lonh = param.lonh
+            lath = param.lath
+            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                u = np.array(prog.u[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                v = np.array(prog.v[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                dx = float(dxT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+                dy = float(dyT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+            
             plt.subplot(121)
-            k, Eu = compute_spectrum(uh[:,0,:,:], **kw)
-            k, Ev = compute_spectrum(vh[:,0,:,:], **kw)
+            k, Eu = compute_spectrum(u[:,0,:,:], window, dx, dy, **kw)
+            k, Ev = compute_spectrum(v[:,0,:,:], window, dx, dy, **kw)
             plt.loglog(k,Eu+Ev, label=self.names[exp])
             plt.xlabel('$k$, wavenumber')
             plt.ylabel('$E(k)$')
@@ -437,14 +468,14 @@ class dataset_experiments:
             plt.legend()
 
             plt.subplot(122)
-            k, Eu = compute_spectrum(uh[:,1,:,:], **kw)
-            k, Ev = compute_spectrum(vh[:,1,:,:], **kw)
+            k, Eu = compute_spectrum(u[:,1,:,:], window, dx, dy, **kw)
+            k, Ev = compute_spectrum(v[:,1,:,:], window, dx, dy, **kw)
             plt.loglog(k,Eu+Ev, label=self.names[exp])
             plt.xlabel('$k$, wavenumber')
             plt.ylabel('$E(k)$')
             plt.title('Lower layer')
             plt.xlim((1,800))
-
+        
         plt.subplot(121)
         k = [20, 300]
         E = [2e-4, 0]
