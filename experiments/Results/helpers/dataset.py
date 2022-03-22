@@ -82,19 +82,19 @@ def calc_ispec(kk, ll, wv, _var_dens, averaging = True, truncate=True, nd_wavenu
 
     return kr, phr
 
-def compute_spectrum(u, window, dx=1., dy=1., **kw):
+def compute_spectrum(_u, window, dx=1., dy=1., **kw):
     '''
     Input: np.array of size Ntimes * Nz * Ny * Nx,
     average dx,dy over domain (in meters;
     for spherical geometry average is given over center cells)
     '''
 
-    nx = u.shape[-1]
-    ny = u.shape[-2]
-
     # If NaNs (occasionally) are present (some boundary is defined as such,
     # but not necessary it is defined with NaNs), they are changed to 0
-    u = np.nan_to_num(u)
+    u = np.nan_to_num(_u)
+
+    nx = u.shape[-1]
+    ny = u.shape[-2]
 
     # subtract spatial mean (as our spectra ignore this characteristic,
     # and there may be spectral leakage in a case of window)
@@ -142,13 +142,12 @@ def compute_spectrum(u, window, dx=1., dy=1., **kw):
     
     return calc_ispec(kx, ky, K, u2, **kw)
 
-def compute_cospectrum(u, f, window, dx=1., dy=1., **kw):
+def compute_cospectrum(_u, _f, window, dx=1., dy=1., **kw):
+    u = np.nan_to_num(_u)
+    f = np.nan_to_num(_f)
 
     nx = u.shape[-1]
     ny = u.shape[-2]
-
-    u = np.nan_to_num(u)
-    f = np.nan_to_num(f)
 
     u = u - u.mean(axis=(-1,-2), keepdims=True)
     f = f - f.mean(axis=(-1,-2), keepdims=True)
@@ -515,7 +514,7 @@ class dataset_experiments:
 
         plt.tight_layout()
 
-    def plot_cospectrum(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', print_diagnostics = False, **kw):
+    def plot_cospectrum(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 16})
         for exp in exps:
@@ -558,32 +557,36 @@ class dataset_experiments:
             
         plt.tight_layout()
 
-    def plot_cospectrum_componentwise(self, exps, tstart = 7200., print_diagnostics = False, **kw):
+    def plot_cospectrum_componentwise(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 16})
         for exp in exps:
             prog = self[exp].prog
             mom = self[exp].mom
-
+            param = self[exp].param
             t = prog.Time
-            u = np.array(prog.u[t >= tstart])
-            v = np.array(prog.v[t >= tstart])
-            fx = np.array(mom.diffu[t >= tstart])
-            fy = np.array(mom.diffv[t >= tstart])
-            h = np.array(prog.h[t >= tstart])
-            ZBx = np.array(mom.ZB2020u[t >= tstart])
-            ZBy = np.array(mom.ZB2020v[t >= tstart])
+            xq = prog.xq
+            yq = prog.yq
+            xh = prog.xh
+            yh = prog.yh
+            dxT = param.dxT
+            dyT = param.dyT
+            lonh = param.lonh
+            lath = param.lath
 
-            uh = 0.5 * (u[:,:,:,1:] + u[:,:,:,0:-1])
-            vh = 0.5 * (v[:,:,1:,:] + v[:,:,0:-1,:])
-            fxh = 0.5 * (fx[:,:,:,1:] + fx[:,:,:,0:-1])
-            fyh = 0.5 * (fy[:,:,1:,:] + fy[:,:,0:-1,:])
-            ZBxh = 0.5 * (ZBx[:,:,:,1:] + ZBx[:,:,:,0:-1])
-            ZByh = 0.5 * (ZBy[:,:,1:,:] + ZBy[:,:,0:-1,:])
-            
+            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                u = np.array(prog.u[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                v = np.array(prog.v[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                fx = np.array(mom.diffu[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                fy = np.array(mom.diffv[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                ZBx = np.array(mom.ZB2020u[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                ZBy = np.array(mom.ZB2020v[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                dx = float(dxT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+                dy = float(dyT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+
             plt.subplot(121)
-            k, E = compute_cospectrum_uv(uh[:,0,:,:], vh[:,0,:,:], fxh[:,0,:,:], fyh[:,0,:,:], **kw)
-            k, EZB = compute_cospectrum_uv(uh[:,0,:,:], vh[:,0,:,:], ZBxh[:,0,:,:], ZByh[:,0,:,:], **kw)
+            k, E = compute_cospectrum_uv(u[:,0,:,:], v[:,0,:,:], fx[:,0,:,:], fy[:,0,:,:], window, dx, dy, **kw)
+            k, EZB = compute_cospectrum_uv(u[:,0,:,:], v[:,0,:,:], ZBx[:,0,:,:], ZBy[:,0,:,:], window, dx, dy, **kw)
             Esmag = E - EZB
             plt.semilogx(k,E*k, label='sum')
             plt.semilogx(k,EZB*k, '--', label='ZB2020')
@@ -592,12 +595,11 @@ class dataset_experiments:
             plt.xlabel('$k$, wavenumber')
             plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk$')
             plt.title('Upper layer')
-            if print_diagnostics:
-                print('Integral upper layer:', E.sum() * (k[1]-k[0]))
-
+            plt.ylim((-7e-10,4e-10))
+            
             plt.subplot(122)
-            k, E = compute_cospectrum_uv(uh[:,1,:,:], vh[:,1,:,:], fxh[:,1,:,:], fyh[:,1,:,:], **kw)
-            k, EZB = compute_cospectrum_uv(uh[:,1,:,:], vh[:,1,:,:], ZBxh[:,1,:,:], ZByh[:,1,:,:], **kw)
+            k, E = compute_cospectrum_uv(u[:,1,:,:], v[:,1,:,:], fx[:,1,:,:], fy[:,1,:,:], window, dx, dy, **kw)
+            k, EZB = compute_cospectrum_uv(u[:,1,:,:], v[:,1,:,:], ZBx[:,1,:,:], ZBy[:,1,:,:], window, dx, dy, **kw)
             Esmag = E - EZB
             plt.semilogx(k,E*k, label='sum')
             plt.semilogx(k,EZB*k, '--', label='ZB2020')
@@ -606,14 +608,71 @@ class dataset_experiments:
             plt.xlabel('$k$, wavenumber')
             plt.title('Lower layer')
             plt.legend()
-            if print_diagnostics:
-                print('Integral lower layer:', E.sum() * (k[1]-k[0]))
-
+            plt.ylim((-5e-11,1e-11))
+            
         plt.tight_layout()
+
+    def plot_cospectrum_spectrum(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
+        fig = plt.figure(figsize=(13,5))
+        plt.rcParams.update({'font.size': 16})
+        for exp in exps:
+            prog = self[exp].prog
+            mom = self[exp].mom
+            param = self[exp].param
+            t = prog.Time
+            xq = prog.xq
+            yq = prog.yq
+            xh = prog.xh
+            yh = prog.yh
+            dxT = param.dxT
+            dyT = param.dyT
+            lonh = param.lonh
+            lath = param.lath
+
+            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                u = np.array(prog.u[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                v = np.array(prog.v[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                fx = np.array(mom.diffu[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                fy = np.array(mom.diffv[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                ZBx = np.array(mom.ZB2020u[t>=tstart,:,(yh>Lat[0])*(yh<=Lat[1]),(xq>Lon[0])*(xq<=Lon[1])])
+                ZBy = np.array(mom.ZB2020v[t>=tstart,:,(yq>Lat[0])*(yq<=Lat[1]),(xh>Lon[0])*(xh<=Lon[1])])
+                dx = float(dxT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+                dy = float(dyT[(lath>Lat[0])*(lath<=Lat[1]),(lonh>Lon[0])*(lonh<=Lon[1])].mean())
+
+            smagx = fx - ZBx
+            smagy = fy - ZBy
+
+            plt.subplot(121)
+            k, E = compute_cospectrum_uv(u[:,0,:,:], v[:,0,:,:], fx[:,0,:,:], fy[:,0,:,:], window, dx, dy, **kw)
+            k, EZB = compute_cospectrum_uv(u[:,0,:,:], v[:,0,:,:], ZBx[:,0,:,:], ZBy[:,0,:,:], window, dx, dy, **kw)
+            Esmag = E - EZB
+            plt.semilogx(k,E*k, label='sum')
+            plt.semilogx(k,EZB*k, '--', label='ZB2020')
+            plt.semilogx(k,Esmag*k, '-.', label='Smag')
+            plt.axhline(y=0,color='k', linestyle='--', alpha=0.5)
+            plt.xlabel('$k$, wavenumber')
+            plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk$')
+            plt.title('Energy cospectrum')
+            plt.ylim((-7e-10,4e-10))
+            
+            plt.subplot(122)
+            k, E = compute_cospectrum_uv(fx[:,0,:,:], fy[:,0,:,:], fx[:,0,:,:], fy[:,0,:,:], window, dx, dy, **kw)
+            k, EZB = compute_cospectrum_uv(ZBx[:,0,:,:], ZBy[:,0,:,:], ZBx[:,0,:,:], ZBy[:,0,:,:], window, dx, dy, **kw)
+            k, Esmag = compute_cospectrum_uv(smagx[:,0,:,:], smagy[:,0,:,:], smagx[:,0,:,:], smagy[:,0,:,:], window, dx, dy, **kw)
+            plt.plot(k,E, label='sum')
+            plt.plot(k,EZB, '--', label='ZB2020')
+            plt.plot(k,Esmag, '-.', label='Smag')
+            plt.xlabel('$k$, wavenumber')
+            plt.title('Power spectrum')
+            plt.legend()
+            plt.ylim((0, 1.5e-16))
+            
+        plt.tight_layout()
+
 
     def plot_SGS_snapshot(self, exp, Time = -1):
         fig = plt.figure(figsize=(15,7.5))
-        plt.rcParams.update({'font.size': 16})
+        plt.rcParams.update({'font.size': 12})
         
         mom = self[exp].mom
         fx = mom.diffu.isel(Time=Time)
