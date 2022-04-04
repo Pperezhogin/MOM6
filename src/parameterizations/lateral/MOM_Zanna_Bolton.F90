@@ -25,14 +25,13 @@ type, public :: ZB2020_CS
   real      :: FGR        !< Filter to grid width ratio, nondimensional, 
                           ! k_bc = - FGR^2 * dx * dy / 24
   integer   :: ZB_type    !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
-  logical   :: ZB_sign    !< if true, sign corresponds to ZB2020
   integer   :: ZB_cons    !< 0: nonconservative; 1: conservative without interface;
                           !  2: conservative with height
   logical   :: ZB_smooth  !< If true, smooth vorticity in ZB2020 tensor
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
-  integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1
+  integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1, id_kbc = -1
   !>@}
 
 end type ZB2020_CS
@@ -55,7 +54,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   
   call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
-                 default=.false.)
+                 default=.true.)
 
   call get_param(param_file, mdl, "FGR", CS%FGR, &
                  "The ratio of assumed filter width to grid step", &
@@ -65,14 +64,9 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  "Type of parameterization: 0 = ZB2020, 1 = AZ2017", &
                  default=0)
 
-  call get_param(param_file, mdl, "ZB_sign", CS%ZB_sign, &
-                 "If true, sign as in Zanna-Bolton2020, false - is negative", &
-                 default=.true.)
-
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
-                 "0: nonconservative; 1: conservative without interface; " //&
-                 "2: conservative with height", &
-                 default=0)
+                 "0: nonconservative; 1: conservative without interface", &
+                 default=1)
 
   call get_param(param_file, mdl, "ZB_smooth", CS%ZB_smooth, &
                  "If true, apply smoothing for vorticity in ZB2020 tensor", &
@@ -88,7 +82,10 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   CS%id_KE_ZB2020 = register_diag_field('ocean_model', 'KE_ZB2020', diag%axesTL, Time, &
       'Kinetic Energy Source from Horizontal Viscosity', &
       'm3 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2)*US%s_to_T)
-  
+  CS%id_kbc = register_diag_field('ocean_model', 'kbc_ZB2020', diag%axesTL, Time, &
+      'Kinetic Energy Source from Horizontal Viscosity', &
+      'm2', conversion=US%L_to_m**2)
+
 end subroutine ZB_2020_init
 
 !> Baroclinic parameterization is as follows:
@@ -169,6 +166,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     S_12, &            ! flux tensor in the corner, multiplied with interface height [m^2/s^2 * h]
     hq                 ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
 
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
+    kbc_3d             ! k_bc parameter as 3d field [L2 ~> m2]
+
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     h_u                ! Thickness interpolated to u points [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJB_(G)) :: &
@@ -196,6 +196,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
   fx(:,:,:) = 0.
   fy(:,:,:) = 0.
+  kbc_3d(:,:,:) = 0.
 
   ! Calculate metric terms (line 2119 of MOM_hor_visc.F90)
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
@@ -295,7 +296,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
         sum_sq = 0.
       endif
       
-      if (CS%ZB_cons == 1 .or. CS%ZB_cons == 2) then
+      if (CS%ZB_cons == 1) then
         vort_sh = 0.25 * (                                          &
           (G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1)  + &
            G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  )) + &
@@ -313,28 +314,13 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! Form S_12 tensor
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
-      if (CS%ZB_cons == 2) then
-        if (h(i+1,j+1,k) < h_neglect * 1e+27 .or. &
-            h(i  ,j  ,k) < h_neglect * 1e+27 .or. &
-            h(i+1,j  ,k) < h_neglect * 1e+27 .or. &
-            h(i  ,j+1,k) < h_neglect * 1e+27      &
-        ) then
-          c_h = 0.
-        else
-          c_h = 1.
-        endif
-
-        vort_sh = vort_xy(I,J) * 0.25 * (   &
-          ((c_h * h(i+1,j+1,k) + (1.-c_h) * hq(I,J)) * sh_xx(i+1,j+1)  + &
-           (c_h * h(i  ,j  ,k) + (1.-c_h) * hq(I,J)) * sh_xx(i  ,j  )) + &
-          ((c_h * h(i+1,j  ,k) + (1.-c_h) * hq(I,J)) * sh_xx(i+1,j  )  + &
-           (c_h * h(i  ,j+1,k) + (1.-c_h) * hq(I,J)) * sh_xx(i  ,j+1))   &
-        ) / (hq(I,J) + h_neglect)
-      else if (CS%ZB_cons == 0 .or. CS%ZB_cons == 1) then
-        vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
-      endif
+      vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
       k_bc = - CS%FGR**2 * G%areaBu(i,j) / 24.
       S_12(I,J) = k_bc * vort_sh
+    enddo ; enddo
+
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      kbc_3d(i,j,k) = - CS%FGR**2 * G%areaT(i,j) / 24.
     enddo ; enddo
 
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
@@ -371,13 +357,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
   enddo ! end of k loop
 
-  if (not(CS%ZB_sign)) then
-    fx(:,:,:) = - fx(:,:,:)
-    fy(:,:,:) = - fy(:,:,:)
-  endif
-
   if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, fx, CS%diag)
   if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, fy, CS%diag)
+  if (CS%id_kbc>0)       call post_data(CS%id_kbc, kbc_3d, CS%diag)
 
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 

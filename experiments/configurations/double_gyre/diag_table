@@ -91,6 +91,7 @@
 
 "ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","kbc_ZB2020","kbc_ZB2020","mom_%4yr_%3dy","all",.false.,"none",2
 
 # Barotropic Momentum Balance Terms:
 # (only available with split time stepping.)
