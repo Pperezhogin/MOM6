@@ -70,7 +70,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
 
   call get_param(param_file, mdl, "ZB_smooth", CS%ZB_smooth, &
                  "If true, apply smoothing for vorticity in ZB2020 tensor", &
-                 default=.false.)
+                 default=.true.)
   
   ! Register fields for output from this module.
   CS%diag => diag
@@ -246,7 +246,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     enddo ; enddo
 
     if (CS%ZB_smooth) then
-      call smooth_q(G, vort_xy)
+      call smooth_q(G, GV, vort_xy, h(:,:,k))
     end if
 
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
@@ -366,30 +366,54 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 end subroutine Zanna_Bolton_2020
 
 !> Copy paste from smooth_GME, MOM_hor_visc.F90
-subroutine smooth_q(G, q)
-  type(ocean_grid_type),              intent(in)    :: G !< Ocean grid
-  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: q !< any field at q points
+!> Field need to be with defined halo
+!> Function implements zero dirichlet B.C.
+subroutine smooth_q(G, GV, q, h2d)
+  type(ocean_grid_type),              intent(in)    :: G   !< Ocean grid
+  type(verticalGrid_type),            intent(in)    :: GV  !< The ocean's vertical grid structure
+  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: q   !< any field at q points
+  real, dimension(SZI_(G),SZJ_(G)),   intent(inout) :: h2d !< interface height at T points. It defines mask
   ! local variables
   real, dimension(SZIB_(G),SZJB_(G)) :: q_original
+  real, dimension(SZIB_(G),SZJB_(G)) :: mask_q ! mask of wet points
   real :: wc, ww, we, wn, ws ! averaging weights for smoothing
+  real :: hh ! interface height value to compare
   integer :: i, j, k
+  
+  hh = GV%Angstrom_m * 2.
+  ! compute weights
+  ww = 0.125
+  we = 0.125
+  ws = 0.125
+  wn = 0.125
+  wc = 1.0 - (ww+we+wn+ws)
 
-  q_original(:,:) = q(:,:)
+  mask_q(:,:) = 0.
+  do J = G%JscB-1, G%JecB+1
+    do I = G%IscB-1, G%IecB+1
+      if (h2d(i+1,j+1) < hh .or. &
+          h2d(i  ,j  ) < hh .or. &
+          h2d(i+1,j  ) < hh .or. &
+          h2d(i  ,j+1) < hh      &
+        ) then
+          mask_q(I,J) = 0.
+        else
+          mask_q(I,J) = 1.
+        endif
+        mask_q(I,J) = mask_q(I,J) * G%mask2dBu(I,J)
+    enddo
+  enddo
+
+  q_original(:,:) = q(:,:) * mask_q(:,:)
   q(:,:) = 0.
   do J = G%JscB, G%JecB
     do I = G%IscB, G%IecB
-      ! compute weights
-      ww = 0.125 * G%mask2dT(i-1,j)
-      we = 0.125 * G%mask2dT(i+1,j)
-      ws = 0.125 * G%mask2dT(i,j-1)
-      wn = 0.125 * G%mask2dT(i,j+1)
-      wc = 1.0 - (ww+we+wn+ws)
       q(I,J) =  wc * q_original(I,J)   &
               + ww * q_original(I-1,J) &
               + we * q_original(I+1,J) &
               + ws * q_original(I,J-1) &
               + wn * q_original(I,J+1)
-      q(I,J) = q(I,J) * G%mask2dBu(I,J)
+      q(I,J) = q(I,J) * mask_q(I,J)
     enddo
   enddo
   call pass_var(q, G%Domain, position=CORNER, complete=.true.)
