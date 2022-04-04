@@ -247,6 +247,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
     if (CS%ZB_smooth) then
       call smooth_q(G, GV, vort_xy, h(:,:,k))
+      call smooth_q(G, GV, sh_xy, h(:,:,k))
+      call smooth_T(G, GV, sh_xx, h(:,:,k))
     end if
 
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
@@ -366,7 +368,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 end subroutine Zanna_Bolton_2020
 
 !> Copy paste from smooth_GME, MOM_hor_visc.F90
-!> Field need to be with defined halo
 !> Function implements zero dirichlet B.C.
 subroutine smooth_q(G, GV, q, h2d)
   type(ocean_grid_type),              intent(in)    :: G   !< Ocean grid
@@ -404,6 +405,7 @@ subroutine smooth_q(G, GV, q, h2d)
     enddo
   enddo
 
+  call pass_var(q, G%Domain, position=CORNER, complete=.true.)
   q_original(:,:) = q(:,:) * mask_q(:,:)
   q(:,:) = 0.
   do J = G%JscB, G%JecB
@@ -418,6 +420,56 @@ subroutine smooth_q(G, GV, q, h2d)
   enddo
   call pass_var(q, G%Domain, position=CORNER, complete=.true.)
 end subroutine smooth_q
+
+!> Function implements zero dirichlet B.C.
+!> Smooth of the field defined in the center of the cell
+subroutine smooth_T(G, GV, T, h2d)
+  type(ocean_grid_type),              intent(in)    :: G   !< Ocean grid
+  type(verticalGrid_type),            intent(in)    :: GV  !< The ocean's vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G)),   intent(inout) :: T   !< any field at T points
+  real, dimension(SZI_(G),SZJ_(G)),   intent(inout) :: h2d !< interface height at T points. It defines mask
+  ! local variables
+  real, dimension(SZI_(G),SZJ_(G)) :: T_original
+  real, dimension(SZI_(G),SZJ_(G)) :: mask_T ! mask of wet points
+  real :: wc, ww, we, wn, ws ! averaging weights for smoothing
+  real :: hh ! interface height value to compare
+  integer :: i, j, k
+  
+  hh = GV%Angstrom_m * 2.
+  ! compute weights
+  ww = 0.125
+  we = 0.125
+  ws = 0.125
+  wn = 0.125
+  wc = 1.0 - (ww+we+wn+ws)
+
+  mask_T(:,:) = 0.
+  do j = G%jsc-1, G%jec+1
+    do i = G%isc-1, G%iec+1
+      if (h2d(i,j) < hh) then
+        mask_T(i,j) = 0.
+      else
+        mask_T(i,j) = 1.
+      endif
+        mask_T(i,j) = mask_T(i,j) * G%mask2dT(i,j)
+    enddo
+  enddo
+
+  call pass_var(T, G%Domain)
+  T_original(:,:) = T(:,:) * mask_T(:,:)
+  T(:,:) = 0.
+  do j = G%jsc, G%jec
+    do i = G%isc, G%iec
+      T(i,j) =  wc * T_original(i,j)   &
+              + ww * T_original(i-1,j) &
+              + we * T_original(i+1,j) &
+              + ws * T_original(i,j-1) &
+              + wn * T_original(i,j+1)
+      T(i,j) = T(i,j) * mask_T(i,j)
+    enddo
+  enddo
+  call pass_var(T, G%Domain)
+end subroutine smooth_T
 
 ! This is copy-paste from MOM_diagnostics.F90, specifically 1125 line
 subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
