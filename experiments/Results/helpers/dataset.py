@@ -659,13 +659,13 @@ class dataset_experiments:
             k, E = compute_cospectrum_uv(fx[:,0,:,:], fy[:,0,:,:], fx[:,0,:,:], fy[:,0,:,:], window, dx, dy, **kw)
             k, EZB = compute_cospectrum_uv(ZBx[:,0,:,:], ZBy[:,0,:,:], ZBx[:,0,:,:], ZBy[:,0,:,:], window, dx, dy, **kw)
             k, Esmag = compute_cospectrum_uv(smagx[:,0,:,:], smagy[:,0,:,:], smagx[:,0,:,:], smagy[:,0,:,:], window, dx, dy, **kw)
-            plt.plot(k,E, label='sum')
-            plt.plot(k,EZB, '--', label='ZB2020')
-            plt.plot(k,Esmag, '-.', label='Smag')
+            plt.semilogx(k,E, label='sum')
+            plt.semilogx(k,EZB, '--', label='ZB2020')
+            plt.semilogx(k,Esmag, '-.', label='Smag')
             plt.xlabel('$k$, wavenumber')
             plt.title('Power spectrum')
             plt.legend()
-            plt.ylim((0, 1.5e-16))
+            #plt.ylim((0, 1.5e-16))
             
         plt.tight_layout()
 
