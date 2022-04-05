@@ -1,4 +1,0 @@
-#override LAPLACIAN  = False
-#override BIHARMONIC = True
-#override SMAGORINSKY_AH = True
-#override SMAG_BI_CONST = 0.06

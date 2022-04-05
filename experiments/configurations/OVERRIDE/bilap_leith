@@ -1,5 +1,0 @@
-#override LAPLACIAN  = False
-#override BIHARMONIC = True
-#override LEITH_AH = True
-#override MODIFIED_LEITH = True
-#override LEITH_BI_CONST = 1.

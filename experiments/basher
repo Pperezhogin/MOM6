@@ -1,5 +1,5 @@
 ## Set experiment name here
-EXP_NAME=/scratch/pp2681/mom6/Feb2022/test
+EXP_NAME=/scratch/pp2681/mom6/Mar2022/test
 
 ## Create an output directory on scratch
 rm -rf $EXP_NAME
@@ -10,7 +10,25 @@ cp -r configurations/double_gyre/* $EXP_NAME
 cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 $EXP_NAME
 
 cd configurations/OVERRIDE
-cat 20years bilap_smag R4 FGR2 ZB_smooth cons_1 > $EXP_NAME/MOM_override
+cat R4 > $EXP_NAME/MOM_override
+echo '
+#override DAYMAX = 7300.0
+#override RESTINT = 1825.0
+
+#override LAPLACIAN  = False
+#override BIHARMONIC = True
+#override SMAGORINSKY_AH = True
+#override SMAG_BI_CONST = 0.06
+
+#override USE_ZB2020 = True
+#override FGR = 2.
+#override ZB_type = 0
+#override ZB_cons = 1
+#override VGflt_iters = 4
+#override VGflt_order = 4
+#override Strflt_iters = 4
+#override Strflt_order = 4
+' >> $EXP_NAME/MOM_override
 
 cd $EXP_NAME
 sbatch mom.sub
