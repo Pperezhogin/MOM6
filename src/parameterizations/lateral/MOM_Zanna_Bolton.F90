@@ -246,9 +246,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     enddo ; enddo
 
     if (CS%ZB_smooth) then
-      call smooth_q(G, GV, vort_xy, h(:,:,k))
-      call smooth_q(G, GV, sh_xy, h(:,:,k))
-      call smooth_T(G, GV, sh_xx, h(:,:,k))
+      call low_pass_filter(G, GV, h(:,:,k), 10, 10, q=sh_xy, T=sh_xx)
+      call low_pass_filter(G, GV, h(:,:,k), 10, 10, q=vort_xy)
     end if
 
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
@@ -366,6 +365,46 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
 end subroutine Zanna_Bolton_2020
+
+subroutine low_pass_filter(G, GV, h2d, n_highpass, n_lowpass, q, T)
+  type(ocean_grid_type),                        intent(in)    :: G          !< Ocean grid
+  type(verticalGrid_type),                      intent(in)    :: GV         !< The ocean's vertical grid structure
+  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q          !< any field at q points
+  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T          !< any field at T points
+  real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: h2d        !< interface height at T points. It defines mask
+  integer,                                      intent(in)    :: n_highpass !< number of high-pass iterations 
+  integer,                                      intent(in)    :: n_lowpass  !< number of low-pass iterations 
+
+  integer :: i, j
+  real, dimension(SZIB_(G),SZJB_(G)) :: q0, qf ! initial and filtered fields
+  real, dimension(SZI_(G),SZJ_(G))   :: T0, Tf ! initial and filtered fields
+  
+  do j = 1,n_lowpass
+    ! construct low-pass filter by 
+    ! iterating residual through high-pass filter
+    q0(:,:) = q(:,:)
+    do i = 1,n_highpass
+      qf(:,:) = q0(:,:)
+      call smooth_q(G, GV, qf, h2d)
+      q0(:,:) = q0(:,:) - qf(:,:) ! save the residual field for the next iteration
+    enddo
+    q(:,:) = q(:,:) - q0(:,:) ! remove residual
+  enddo
+
+  if (present(T)) then
+    do j = 1,n_lowpass
+      ! construct low-pass filter by 
+      ! iterating residual through high-pass filter
+      T0(:,:) = T(:,:)
+      do i = 1,n_highpass
+        Tf(:,:) = T0(:,:)
+        call smooth_T(G, GV, Tf, h2d)
+        T0(:,:) = T0(:,:) - Tf(:,:) ! save the residual field for the next iteration
+      enddo
+      T(:,:) = T(:,:) - T0(:,:) ! remove residual
+    enddo
+  endif
+end subroutine low_pass_filter
 
 !> Copy paste from smooth_GME, MOM_hor_visc.F90
 !> Function implements zero dirichlet B.C.
