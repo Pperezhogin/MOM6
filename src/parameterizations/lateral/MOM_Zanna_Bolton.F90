@@ -21,14 +21,16 @@ public Zanna_Bolton_2020, ZB_2020_init
 !> Control structure that contains MEKE parameters and diagnostics handles
 type, public :: ZB2020_CS
   ! Parameters
-  logical   :: use_ZB2020 !< If true, parameterization works
-  real      :: FGR        !< Filter to grid width ratio, nondimensional, 
-                          ! k_bc = - FGR^2 * dx * dy / 24
-  integer   :: ZB_type    !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
-  integer   :: ZB_cons    !< 0: nonconservative; 1: conservative without interface;
-                          !  2: conservative with height
-  logical   :: ZB_smooth  !< If true, smooth vorticity in ZB2020 tensor
-
+  logical   :: use_ZB2020    !< If true, parameterization works
+  real      :: FGR           !< Filter to grid width ratio, nondimensional, 
+                             ! k_bc = - FGR^2 * dx * dy / 24
+  integer   :: ZB_type       !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
+  integer   :: ZB_cons       !< 0: nonconservative; 1: conservative without interface;
+  integer   :: VGflt_iters   !< number of filter iteration for velocity gradient
+  integer   :: VGflt_order   !< order of filtering, 1: Laplacian, 2: Bilaplacian
+  integer   :: Strflt_iters  !< number of filter iterations for stress tensor
+  integer   :: Strflt_order  !< order of filtering, 1: Laplacian, 2: Bilaplacian
+  
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1, id_kbc = -1
@@ -54,7 +56,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   
   call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
-                 default=.true.)
+                 default=.false.)
 
   call get_param(param_file, mdl, "FGR", CS%FGR, &
                  "The ratio of assumed filter width to grid step", &
@@ -68,10 +70,22 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  "0: nonconservative; 1: conservative without interface", &
                  default=1)
 
-  call get_param(param_file, mdl, "ZB_smooth", CS%ZB_smooth, &
-                 "If true, apply smoothing for vorticity in ZB2020 tensor", &
-                 default=.true.)
+  call get_param(param_file, mdl, "VGflt_iters", CS%VGflt_iters, &
+                 "number of filter iteration for velocity gradient", &
+                 default=0)
   
+  call get_param(param_file, mdl, "VGflt_order", CS%VGflt_order, &
+                 "order of filtering, 1: Laplacian, 2: Bilaplacian", &
+                 default=0)
+
+  call get_param(param_file, mdl, "Strflt_iters", CS%Strflt_iters, &
+                 "number of filter iterations for stress tensor", &
+                 default=0)
+  
+  call get_param(param_file, mdl, "Strflt_order", CS%Strflt_order, &
+                 "order of filtering, 1: Laplacian, 2: Bilaplacian", &
+                 default=0)
+
   ! Register fields for output from this module.
   CS%diag => diag
 
@@ -245,10 +259,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) ) ! corner of the cell
     enddo ; enddo
 
-    if (CS%ZB_smooth) then
-      call low_pass_filter(G, GV, h(:,:,k), 10, 10, q=sh_xy, T=sh_xx)
-      call low_pass_filter(G, GV, h(:,:,k), 10, 10, q=vort_xy)
-    end if
+    call low_pass_filter(G, GV, h(:,:,k), CS%VGflt_iters, CS%VGflt_order, q=sh_xy, T=sh_xx)
+    call low_pass_filter(G, GV, h(:,:,k), CS%VGflt_iters, CS%VGflt_order, q=vort_xy)
 
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
     ! lower index as in loop for sh_xy, but minus 1
@@ -320,6 +332,15 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 
+    call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, q=S_12, T=S_11)
+    call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, T=S_22)
+    !call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, q=S_12)
+    !call smooth_q(G, GV, S_12, h(:,:,k))
+    !call smooth_GME(G, GME_flux_q=S_12)
+    !call smooth_GME_new(G, GME_flux_h=S_11)
+    !call smooth_GME_new(G, GME_flux_h=S_22)
+    !call smooth_GME_new(G, GME_flux_q=S_12)
+
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       kbc_3d(i,j,k) = - CS%FGR**2 * G%areaT(i,j) / 24.
     enddo ; enddo
@@ -366,14 +387,14 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
 end subroutine Zanna_Bolton_2020
 
-subroutine low_pass_filter(G, GV, h2d, n_highpass, n_lowpass, q, T)
+subroutine low_pass_filter(G, GV, h2d, n_lowpass, n_highpass, q, T)
   type(ocean_grid_type),                        intent(in)    :: G          !< Ocean grid
   type(verticalGrid_type),                      intent(in)    :: GV         !< The ocean's vertical grid structure
   real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q          !< any field at q points
   real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T          !< any field at T points
   real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: h2d        !< interface height at T points. It defines mask
-  integer,                                      intent(in)    :: n_highpass !< number of high-pass iterations 
   integer,                                      intent(in)    :: n_lowpass  !< number of low-pass iterations 
+  integer,                                      intent(in)    :: n_highpass !< number of high-pass iterations 
 
   integer :: i, j
   real, dimension(SZIB_(G),SZJB_(G)) :: q0, qf ! initial and filtered fields
@@ -459,6 +480,145 @@ subroutine smooth_q(G, GV, q, h2d)
   enddo
   call pass_var(q, G%Domain, position=CORNER, complete=.true.)
 end subroutine smooth_q
+
+subroutine smooth_GME(G, GME_flux_h, GME_flux_q)
+  type(ocean_grid_type),                        intent(in)    :: G         !< Ocean grid
+  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: GME_flux_h!< GME diffusive flux
+                                                              !! at h points
+  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: GME_flux_q!< GME diffusive flux
+                                                              !! at q points
+  ! local variables
+  real, dimension(SZI_(G),SZJ_(G)) :: GME_flux_h_original
+  real, dimension(SZIB_(G),SZJB_(G)) :: GME_flux_q_original
+  real :: wc, ww, we, wn, ws ! averaging weights for smoothing
+  integer :: i, j, k, s
+  do s=1,1
+    ! Update halos
+    if (present(GME_flux_h)) then
+      !### Work on a wider halo to eliminate this blocking send!
+      call pass_var(GME_flux_h, G%Domain)
+      GME_flux_h_original(:,:) = GME_flux_h(:,:)
+      ! apply smoothing on GME
+      do j = G%jsc, G%jec
+        do i = G%isc, G%iec
+          ! skip land points
+          if (G%mask2dT(i,j)==0.) cycle
+          ! compute weights
+          ww = 0.125 * G%mask2dT(i-1,j)
+          we = 0.125 * G%mask2dT(i+1,j)
+          ws = 0.125 * G%mask2dT(i,j-1)
+          wn = 0.125 * G%mask2dT(i,j+1)
+          wc = 1.0 - (ww+we+wn+ws)
+          !### Add parentheses to make this rotationally invariant.
+          GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
+                           + ww * GME_flux_h_original(i-1,j) &
+                           + we * GME_flux_h_original(i+1,j) &
+                           + ws * GME_flux_h_original(i,j-1) &
+                           + wn * GME_flux_h_original(i,j+1)
+        enddo
+      enddo
+    endif
+    ! Update halos
+    if (present(GME_flux_q)) then
+      !### Work on a wider halo to eliminate this blocking send!
+      call pass_var(GME_flux_q, G%Domain, position=CORNER, complete=.true.)
+      GME_flux_q_original(:,:) = GME_flux_q(:,:)
+      ! apply smoothing on GME
+      do J = G%JscB, G%JecB
+        do I = G%IscB, G%IecB
+          ! skip land points
+          if (G%mask2dBu(I,J)==0.) cycle
+          ! compute weights
+          ww = 0.125 * G%mask2dBu(I-1,J)
+          we = 0.125 * G%mask2dBu(I+1,J)
+          ws = 0.125 * G%mask2dBu(I,J-1)
+          wn = 0.125 * G%mask2dBu(I,J+1)
+          wc = 1.0 - (ww+we+wn+ws)
+          !### Add parentheses to make this rotationally invariant.
+          GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
+                           + ww * GME_flux_q_original(I-1,J) &
+                           + we * GME_flux_q_original(I+1,J) &
+                           + ws * GME_flux_q_original(I,J-1) &
+                           + wn * GME_flux_q_original(I,J+1)
+        enddo
+      enddo
+      call pass_var(GME_flux_q, G%Domain, position=CORNER, complete=.true.)
+    endif
+  enddo ! s-loop
+end subroutine smooth_GME
+
+!> Apply a 1-1-4-1-1 Laplacian filter one time on GME diffusive flux to reduce any
+!! horizontal two-grid-point noise
+subroutine smooth_GME_new(G, GME_flux_h, GME_flux_q)
+  type(ocean_grid_type),                        intent(in)    :: G         !< Ocean grid
+  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: GME_flux_h!< GME diffusive flux
+                                                              !! at h points
+  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: GME_flux_q!< GME diffusive flux
+                                                              !! at q points
+  ! local variables
+  real, dimension(SZI_(G),SZJ_(G)) :: GME_flux_h_original
+  real, dimension(SZIB_(G),SZJB_(G)) :: GME_flux_q_original
+  real :: wc, ww, we, wn, ws ! averaging weights for smoothing
+  integer :: i, j, k, s, halosz
+  integer :: xh, xq  ! The number of valid extra halo points for h and q points.
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: num_smooth_gme = 2
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  xh = 0 ; xq = 0
+
+  do s=1,num_smooth_gme
+    if (present(GME_flux_h)) then
+      if (xh < 0) then
+        ! Update halos if needed, but avoid doing so more often than is needed.
+        halosz = min(G%isc-G%isd, G%jsc-G%jsd, 2+num_smooth_gme-s)
+        call pass_var(GME_flux_h, G%Domain, halo=halosz)
+        xh = halosz - 2
+      endif
+      GME_flux_h_original(:,:) = GME_flux_h(:,:)
+      ! apply smoothing on GME
+      do j=Jsq-xh,Jeq+1+xh ; do i=Isq-xh,Ieq+1+xh
+        ! skip land points
+        if (G%mask2dT(i,j)==0.) cycle
+        ! compute weights
+        ww = 0.125 * G%mask2dT(i-1,j)
+        we = 0.125 * G%mask2dT(i+1,j)
+        ws = 0.125 * G%mask2dT(i,j-1)
+        wn = 0.125 * G%mask2dT(i,j+1)
+        wc = 1.0 - ((ww+we)+(wn+ws))
+        GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
+                         + ((ww * GME_flux_h_original(i-1,j) + we * GME_flux_h_original(i+1,j)) &
+                          + (ws * GME_flux_h_original(i,j-1) + wn * GME_flux_h_original(i,j+1)))
+      enddo ; enddo
+      xh = xh - 1
+    endif
+    if (present(GME_flux_q)) then
+      if (xq < 0) then
+        ! Update halos if needed, but avoid doing so more often than is needed.
+        halosz = min(G%isc-G%isd, G%jsc-G%jsd, 2+num_smooth_gme-s)
+        call pass_var(GME_flux_q, G%Domain, position=CORNER, complete=.true., halo=halosz)
+        xq = halosz - 2
+      endif
+      GME_flux_q_original(:,:) = GME_flux_q(:,:)
+      ! apply smoothing on GME
+      do J=js-1-xq,je+xq ; do I=is-1-xq,ie+xq
+        ! skip land points
+        if (G%mask2dBu(I,J)==0.) cycle
+        ! compute weights
+        ww = 0.125 * G%mask2dBu(I-1,J)
+        we = 0.125 * G%mask2dBu(I+1,J)
+        ws = 0.125 * G%mask2dBu(I,J-1)
+        wn = 0.125 * G%mask2dBu(I,J+1)
+        wc = 1.0 - ((ww+we)+(wn+ws))
+        GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
+                         + ((ww * GME_flux_q_original(I-1,J) + we * GME_flux_q_original(I+1,J)) &
+                          + (ws * GME_flux_q_original(I,J-1) + wn * GME_flux_q_original(I,J+1)))
+      enddo ; enddo
+      xq = xq - 1
+    endif
+  enddo ! s-loop
+end subroutine smooth_GME_new
 
 !> Function implements zero dirichlet B.C.
 !> Smooth of the field defined in the center of the cell
