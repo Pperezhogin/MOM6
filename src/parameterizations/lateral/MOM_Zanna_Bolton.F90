@@ -56,7 +56,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   
   call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
-                 default=.false.)
+                 default=.true.)
 
   call get_param(param_file, mdl, "FGR", CS%FGR, &
                  "The ratio of assumed filter width to grid step", &
@@ -71,20 +71,20 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  default=1)
 
   call get_param(param_file, mdl, "VGflt_iters", CS%VGflt_iters, &
-                 "number of filter iteration for velocity gradient", &
-                 default=0)
+                 "number of filter iterations for velocity gradient", &
+                 default=2)
   
   call get_param(param_file, mdl, "VGflt_order", CS%VGflt_order, &
                  "order of filtering, 1: Laplacian, 2: Bilaplacian", &
-                 default=0)
+                 default=2)
 
   call get_param(param_file, mdl, "Strflt_iters", CS%Strflt_iters, &
                  "number of filter iterations for stress tensor", &
-                 default=0)
+                 default=2)
   
   call get_param(param_file, mdl, "Strflt_order", CS%Strflt_order, &
                  "order of filtering, 1: Laplacian, 2: Bilaplacian", &
-                 default=0)
+                 default=2)
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -229,6 +229,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xx(:,:) = 0.
     sh_xy(:,:) = 0.
     vort_xy(:,:) = 0.
+    S_12(:,:) = 0.
+    S_11(:,:) = 0.
+    S_22(:,:) = 0.
 
     ! Calculate horizontal tension (line 590 of MOM_hor_visc.F90)
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
@@ -332,6 +335,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 
+    call check_nan(S_12, 'S_12')
+    call check_nan(S_11, 'S_11')
+    call check_nan(S_22, 'S_22')
+
     call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, q=S_12, T=S_11)
     call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, T=S_22)
     !call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, q=S_12)
@@ -400,17 +407,26 @@ subroutine low_pass_filter(G, GV, h2d, n_lowpass, n_highpass, q, T)
   real, dimension(SZIB_(G),SZJB_(G)) :: q0, qf ! initial and filtered fields
   real, dimension(SZI_(G),SZJ_(G))   :: T0, Tf ! initial and filtered fields
   
-  do j = 1,n_lowpass
-    ! construct low-pass filter by 
-    ! iterating residual through high-pass filter
-    q0(:,:) = q(:,:)
-    do i = 1,n_highpass
-      qf(:,:) = q0(:,:)
-      call smooth_q(G, GV, qf, h2d)
-      q0(:,:) = q0(:,:) - qf(:,:) ! save the residual field for the next iteration
+  if (present(q)) then
+    do j = 1,n_lowpass
+      ! construct low-pass filter by 
+      ! iterating residual through high-pass filter
+      call check_nan(q,'line 407')
+      q0(:,:) = q(:,:)
+      call check_nan(q0,'line 409')
+      do i = 1,n_highpass
+        qf(SZIB_(G),SZJB_(G)) = q0(SZIB_(G),SZJB_(G))
+        call check_nan(qf,'line 412')
+        call smooth_q(G, GV, qf, h2d)
+        call check_nan(qf,'line 414')
+        q0(:,:) = q0(:,:) - qf(:,:) ! save the residual field for the next iteration
+        call check_nan(q0,'line 416')
+      enddo
+      q(:,:) = q(:,:) - q0(:,:) ! remove residual
+      call check_nan(q,'line 419')
+      write(*,*) 'line 420: iteration = ', j, 'of', n_lowpass
     enddo
-    q(:,:) = q(:,:) - q0(:,:) ! remove residual
-  enddo
+  end if
 
   if (present(T)) then
     do j = 1,n_lowpass
@@ -448,7 +464,7 @@ subroutine smooth_q(G, GV, q, h2d)
   ws = 0.125
   wn = 0.125
   wc = 1.0 - (ww+we+wn+ws)
-
+  
   mask_q(:,:) = 0.
   do J = G%JscB-1, G%JecB+1
     do I = G%IscB-1, G%IecB+1
@@ -464,10 +480,15 @@ subroutine smooth_q(G, GV, q, h2d)
         mask_q(I,J) = mask_q(I,J) * G%mask2dBu(I,J)
     enddo
   enddo
+  call check_nan(mask_q,'line 476')
+  call check_nan(q,'line 477')
 
   call pass_var(q, G%Domain, position=CORNER, complete=.true.)
+  call check_nan(q,'line 480')
   q_original(:,:) = q(:,:) * mask_q(:,:)
+  call check_nan(q_original,'line 482')
   q(:,:) = 0.
+  call check_nan(q,'line 484')
   do J = G%JscB, G%JecB
     do I = G%IscB, G%IecB
       q(I,J) =  wc * q_original(I,J)   &
@@ -478,7 +499,9 @@ subroutine smooth_q(G, GV, q, h2d)
       q(I,J) = q(I,J) * mask_q(I,J)
     enddo
   enddo
+  call check_nan(q,'line 495')
   call pass_var(q, G%Domain, position=CORNER, complete=.true.)
+  call check_nan(q,'line 497')
 end subroutine smooth_q
 
 subroutine smooth_GME(G, GME_flux_h, GME_flux_q)
@@ -748,5 +771,37 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
   endif
 
 end subroutine compute_energy_source
+
+subroutine check_nan(array, str)
+  !use mpi
+  use MOM_coms_infra, only : PE_here
+  real, intent(in) :: array(:,:)
+  character(*), intent(in) :: str
+
+  integer :: i,j
+  integer :: nx, ny
+  logical :: flag = .False.
+  integer :: ierr
+  character(100) :: out
+
+  nx = size(array,1)
+  ny = size(array,2)
+
+  do i=1,nx
+    do j=1,ny
+      if (isnan(array(i,j))) then
+        write(*,'(A,I3,A,I3,A,I3,A,I3,A,I3,A,A)') 'NaN at(',i,',',j,') of (',nx,',',ny,') at PE', PE_here(), ', in ', str 
+        flag = .True.
+      endif
+    enddo
+  enddo
+
+  !call MPI_Barrier(MPI_COMM_WORLD, ierr)
+  if (.not. flag) then
+    write(*,'(A,I3,A,I3,A,I3,A,A)') 'Array(',nx,',',ny,') Free of NaNs at PE', PE_here(), ', in ', str
+  endif
+  !call MPI_Barrier(MPI_COMM_WORLD, ierr)
+
+end subroutine check_nan
 
 end module MOM_Zanna_Bolton

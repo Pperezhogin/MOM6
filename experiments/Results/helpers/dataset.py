@@ -1,8 +1,10 @@
 import xarray as xr
 import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 import numpy.fft as npfft
 import dask
+import math
 
 def calc_ispec(kk, ll, wv, _var_dens, averaging = True, truncate=True, nd_wavenumber=False, nfactor = 1):
     """Compute isotropic spectrum `phr` from 2D spectrum of variable signal2d.
@@ -326,11 +328,11 @@ class dataset_experiments:
 
     def plot_ssh(self, exps, tstart=3650.):
         nfig = len(exps)
-        plt.rcParams.update({'font.size': 16})
+        plt.rcParams.update({'font.size': 12})
 
         if nfig > 3:
-            xfig = int(nfig / 2)
-            yfig = 2
+            xfig=3
+            yfig=math.ceil(nfig/3)
         else:
             xfig = nfig
             yfig = 1
@@ -338,7 +340,8 @@ class dataset_experiments:
         fig = plt.figure(figsize=(xfig*4,yfig*4))
 
         for ifig, exp in enumerate(exps):
-            plt.subplot(int(str(yfig)+str(xfig)+str(ifig+1)))
+            #plt.subplot(int(str(yfig)+str(xfig)+str(ifig+1)))
+            plt.subplot(yfig,xfig,ifig+1)
             ave = self[exp].ave
             t = ave.Time
             ssh = ave.e.isel(zi=0)[t >= tstart].mean(dim='Time')
@@ -356,13 +359,18 @@ class dataset_experiments:
 
         plt.tight_layout()
 
-    def plot_relative_vorticity_snapshot(self, exps, Time=-1, zl=0):
+    def plot_relative_vorticity_snapshot(self, exps, Time=-1, zl=0, names=None):
         nfig = len(exps)
         plt.rcParams.update({'font.size': 12})
 
+        if names is None:
+            names = []
+            for exp in exps:
+                names.append(self.names[exp])
+
         if nfig > 3:
-            xfig = int(nfig / 2)
-            yfig = 2
+            xfig=3
+            yfig=math.ceil(nfig/3)
         else:
             xfig = nfig
             yfig = 1
@@ -380,21 +388,21 @@ class dataset_experiments:
                 extent=[xq.min(),xq.max(),yq.min(),yq.max()], 
                 cmap='bwr', vmin=-0.2, vmax = 0.2)
             ax[ifig].set_xlabel('Longitude')
-            ax[ifig].set_title(self.names[exp])
+            ax[ifig].set_title(names[ifig])
 
         ax[0].set_ylabel('Latitude')
         if (yfig>1):
             ax[xfig].set_ylabel('Latitude')
         
-        fig.colorbar(p, ax=ax, label='N/D units')
+        cbar = fig.colorbar(p, ax=ax, label='relative vorticity / local Coriolis ($\zeta/f$)')
 
     def plot_KE_snapshot(self, exps, Time=-1, zl=0):
         nfig = len(exps)
         plt.rcParams.update({'font.size': 12})
 
         if nfig > 3:
-            xfig = int(nfig / 2)
-            yfig = 2
+            xfig=3
+            yfig=math.ceil(nfig/3)
         else:
             xfig = nfig
             yfig = 1
@@ -423,8 +431,8 @@ class dataset_experiments:
         plt.rcParams.update({'font.size': 12})
 
         if nfig > 3:
-            xfig = int(nfig / 2)
-            yfig = 2
+            xfig=3
+            yfig=math.ceil(nfig/3)
         else:
             xfig = nfig
             yfig = 1
@@ -458,10 +466,15 @@ class dataset_experiments:
         
         fig.colorbar(p, ax=ax, label='$m^2/s^2$')
 
-    def plot_KE_spectrum(self, exps, tstart=7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
+    def plot_KE_spectrum(self, exps, names=None, tstart=7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
+        if names is None:
+            names = []
+            for exp in exps:
+                names.append(self.names[exp])
+        
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 16})
-        for exp in exps:
+        for jfig, exp in enumerate(exps):
             prog = self[exp].prog
             param = self[exp].param
             t = prog.Time
@@ -482,36 +495,52 @@ class dataset_experiments:
             plt.subplot(121)
             k, Eu = compute_spectrum(u[:,0,:,:], window, dx, dy, **kw)
             k, Ev = compute_spectrum(v[:,0,:,:], window, dx, dy, **kw)
-            plt.loglog(k,Eu+Ev, label=self.names[exp])
-            plt.xlabel('$k$, wavenumber')
-            plt.ylabel('$E(k)$')
+            plt.loglog(k,Eu+Ev, label=names[jfig])
+            plt.xlabel(r'wavenumber, $k [m^{-1}]$')
+            plt.ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             plt.title('Upper layer')
-            plt.xlim((1,800))
-            plt.legend()
+            plt.legend(prop={'size': 14})
 
             plt.subplot(122)
             k, Eu = compute_spectrum(u[:,1,:,:], window, dx, dy, **kw)
             k, Ev = compute_spectrum(v[:,1,:,:], window, dx, dy, **kw)
-            plt.loglog(k,Eu+Ev, label=self.names[exp])
-            plt.xlabel('$k$, wavenumber')
-            plt.ylabel('$E(k)$')
+            plt.loglog(k,Eu+Ev, label=names[jfig])
+            plt.xlabel(r'wavenumber, $k [m^{-1}]$')
+            plt.ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             plt.title('Lower layer')
-            plt.xlim((1,800))
         
+            '''
+            plt.subplot(121)
+            k = [20, 300]
+            E = [2e-4, 0]
+            E[1] = E[0] * (k[1]/k[0])**(-3)
+            plt.loglog(k,E,'--k')
+            plt.text(100, 1e-5, '$k^{-3}$')
+
+            plt.subplot(122)
+            k = [70, 300]
+            E = [2e-6, 0]
+            E[1] = E[0] * (k[1]/k[0])**(-3)
+            plt.loglog(k,E,'--k')
+            plt.text(100, 2e-6, '$k^{-3}$')
+            '''
+
         plt.subplot(121)
-        k = [20, 300]
-        E = [2e-4, 0]
+        plt.grid(which='both',linestyle=':')
+        k = [5e-5, 1e-3]
+        E = [1.5e+2, 0]
         E[1] = E[0] * (k[1]/k[0])**(-3)
         plt.loglog(k,E,'--k')
-        plt.text(100, 1e-5, '$k^{-3}$')
-
+        plt.text(2e-4,1e+1,'$k^{-3}$')
+        plt.xlim([5e-6, 2e-3])
         plt.subplot(122)
-        k = [70, 300]
-        E = [2e-6, 0]
+        plt.grid(which='both',linestyle=':')
+        plt.xlim([5e-6, 2e-3])
+        k = [5e-5, 1e-3]
+        E = [3e+1, 0]
         E[1] = E[0] * (k[1]/k[0])**(-3)
         plt.loglog(k,E,'--k')
-        plt.text(100, 2e-6, '$k^{-3}$')
-
+        plt.text(2e-4,1e+1,'$k^{-3}$')
         plt.tight_layout()
 
     def plot_cospectrum(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
@@ -558,7 +587,7 @@ class dataset_experiments:
         plt.tight_layout()
 
     def plot_cospectrum_componentwise(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
-        fig = plt.figure(figsize=(13,5))
+        fig = plt.figure(figsize=(13,4.5))
         plt.rcParams.update({'font.size': 16})
         for exp in exps:
             prog = self[exp].prog
@@ -590,12 +619,13 @@ class dataset_experiments:
             Esmag = E - EZB
             plt.semilogx(k,E*k, label='sum')
             plt.semilogx(k,EZB*k, '--', label='ZB2020')
-            plt.semilogx(k,Esmag*k, '-.', label='Smag')
+            plt.semilogx(k,Esmag*k, '-.', label='bilap Smag')
             plt.axhline(y=0,color='k', linestyle='--', alpha=0.5)
-            plt.xlabel('$k$, wavenumber')
-            plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk$')
+            plt.xlabel(r'wavenumber, $k [m^{-1}]$')
+            plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk ~[m^2/s^3]$')
             plt.title('Upper layer')
-            plt.ylim((-7e-10,4e-10))
+            plt.legend(fontsize=12)
+            plt.ylim((-4.5e-10,4.5e-10))
             
             plt.subplot(122)
             k, E = compute_cospectrum_uv(u[:,1,:,:], v[:,1,:,:], fx[:,1,:,:], fy[:,1,:,:], window, dx, dy, **kw)
@@ -603,12 +633,12 @@ class dataset_experiments:
             Esmag = E - EZB
             plt.semilogx(k,E*k, label='sum')
             plt.semilogx(k,EZB*k, '--', label='ZB2020')
-            plt.semilogx(k,Esmag*k, '-.', label='Smag')
+            plt.semilogx(k,Esmag*k, '-.', label='bilap Smag')
             plt.axhline(y=0,color='k', linestyle='--', alpha=0.5)
-            plt.xlabel('$k$, wavenumber')
+            plt.xlabel(r'wavenumber, $k [m^{-1}]$')
             plt.title('Lower layer')
-            plt.legend()
-            plt.ylim((-5e-11,1e-11))
+            plt.legend(fontsize=12)
+            plt.ylim((-4e-11,4e-11))
             
         plt.tight_layout()
 
@@ -672,7 +702,7 @@ class dataset_experiments:
 
     def plot_SGS_snapshot(self, exp, Time = -1):
         fig = plt.figure(figsize=(15,7.5))
-        plt.rcParams.update({'font.size': 12})
+        plt.rcParams.update({'font.size': 13})
         
         mom = self[exp].mom
         fx = mom.diffu.isel(Time=Time)
@@ -681,58 +711,38 @@ class dataset_experiments:
         ZBy = mom.ZB2020v.isel(Time=Time)
         smagx = fx - ZBx
         smagy = fy - ZBy
+        x = mom.xh
+        y = mom.yh
+        extent = [x.min(),x.max(),y.min(),y.max()]
 
-        plt.subplot(241)
-        plt.imshow(smagx.isel(zl=0), origin='lower', cmap='bwr')
-        plt.title('diffu')
-        plt.ylabel('Upper Layer')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
+        fig, ax = plt.subplots(2, 4, figsize=(20,8))
+        ax = ax.reshape(-1)
 
-        plt.subplot(242)
-        plt.imshow(smagy.isel(zl=0), origin='lower', cmap='bwr')
-        plt.title('diffv')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
+        def plotter(xarray, zl, num, title):
+            p = ax[num].imshow(xarray.isel(zl=zl), origin='lower', 
+            extent=extent, cmap=matplotlib.cm.seismic, 
+            vmin=-1e-7, vmax=1e-7)
+            if (num>3):
+                ax[num].set_xlabel('Longitude')
+            ax[num].set_title(title, fontsize=20)
+            ax[num].set_xticks([0,5,10,15,20])
+            ax[num].set_yticks([30,35,40,45,50])
+            return p
 
-        plt.subplot(243)
-        plt.imshow(ZBx.isel(zl=0), origin='lower', cmap='bwr')
-        plt.title('ZB2020u')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
+        plotter(smagx, zl=0, num=0, title='$du/dt$, bilap Smag')
+        plotter(smagy, zl=0, num=1, title='$dv/dt$, bilap Smag')
+        plotter(ZBx, zl=0, num=2, title='$du/dt$, ZB2020')
+        plotter(ZBy, zl=0, num=3, title='$dv/dt$, ZB2020')
 
-        plt.subplot(244)
-        plt.imshow(ZBy.isel(zl=0), origin='lower', cmap='bwr')
-        plt.title('ZB2020v')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
+        plotter(smagx, zl=1, num=4, title='$du/dt$, bilap Smag')
+        plotter(smagy, zl=1, num=5, title='$dv/dt$, bilap Smag')
+        plotter(ZBx, zl=1, num=6, title='$du/dt$, ZB2020')
+        p = plotter(ZBy, zl=1, num=7, title='$dv/dt$, ZB2020')
 
-        plt.subplot(245)
-        plt.imshow(smagx.isel(zl=1), origin='lower', cmap='bwr')
-        plt.title('diffu')
-        plt.ylabel('Lower Layer')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
+        ax[0].set_ylabel('Upper layer', fontsize=20)
+        ax[4].set_ylabel('Lower layer', fontsize=20)
 
-        plt.subplot(246)
-        plt.imshow(smagy.isel(zl=1), origin='lower', cmap='bwr')
-        plt.title('diffv')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
-
-        plt.subplot(247)
-        plt.imshow(ZBx.isel(zl=1), origin='lower', cmap='bwr')
-        plt.title('ZB2020u')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
-
-        plt.subplot(248)
-        plt.imshow(ZBy.isel(zl=1), origin='lower', cmap='bwr')
-        plt.title('ZB2020v')
-        plt.colorbar()
-        plt.clim(-1e-7, 1e-7)
-
-        plt.tight_layout()
+        cbar = fig.colorbar(p, ax=ax, label='$m/s^2$')
 
     def plot_energy_tendency(self, exps):
         nfig = len(exps)
