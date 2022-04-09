@@ -10,7 +10,7 @@ use MOM_diag_mediator, only : post_data, register_diag_field
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
-use MOM_coms,          only : reproducing_sum
+use MOM_coms,          only : reproducing_sum, max_across_PEs, min_across_PEs
 
 implicit none ; private
 
@@ -264,6 +264,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
     !call low_pass_filter(G, GV, h(:,:,k), CS%VGflt_iters, CS%VGflt_order, q=sh_xy, T=sh_xx)
     !call low_pass_filter(G, GV, h(:,:,k), CS%VGflt_iters, CS%VGflt_order, q=vort_xy)
+    call smooth_T(G, GV, sh_xx, h(:,:,k))
 
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
     ! lower index as in loop for sh_xy, but minus 1
@@ -342,12 +343,12 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     !call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, q=S_12, T=S_11)
     !call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, T=S_22)
     !call low_pass_filter(G, GV, h(:,:,k), CS%Strflt_iters, CS%Strflt_order, q=S_12)
-    call smooth_q(G, GV, S_12, h(:,:,k))
-    call smooth_q(G, GV, S_12, h(:,:,k))
-    !call smooth_T(G, GV, S_11, h(:,:,k))
-    !call smooth_T(G, GV, S_11, h(:,:,k))
-    !call smooth_T(G, GV, S_22, h(:,:,k))
-    !call smooth_T(G, GV, S_22, h(:,:,k))
+    !call smooth_q(G, GV, S_12, h(:,:,k))
+    !call smooth_q(G, GV, S_12, h(:,:,k))
+    call smooth_T(G, GV, S_11, h(:,:,k))
+    call smooth_T(G, GV, S_11, h(:,:,k))
+    call smooth_T(G, GV, S_22, h(:,:,k))
+    call smooth_T(G, GV, S_22, h(:,:,k))
     !call smooth_GME(G, GME_flux_q=S_12)
     !call smooth_GME_new(G, GME_flux_h=S_11)
     !call smooth_GME_new(G, GME_flux_h=S_22)
@@ -512,6 +513,7 @@ end subroutine smooth_q
 !> Function implements zero dirichlet B.C.
 !> Smooth of the field defined in the center of the cell
 subroutine smooth_T(G, GV, T, h2d)
+  use MOM_coms_infra, only : PE_here
   type(ocean_grid_type),              intent(in)    :: G   !< Ocean grid
   type(verticalGrid_type),            intent(in)    :: GV  !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G)),   intent(inout) :: T   !< any field at T points
@@ -522,6 +524,8 @@ subroutine smooth_T(G, GV, T, h2d)
   real :: wc, ww, we, wn, ws ! averaging weights for smoothing
   real :: hh ! interface height value to compare
   integer :: i, j, k
+  real :: max_before, max_after
+  real :: min_before, min_after
   
   hh = GV%Angstrom_H * 2.
   ! compute weights
@@ -542,7 +546,10 @@ subroutine smooth_T(G, GV, T, h2d)
         mask_T(i,j) = mask_T(i,j) * G%mask2dT(i,j)
     enddo
   enddo
-
+  max_before = maxval(T)
+  min_before = minval(T)
+  call max_across_PEs(max_before)
+  call min_across_PEs(min_before)
   call pass_var(T, G%Domain)
   T_original(:,:) = T(:,:) * mask_T(:,:)
   T(:,:) = 0.
@@ -557,6 +564,17 @@ subroutine smooth_T(G, GV, T, h2d)
     enddo
   enddo
   call pass_var(T, G%Domain)
+  max_after = maxval(T)
+  min_after = minval(T)
+  call max_across_PEs(max_after)
+  call min_across_PEs(min_after)
+  if (PE_here() == 0) then
+    if (max_after <= max_before .AND. min_after >= min_before) then
+      write(*,'(A,E10.3,E10.3,A,E10.3,E10.3,A)') 'smooth_T OK: (',min_before,max_before,') -> (',min_after,max_after,')'
+    else
+      write(*,'(A,E10.3,E10.3,A,E10.3,E10.3,A)') 'smooth_T not OK: (',min_before,max_before,') -> (',min_after,max_after,')'
+    endif
+  endif
 end subroutine smooth_T
 
 subroutine smooth_GME(G, GME_flux_h, GME_flux_q)
