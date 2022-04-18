@@ -354,8 +354,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xy(:,:) = sh_xy(:,:) * mask_q(:,:)
     vort_xy(:,:) = vort_xy(:,:) * mask_q(:,:)
 
-    onesT_3d(:,:,k) = 1.
-    onesq_3d(:,:,k) = 1.
+    onesT_3d(:,:,k) = mask_T(:,:)
+    onesq_3d(:,:,k) = mask_q(:,:)
     call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, T=onesT_3d(:,:,k))
     call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, q=onesq_3d(:,:,k))
 
