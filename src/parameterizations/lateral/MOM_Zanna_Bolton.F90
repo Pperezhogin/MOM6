@@ -26,10 +26,12 @@ type, public :: ZB2020_CS
                              ! k_bc = - FGR^2 * dx * dy / 24
   integer   :: ZB_type       !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
   integer   :: ZB_cons       !< 0: nonconservative; 1: conservative without interface;
-  integer   :: VGflt_iters   !< number of filter iteration for velocity gradient
-  integer   :: VGflt_order   !< order of filtering, 1: Laplacian, 2: Bilaplacian
-  integer   :: Strflt_iters  !< number of filter iterations for stress tensor
-  integer   :: Strflt_order  !< order of filtering, 1: Laplacian, 2: Bilaplacian
+  integer   :: LPF_iter      !< Low-pass filter for Velocity gradient; number of iterations
+  integer   :: LPF_order     !< Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
+  integer   :: HPF_iter      !< High-pass filter for Velocity gradient; number of iterations
+  integer   :: HPF_order     !< High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
+  integer   :: Stress_iter  !< Low-pass filter for Stress (Momentum Flux); number of iterations
+  integer   :: Stress_order  !< Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian
   
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -78,20 +80,28 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  "0: nonconservative; 1: conservative without interface", &
                  default=1)
 
-  call get_param(param_file, mdl, "VGflt_iters", CS%VGflt_iters, &
-                 "number of filter iterations for velocity gradient; negative value = high-pass filter", &
+  call get_param(param_file, mdl, "LPF_iter", CS%LPF_iter, &
+                 "Low-pass filter for Velocity gradient; number of iterations", &
                  default=2)
   
-  call get_param(param_file, mdl, "VGflt_order", CS%VGflt_order, &
-                 "order of filtering, 1: Laplacian, 2: Bilaplacian", &
+  call get_param(param_file, mdl, "LPF_order", CS%LPF_order, &
+                 "Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
                  default=2)
 
-  call get_param(param_file, mdl, "Strflt_iters", CS%Strflt_iters, &
-                 "number of filter iterations for stress tensor; negative value = high-pass filter", &
+  call get_param(param_file, mdl, "HPF_iter", CS%HPF_iter, &
+                 "High-pass filter for Velocity gradient; number of iterations", &
                  default=2)
   
-  call get_param(param_file, mdl, "Strflt_order", CS%Strflt_order, &
-                 "order of filtering, 1: Laplacian, 2: Bilaplacian", &
+  call get_param(param_file, mdl, "HPF_order", CS%HPF_order, &
+                 "High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
+                 default=2)
+
+  call get_param(param_file, mdl, "Stress_iter", CS%Stress_iter, &
+                 "Low-pass filter for Stress (Momentum Flux); number of iterations", &
+                 default=2)
+  
+  call get_param(param_file, mdl, "Stress_order", CS%Stress_order, &
+                 "Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian", &
                  default=2)
 
   ! Register fields for output from this module.
@@ -275,8 +285,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   real :: sum_sq     ! squared sum, i.e. 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2)
   real :: vort_sh    ! multiplication of vort_xt and sh_xy
 
-  real :: k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2
-  real :: c_h  
+  real :: k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2  
 
   ! Line 407 of MOM_hor_visc.F90
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -356,19 +365,30 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
     onesT_3d(:,:,k) = mask_T(:,:)
     onesq_3d(:,:,k) = mask_q(:,:)
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, T=onesT_3d(:,:,k))
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, q=onesq_3d(:,:,k))
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=onesT_3d(:,:,k))
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=onesT_3d(:,:,k))
+
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=onesq_3d(:,:,k))
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=onesq_3d(:,:,k))
 
     call set_chessnoise(G, T=chessT_3d(:,:,k), q=chessq_3d(:,:,k))
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, T=chessT_3d(:,:,k))
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, q=chessq_3d(:,:,k))
-    
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=chessT_3d(:,:,k))
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=chessT_3d(:,:,k))
+
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=chessq_3d(:,:,k))
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=chessq_3d(:,:,k))
+
     sh_xx_3d(:,:,k) = sh_xx(:,:)
     sh_xy_3d(:,:,k) = sh_xy(:,:)
     vort_xy_3d(:,:,k) = vort_xy(:,:)
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, T=sh_xx)
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, q=sh_xy)
-    call filter(G, mask_T, mask_q, CS%VGflt_iters, CS%VGflt_order, q=vort_xy)
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=sh_xx)
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=sh_xx)
+
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=sh_xy)
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=sh_xy)
+
+    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=vort_xy)
+    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=vort_xy)
     sh_xx_3df(:,:,k) = sh_xx(:,:)
     sh_xy_3df(:,:,k) = sh_xy(:,:)
     vort_xy_3df(:,:,k) = vort_xy(:,:)
@@ -433,6 +453,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       k_bc = - CS%FGR**2 * G%areaT(i,j) / 24.
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
       S_22(i,j) = k_bc * (+ vort_sh + sum_sq)
+
+      kbc_3d(i,j,k) = k_bc
     enddo ; enddo
 
     ! Form S_12 tensor
@@ -443,14 +465,12 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 
-    kbc_3d(:,:,k) = - CS%FGR**2 * G%areaT(:,:) / 24.
-
     S_11_3d(:,:,k) = S_11(:,:)
     S_22_3d(:,:,k) = S_22(:,:)
     S_12_3d(:,:,k) = S_12(:,:)
-    call filter(G, mask_T, mask_q, CS%Strflt_iters, CS%Strflt_order, T=S_11)
-    call filter(G, mask_T, mask_q, CS%Strflt_iters, CS%Strflt_order, T=S_22)
-    call filter(G, mask_T, mask_q, CS%Strflt_iters, CS%Strflt_order, q=S_12)
+    call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_11)
+    call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_22)
+    call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, q=S_12)
     S_11_3df(:,:,k) = S_11(:,:)
     S_22_3df(:,:,k) = S_22(:,:)
     S_12_3df(:,:,k) = S_12(:,:)
@@ -529,6 +549,7 @@ end subroutine Zanna_Bolton_2020
 ! if n_lowpass is negative, returns residual instead
 ! Input does not require halo
 ! Output has full halo
+! filtering occurs in-place
 subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   type(ocean_grid_type),              intent(in)              :: G          !< Ocean grid
   real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T     !< mask of wet points in T points
@@ -539,30 +560,44 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   integer,                            intent(in)              :: n_highpass !< number of high-pass iterations 
 
   integer :: i, j
-  real, dimension(SZIB_(G),SZJB_(G)) :: q0, q_res0, q_res ! initial and residual fields
-  real, dimension(SZI_(G),SZJ_(G))   :: T0, T_res0, T_res ! initial and residual fields
+  real, dimension(SZIB_(G),SZJB_(G)) :: q1, q2 ! additional q fields
+  real, dimension(SZI_(G),SZJ_(G))   :: T1, T2 ! additional T fields
   real :: max_before, min_before, max_after, min_after    ! for testing
   
+  if (n_lowpass==0) then
+    return
+  endif
+
+  ! Total operator is I - (I-G^n_lowpass)^n_highpass
   if (present(q)) then
     call pass_var(q, G%Domain, position=CORNER, complete=.true.)
     q(:,:) = q(:,:) * mask_q(:,:)
-    call min_max(q*mask_q, min_before, max_before)
-    q0(:,:) = q(:,:)
-    do j = 1,ABS(n_lowpass)
-      q_res0(:,:) = q(:,:)
-      do i = 1,n_highpass
-        call smooth_Tq(G, mask_T, mask_q, q=q_res0, q_res=q_res)
-        q_res0(:,:) = q_res(:,:) ! save the residual field for the next iteration
-      enddo
-      q(:,:) = q(:,:) - q_res0(:,:) ! remove residual
-    enddo
-    call min_max(q*mask_q, min_after, max_after)
-    if (n_lowpass < 0) then
-      q(:,:) = q0(:,:) - q(:,:) ! High-pass filter instead of Low-pass
-    endif
+    call min_max(q, min_before, max_before)
 
+    q1(:,:) = q(:,:)
+    
+    do i=1,n_highpass
+      q2(:,:) = q1(:,:)
+      ! q2 -> (G^n_lowpass)*q2
+      do j=1,ABS(n_lowpass)
+        call smooth_Tq(G, mask_T, mask_q, q=q2)
+      enddo
+      ! q1 -> (I-G^n_lowpass)*q1
+      q1(:,:) = q1(:,:) - q2(:,:)
+    enddo
+
+    if (n_lowpass>0) then
+      ! q -> q - ((I-G^n_lowpass)^n_highpass)*q
+      q(:,:) = q(:,:) - q1(:,:)
+    else
+      ! q -> ((I-G^n_lowpass)^n_highpass)*q
+      q(:,:) = q1(:,:)
+    endif
+    
     call check_nan(q, 'applying filter at q points')
-    if (n_highpass == 1) then
+
+    if (n_highpass==1 .AND. n_lowpass>0) then
+      call min_max(q, min_after, max_after)
       if (max_after > max_before .OR. min_after < min_before) then
         write(*,*) 'filter error: not monotone in q field:', min_before, min_after, max_before, max_after
       endif
@@ -572,30 +607,97 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   if (present(T)) then
     call pass_var(T, G%Domain)
     T(:,:) = T(:,:) * mask_T(:,:)
-    call min_max(T*mask_T, min_before, max_before)
-    T0(:,:) = T(:,:)
-    do j = 1,ABS(n_lowpass)
-      T_res0(:,:) = T(:,:)
-      do i = 1,n_highpass
-        call smooth_Tq(G, mask_T, mask_q, T=T_res0, T_res=T_res)
-        T_res0(:,:) = T_res(:,:) ! save the residual field for the next iteration
-      enddo
-      T(:,:) = T(:,:) - T_res0(:,:) ! remove residual
-    enddo
-    call min_max(T*mask_T, min_after, max_after)
-    if (n_lowpass < 0) then
-      T(:,:) = T0(:,:) - T(:,:) ! High-pass filter instead of Low-pass
-    endif
+    call min_max(T, min_before, max_before)
 
+    T1(:,:) = T(:,:)
+    
+    do i=1,n_highpass
+      T2(:,:) = T1(:,:)
+      do j=1,ABS(n_lowpass)
+        call smooth_Tq(G, mask_T, mask_q, T=T2)
+      enddo
+      T1(:,:) = T1(:,:) - T2(:,:)
+    enddo
+
+    if (n_lowpass>0) then
+      T(:,:) = T(:,:) - T1(:,:)
+    else
+      T(:,:) = T1(:,:)
+    endif
+    
     call check_nan(T, 'applying filter at T points')
 
-    if (n_highpass==1) then
+    if (n_highpass==1 .AND. n_lowpass>0) then
+      call min_max(T, min_after, max_after)
       if (max_after > max_before .OR. min_after < min_before) then
         write(*,*) 'filter error: not monotone in T field:', min_before, min_after, max_before, max_after
       endif
     endif
   endif
 end subroutine filter
+
+! returns filtered fields in-place and 
+! residuals as optional argument
+subroutine smooth_Tq(G, mask_T, mask_q, T, q)
+  type(ocean_grid_type),              intent(in)              :: G      !< Ocean grid
+  real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T !< mask of wet points in T points
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in)              :: mask_q !< mask of wet points in q points
+  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T      !< any field at T points
+  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q      !< any field at q points
+  
+  real, dimension(SZI_(G),SZJ_(G))   :: Tim ! intermediate value of T-field
+  real, dimension(SZIB_(G),SZJB_(G)) :: qim ! intermediate value of q-field
+
+  integer :: i, j
+  real :: wside   ! weights for side (i+1,j), (i-1,j), (i,j+1), (i,j-1)
+  real :: wcorner ! weights for corners (i+1,j+1), (i+1,j-1), (i-1,j-1), (i-1,j+1)
+  real :: wcenter ! weight for center point (i,j)
+  
+  wside = 1. / 8.
+  wcorner = 1. / 16.
+  wcenter = 1. - (wside*4. + wcorner*4.)
+
+  if (present(q)) then
+    call pass_var(q, G%Domain, position=CORNER, complete=.true.)
+    qim(:,:) = q(:,:) * mask_q(:,:)
+    do J = G%JscB, G%JecB
+      do I = G%IscB, G%IecB
+        q(I,J) = wcenter * qim(I,J)     & 
+               + wcorner * qim(I-1,J-1) &
+               + wcorner * qim(I-1,J+1) &
+               + wcorner * qim(I+1,J-1) &
+               + wcorner * qim(I+1,J+1) &
+               + wside   * qim(I-1,J)   &
+               + wside   * qim(I+1,J)   &
+               + wside   * qim(I,J-1)   &
+               + wside   * qim(I,J+1)
+        q(I,J) = q(I,J) * mask_q(I,J)
+      enddo
+    enddo
+    call pass_var(q, G%Domain, position=CORNER, complete=.true.)
+  endif
+
+  if (present(T)) then
+    call pass_var(T, G%Domain)
+    Tim(:,:) = T(:,:) * mask_T(:,:)
+    do j = G%jsc, G%jec
+      do i = G%isc, G%iec
+        T(i,j) = wcenter * Tim(i,j)     & 
+               + wcorner * Tim(i-1,j-1) &
+               + wcorner * Tim(i-1,j+1) &
+               + wcorner * Tim(i+1,j-1) &
+               + wcorner * Tim(i+1,j+1) &
+               + wside   * Tim(i-1,j)   &
+               + wside   * Tim(i+1,j)   &
+               + wside   * Tim(i,j-1)   &
+               + wside   * Tim(i,j+1)
+        T(i,j) = T(i,j) * mask_T(i,j)
+      enddo
+    enddo
+    call pass_var(T, G%Domain)
+  endif
+
+end subroutine smooth_Tq
 
 subroutine min_max(array, min_val, max_val)
   real, dimension(:,:), intent(in) :: array
@@ -657,77 +759,6 @@ subroutine set_chessnoise(G, T, q)
   enddo
 
 end subroutine set_chessnoise
-
-! returns filtered fields in-place and 
-! residuals as optional argument
-subroutine smooth_Tq(G, mask_T, mask_q, T, q, T_res, q_res)
-  type(ocean_grid_type),              intent(in)              :: G      !< Ocean grid
-  real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T !< mask of wet points in T points
-  real, dimension(SZIB_(G),SZJB_(G)), intent(in)              :: mask_q !< mask of wet points in q points
-  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T      !< any field at T points
-  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q      !< any field at q points
-  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T_res  !< residual at T point
-  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q_res  !< residual at q point
-  
-  real, dimension(SZI_(G),SZJ_(G))   :: Tim ! intermediate value of T-field
-  real, dimension(SZIB_(G),SZJB_(G)) :: qim ! intermediate value of q-field
-
-  integer :: i, j
-  real :: wside   ! weights for side (i+1,j), (i-1,j), (i,j+1), (i,j-1)
-  real :: wcorner ! weights for corners (i+1,j+1), (i+1,j-1), (i-1,j-1), (i-1,j+1)
-  real :: wcenter ! weight for center point (i,j)
-  
-  wside = 1. / 8.
-  wcorner = 1. / 16.
-  wcenter = 1. - (wside*4. + wcorner*4.)
-
-  if (present(q)) then
-    call pass_var(q, G%Domain, position=CORNER, complete=.true.)
-    qim(:,:) = q(:,:) * mask_q(:,:)
-    do J = G%JscB, G%JecB
-      do I = G%IscB, G%IecB
-        q(I,J) = wcenter * qim(I,J)     & 
-               + wcorner * qim(I-1,J-1) &
-               + wcorner * qim(I-1,J+1) &
-               + wcorner * qim(I+1,J-1) &
-               + wcorner * qim(I+1,J+1) &
-               + wside   * qim(I-1,J)   &
-               + wside   * qim(I+1,J)   &
-               + wside   * qim(I,J-1)   &
-               + wside   * qim(I,J+1)
-        q(I,J) = q(I,J) * mask_q(I,J)
-      enddo
-    enddo
-    call pass_var(q, G%Domain, position=CORNER, complete=.true.)
-    if (present(q_res)) then
-      q_res(:,:) = qim(:,:) - q(:,:)
-    endif
-  endif
-
-  if (present(T)) then
-    call pass_var(T, G%Domain)
-    Tim(:,:) = T(:,:) * mask_T(:,:)
-    do j = G%jsc, G%jec
-      do i = G%isc, G%iec
-        T(i,j) = wcenter * Tim(i,j)     & 
-               + wcorner * Tim(i-1,j-1) &
-               + wcorner * Tim(i-1,j+1) &
-               + wcorner * Tim(i+1,j-1) &
-               + wcorner * Tim(i+1,j+1) &
-               + wside   * Tim(i-1,j)   &
-               + wside   * Tim(i+1,j)   &
-               + wside   * Tim(i,j-1)   &
-               + wside   * Tim(i,j+1)
-        T(i,j) = T(i,j) * mask_T(i,j)
-      enddo
-    enddo
-    call pass_var(T, G%Domain)
-    if (present(T_res)) then
-      T_res(:,:) = Tim(:,:) - T(:,:)
-    endif
-  endif
-
-end subroutine smooth_Tq
 
 subroutine compute_masks(G, GV, h, mask_T, mask_q, k)
   type(ocean_grid_type),              intent(in)    :: G      !< Ocean grid
