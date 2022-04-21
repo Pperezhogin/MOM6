@@ -1,5 +1,5 @@
 ## Set experiment name here
-EXP_NAME=/scratch/pp2681/mom6/Mar2022/R8/FGR/FGR3
+EXP_NAME=/scratch/pp2681/mom6/Mar2022/test
 
 ## Create an output directory on scratch
 rm -rf $EXP_NAME
@@ -21,13 +21,15 @@ echo '
 #override SMAG_BI_CONST = 0.06
 
 #override USE_ZB2020 = True
-#override FGR = 3.
+#override amplitude = 1.
 #override ZB_type = 0
 #override ZB_cons = 1
-#override VGflt_iters = 0
-#override VGflt_order = 0
-#override Strflt_iters = 0
-#override Strflt_order = 0
+#override LPF_iter = 0
+#override LPF_order = 1
+#override HPF_iter = 0
+#override HPF_order = 1
+#override Stress_iter = 4
+#override Stress_order = 4
 ' >> $EXP_NAME/MOM_override
 
 cd $EXP_NAME

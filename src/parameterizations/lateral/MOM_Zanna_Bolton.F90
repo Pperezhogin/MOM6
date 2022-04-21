@@ -22,8 +22,7 @@ public Zanna_Bolton_2020, ZB_2020_init
 type, public :: ZB2020_CS
   ! Parameters
   logical   :: use_ZB2020    !< If true, parameterization works
-  real      :: FGR           !< Filter to grid width ratio, nondimensional, 
-                             ! k_bc = - FGR^2 * dx * dy / 24
+  real      :: amplitude     !< k_bc = - amplitude * cell_area
   integer   :: ZB_type       !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
   integer   :: ZB_cons       !< 0: nonconservative; 1: conservative without interface;
   integer   :: LPF_iter      !< Low-pass filter for Velocity gradient; number of iterations
@@ -68,9 +67,9 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
                  default=.true.)
 
-  call get_param(param_file, mdl, "FGR", CS%FGR, &
-                 "The ratio of assumed filter width to grid step", &
-                 units="nondim", default=1.)
+  call get_param(param_file, mdl, "amplitude", CS%amplitude, &
+                 "k_bc=-amplitude*cell_area, amplitude=1/24..1", &
+                 units="nondim", default=1./24.)
   
   call get_param(param_file, mdl, "ZB_type", CS%ZB_type, &
                  "Type of parameterization: 0 = ZB2020, 1 = AZ2017", &
@@ -177,8 +176,8 @@ end subroutine ZB_2020_init
 !! S0 - 2x2 tensor:
 !! S0 = vort_xy * (-sh_xy, sh_xx; sh_xx, sh_xy)
 !! Relating k_BC to velocity gradient model,
-!! k_BC = - FGR^2 * cell_area / 24 = - FGR^2 * dx*dy / 24
-!! where FGR - filter to grid width ratio
+!! k_BC = - amplitude * cell_area
+!! where amplitude = 1/24..1 (approx)
 !! 
 !! S - is a tensor of full tendency
 !! S = (-vort_xy * sh_xy + 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2), vort_xy * sh_xx;
@@ -450,7 +449,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       else if (CS%ZB_cons == 0) then
         vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
       endif
-      k_bc = - CS%FGR**2 * G%areaT(i,j) / 24.
+      k_bc = - CS%amplitude * G%areaT(i,j)
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
       S_22(i,j) = k_bc * (+ vort_sh + sum_sq)
 
@@ -461,7 +460,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
       vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
-      k_bc = - CS%FGR**2 * G%areaBu(i,j) / 24.
+      k_bc = - CS%amplitude * G%areaBu(i,j)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 

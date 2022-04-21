@@ -193,14 +193,6 @@ BIHARMONIC = False              !   [Boolean] default = True
                                 ! If true, use a biharmonic horizontal viscosity. BIHARMONIC may be used with
                                 ! LAPLACIAN.
 
-! === module MOM_Zanna_Bolton ===
-USE_ZB2020 = False              !   [Boolean] default = False
-                                ! If true, turns on Zanna-Bolton 2020 parameterization
-FGR = 1.0                       !   [nondim] default = 1.0
-                                ! The ratio of assumed filter width to grid step
-ZB_type = 0                     ! default = 0
-                                ! Type of parameterization: 0 = ZB2020, 1 = AZ2017
-
 ! === module MOM_vert_friction ===
 DIRECT_STRESS = True            !   [Boolean] default = False
                                 ! If true, the wind stress is distributed over the topmost HMIX_STRESS of fluid
