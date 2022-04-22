@@ -192,14 +192,15 @@ hpc = {
     'time': 24,
 }
 
+# Eddy viscosity models
 parameters = {'resolution': 'R4',
      'DAYMAX': 7300.0,
      'RESTINT': 1825.0,
      'LAPLACIAN': 'False',
      'BIHARMONIC': 'True',
      'SMAGORINSKY_AH': True,
-     'SMAG_BI_CONST': [i/100 for i in range(100)], 
-     'USE_ZB2020': 'True',
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'False',
      'amplitude': 1., 
      'ZB_type': 0, 
      'ZB_cons': 1, 
@@ -211,4 +212,136 @@ parameters = {'resolution': 'R4',
      'Stress_order': 1
 }
 
-run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=10)
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters)
+
+# Bare ZB2020 models
+parameters = {'resolution': 'R4',
+     'DAYMAX': 7300.0,
+     'RESTINT': 1825.0,
+     'LAPLACIAN': 'False',
+     'BIHARMONIC': 'True',
+     'SMAGORINSKY_AH': True,
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'True',
+     'amplitude': [i/24 for i in range(1,11)], 
+     'ZB_type': 0, 
+     'ZB_cons': 1, 
+     'LPF_iter': 0, 
+     'LPF_order': 1, 
+     'HPF_iter': 0,
+     'HPF_order': 1,
+     'Stress_iter': 0,
+     'Stress_order': 1
+}
+
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters)
+
+# ADM models
+parameters = {'resolution': 'R4',
+     'DAYMAX': 7300.0,
+     'RESTINT': 1825.0,
+     'LAPLACIAN': 'False',
+     'BIHARMONIC': 'True',
+     'SMAGORINSKY_AH': True,
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'True',
+     'amplitude': [i/24 for i in range(1,25)], 
+     'ZB_type': 0, 
+     'ZB_cons': 1, 
+     'LPF_iter': [i for i in range(1,5)], 
+     'LPF_order': [i for i in range(1,5)], 
+     'HPF_iter': 0,
+     'HPF_order': 1,
+     'Stress_iter': 0,
+     'Stress_order': 1
+}
+
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=20)
+
+# ADM filtered models
+parameters = {'resolution': 'R4',
+     'DAYMAX': 7300.0,
+     'RESTINT': 1825.0,
+     'LAPLACIAN': 'False',
+     'BIHARMONIC': 'True',
+     'SMAGORINSKY_AH': True,
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'True',
+     'amplitude': [i/24 for i in range(1,25)], 
+     'ZB_type': 0, 
+     'ZB_cons': 1, 
+     'LPF_iter': [i for i in range(1,5)], 
+     'LPF_order': [i for i in range(1,5)], 
+     'HPF_iter': 0,
+     'HPF_order': 1,
+     'Stress_iter': [i for i in range(1,5)],
+     'Stress_order': [i for i in range(1,5)]
+}
+
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=20)
+
+# Perezhogin2019 models
+parameters = {'resolution': 'R4',
+     'DAYMAX': 7300.0,
+     'RESTINT': 1825.0,
+     'LAPLACIAN': 'False',
+     'BIHARMONIC': 'True',
+     'SMAGORINSKY_AH': True,
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'True',
+     'amplitude': [i/24 for i in range(1,25)], 
+     'ZB_type': 0, 
+     'ZB_cons': 1, 
+     'LPF_iter': 0, 
+     'LPF_order': 1, 
+     'HPF_iter': 0,
+     'HPF_order': 1,
+     'Stress_iter': [i for i in range(1,5)],
+     'Stress_order': [i for i in range(1,5)]
+}
+
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=20)
+
+# Perezhogin 2021 models
+parameters = {'resolution': 'R4',
+     'DAYMAX': 7300.0,
+     'RESTINT': 1825.0,
+     'LAPLACIAN': 'False',
+     'BIHARMONIC': 'True',
+     'SMAGORINSKY_AH': True,
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'True',
+     'amplitude': [i/1. for i in range(1,25)], 
+     'ZB_type': 0, 
+     'ZB_cons': 1, 
+     'LPF_iter': [i for i in range(1,5)], 
+     'LPF_order': [i for i in range(1,5)], 
+     'HPF_iter': [i for i in range(1,5)],
+     'HPF_order': [i for i in range(1,5)],
+     'Stress_iter': 0,
+     'Stress_order': 1
+}
+
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=20)
+
+# Alltogether models
+parameters = {'resolution': 'R4',
+     'DAYMAX': 7300.0,
+     'RESTINT': 1825.0,
+     'LAPLACIAN': 'False',
+     'BIHARMONIC': 'True',
+     'SMAGORINSKY_AH': True,
+     'SMAG_BI_CONST': [i/100 for i in range(1,11)], 
+     'USE_ZB2020': 'True',
+     'amplitude': [i/1. for i in range(1,25)], 
+     'ZB_type': 0, 
+     'ZB_cons': 1, 
+     'LPF_iter': [i for i in range(1,5)], 
+     'LPF_order': [i for i in range(1,5)], 
+     'HPF_iter': [i for i in range(1,5)],
+     'HPF_order': [i for i in range(1,5)],
+     'Stress_iter': [i for i in range(1,5)],
+     'Stress_order': [i for i in range(1,5)]
+}
+
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=20)
