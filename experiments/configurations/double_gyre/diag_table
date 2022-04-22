@@ -155,6 +155,7 @@
 #"ocean_model","KE_visc","KE_visc","energy_%4yr_%3dy","all",.true.,"none",2
 "ocean_model","KE_horvisc","KE_horvisc","energy_%4yr_%3dy","all",.true.,"none",2
 "ocean_model","KE_ZB2020","KE_ZB2020","energy_%4yr_%3dy","all",.true.,"none",2
+"ocean_model","Rd1","Rd1","energy_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","KE_dia","KE_dia","energy_%4yr_%3dy","all",.true.,"none",2
 #
 # Mixed Layer TKE Budget Terms:

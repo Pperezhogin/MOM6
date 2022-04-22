@@ -118,18 +118,45 @@ def run_individual_experiment(folder, hpc, parameters):
     
     os.system('cd '+folder+'; sbatch mom.sub')
 
+def get_nth_key(dictionary, n=0):
+    if n < 0:
+        n += len(dictionary)
+    for i, key in enumerate(dictionary.keys()):
+        if i == n:
+            return key
+    raise IndexError("dictionary index out of range") 
+
+# converts dictionary of lists to list of dictionaries
+def iterate_dictionary(x, y={}, key_id=0):
+    if key_id == 0:
+        y = {}
+    if key_id == len(x):
+        yield y.copy()
+        return
+    
+    key = get_nth_key(x,key_id)
+    value = x[key]
+    if isinstance(value,list):
+        for val in value:
+            y[key] = val
+            yield from iterate_dictionary(x,y,key_id+1)
+    else:
+        y[key] = value
+        yield from iterate_dictionary(x,y,key_id+1)
+
 # run experiment in common folder. If the number of experiment exceed max_runs, 
 # parameters are fetched stochastically
 def run_many_experiments(folder, hpc, parameters, EXP_start=None, max_runs=100):
-    list_parameters = [p for p in iterate_dictionary(parameters)]
+    list_parameters = list(iterate_dictionary(parameters))
+    
     nruns = len(list_parameters)
     if (nruns > max_runs):
         print(f'Number of runs ({nruns}) exceeds maximum ({max_runs}).')
         print('Parameters are fetched stochastically.')
-        idx = np.arange(len(list_parameters))
+        idx = np.arange(nruns)
         np.random.shuffle(idx)
         idx = idx[:max_runs]
-        short_list = [list_parameters[i] for i in range(len(idx))]
+        short_list = [list_parameters[i] for i in idx]
     else:
         print('Parameters are fetched deterministically.')
         short_list = list_parameters
@@ -155,32 +182,6 @@ def run_many_experiments(folder, hpc, parameters, EXP_start=None, max_runs=100):
         run_individual_experiment(os.path.join(folder,EXP_name),hpc,parameter)
 
     print('All experiments are queued.')
-
-def get_nth_key(dictionary, n=0):
-    if n < 0:
-        n += len(dictionary)
-    for i, key in enumerate(dictionary.keys()):
-        if i == n:
-            return key
-    raise IndexError("dictionary index out of range") 
-
-# converts dictionary of lists to list of dictionaries
-def iterate_dictionary(x, y={}, key_id=0):
-    if key_id == 0:
-        y = {}
-    if key_id == len(x):
-        yield y
-        return
-    
-    key = get_nth_key(x,key_id)
-    value = x[key]
-    if isinstance(value,list):
-        for val in value:
-            y[key] = val
-            yield from iterate_dictionary(x,y,key_id+1)
-    else:
-        y[key] = value
-        yield from iterate_dictionary(x,y,key_id+1)
         
 #############################################################################################
 
@@ -188,17 +189,17 @@ hpc = {
     'nodes': 1,
     'ntasks': 10,
     'mem': 16,
-    'time': 1,
+    'time': 24,
 }
 
-parameters = {'resolution': 'R2',
+parameters = {'resolution': 'R4',
      'DAYMAX': 7300.0,
      'RESTINT': 1825.0,
      'LAPLACIAN': 'False',
      'BIHARMONIC': 'True',
      'SMAGORINSKY_AH': True,
-     'SMAG_BI_CONST': [0.01, 0.02, 0.03, 0.04, 0.05, 0.06], 
-     'USE_ZB2020': ['True', 'False'],
+     'SMAG_BI_CONST': [i/100 for i in range(100)], 
+     'USE_ZB2020': 'True',
      'amplitude': 1., 
      'ZB_type': 0, 
      'ZB_cons': 1, 
@@ -206,8 +207,8 @@ parameters = {'resolution': 'R2',
      'LPF_order': 1, 
      'HPF_iter': 0,
      'HPF_order': 1,
-     'Stress_iter': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-     'Stress_order': 4
+     'Stress_iter': 0,
+     'Stress_order': 1
 }
 
-run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters)
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters, max_runs=10)
