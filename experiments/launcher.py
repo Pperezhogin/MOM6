@@ -1,6 +1,6 @@
 import os
-import math
 import json
+import numpy as np
 
 # creates slurm script mom.sub
 def create_slurm(p, filename):
@@ -103,7 +103,7 @@ def create_MOM_override(p, filename):
     with open(filename,'w') as fid:
         fid.writelines([ line+'\n' for line in lines])
 
-def queue_experiment(folder, hpc, parameters):
+def run_individual_experiment(folder, hpc, parameters):
     os.system('rm -rf '+folder)
     os.system('mkdir -p '+folder)
     
@@ -113,19 +113,75 @@ def queue_experiment(folder, hpc, parameters):
     os.system('cp -r ~/MOM6-examples/src/MOM6/experiments/configurations/double_gyre/* '+folder)
     os.system('cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 '+folder)
 
-    with open(folder+'/args.json', 'w') as f:
+    with open(os.path.join(folder,'args.json'), 'w') as f:
         json.dump(parameters, f, indent=2)
     
     os.system('cd '+folder+'; sbatch mom.sub')
 
+# run experiment in common folder. If the number of experiment exceed max_runs, 
+# parameters are fetched stochastically
+def run_many_experiments(folder, hpc, parameters, EXP_start=1, max_runs=100):
+    list_parameters = [p for p in iterate_dictionary(parameters)]
+    nruns = len(list_parameters)
+    if (nruns > max_runs):
+        print('Number of runs exceeds declared. Parameters are fetched stochastically.')
+        idx = np.arange(len(list_parameters))
+        np.random.shuffle(idx)
+        idx = idx[:max_runs]
+        short_list = [list_parameters[i] for i in range(len(idx))]
+    else:
+        print('Parameters are fetched deterministically.')
+        short_list = list_parameters
+    
+    print('')
+    print('Already contained experiments in the folder:')
+    os.system('ls '+folder)
+    print('')
+
+    print('The number of experiments to schedule:', len(short_list))
+    print('Starting folder', 'EXP'+str(EXP_start))
+    input('Continue? Press Enter...')
+
+    for i, parameter in enumerate(short_list):
+        EXP_name = 'EXP'+str(i+EXP_start)
+        hpc['name'] = EXP_name
+        run_individual_experiment(os.path.join(folder,EXP_name),hpc,parameter)
+
+    print('All experiments are queued.')
+
+def get_nth_key(dictionary, n=0):
+    if n < 0:
+        n += len(dictionary)
+    for i, key in enumerate(dictionary.keys()):
+        if i == n:
+            return key
+    raise IndexError("dictionary index out of range") 
+
+# converts dictionary of lists to list of dictionaries
+def iterate_dictionary(x, y={}, key_id=0):
+    if key_id == 0:
+        y = {}
+    if key_id == len(x):
+        yield y
+        return
+    
+    key = get_nth_key(x,key_id)
+    value = x[key]
+    if isinstance(value,list):
+        for val in value:
+            y[key] = val
+            yield from iterate_dictionary(x,y,key_id+1)
+    else:
+        y[key] = value
+        yield from iterate_dictionary(x,y,key_id+1)
+        
 #############################################################################################
 
 hpc = {
     'nodes': 1,
-    'ntasks': 16,
+    'ntasks': 10,
     'mem': 16,
     'time': 1,
-    'name': 'EXP1'
 }
 
 parameters = {'resolution': 'R2',
@@ -134,16 +190,27 @@ parameters = {'resolution': 'R2',
      'LAPLACIAN': 'False',
      'BIHARMONIC': 'True',
      'SMAGORINSKY_AH': True,
-     'SMAG_BI_CONST': 0.06, 
-     'USE_ZB2020': 'True', 
+     'SMAG_BI_CONST': [0.01, 0.02, 0.03, 0.04, 0.05, 0.06], 
+     'USE_ZB2020': ['True', 'False'],
      'amplitude': 1., 
      'ZB_type': 0, 
      'ZB_cons': 1, 
      'LPF_iter': 0, 
      'LPF_order': 1, 
      'HPF_iter': 0,
-     'HPF_order': 0,
-     'Stress_iter': 4,
-     'Stress_order': 4}
+     'HPF_order': 1,
+     'Stress_iter': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+     'Stress_order': 4
+}
 
-queue_experiment('/scratch/pp2681/mom6/test',hpc,parameters)
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R2/', hpc, parameters, EXP_start=2, max_runs=10)
+
+#SMAG_BI_CONST = [i/100. for i in range(1,11)]
+#USE_ZB2020 = ['True', 'False']
+#amplitude = [i/24. for i in range(1,25)]
+#LPF_iter = [i for i in range(7)]
+#LPF_order = [i for i in range(1,5)]
+#HPF_iter =  [i for i in range(7)]
+#HPF_order = [i for i in range(1,5)]
+#Stress_iter = [i for i in range(7)]
+#Stress_order = [i for i in range(1,5)]
