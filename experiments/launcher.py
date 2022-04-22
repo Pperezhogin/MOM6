@@ -120,11 +120,12 @@ def run_individual_experiment(folder, hpc, parameters):
 
 # run experiment in common folder. If the number of experiment exceed max_runs, 
 # parameters are fetched stochastically
-def run_many_experiments(folder, hpc, parameters, EXP_start=1, max_runs=100):
+def run_many_experiments(folder, hpc, parameters, EXP_start=None, max_runs=100):
     list_parameters = [p for p in iterate_dictionary(parameters)]
     nruns = len(list_parameters)
     if (nruns > max_runs):
-        print('Number of runs exceeds declared. Parameters are fetched stochastically.')
+        print(f'Number of runs ({nruns}) exceeds maximum ({max_runs}).')
+        print('Parameters are fetched stochastically.')
         idx = np.arange(len(list_parameters))
         np.random.shuffle(idx)
         idx = idx[:max_runs]
@@ -133,10 +134,16 @@ def run_many_experiments(folder, hpc, parameters, EXP_start=1, max_runs=100):
         print('Parameters are fetched deterministically.')
         short_list = list_parameters
     
+    os.system('mkdir -p '+folder)
+    folders_list = os.listdir(folder)
+    folders_list.sort(key=lambda a: int(a[3:]))
     print('')
     print('Already contained experiments in the folder:')
-    os.system('ls '+folder)
+    print(*folders_list)
     print('')
+
+    if EXP_start is None:
+        EXP_start = len(folders_list)+1
 
     print('The number of experiments to schedule:', len(short_list))
     print('Starting folder', 'EXP'+str(EXP_start))
@@ -203,14 +210,4 @@ parameters = {'resolution': 'R2',
      'Stress_order': 4
 }
 
-run_many_experiments('/scratch/pp2681/mom6/Apr2022/R2/', hpc, parameters, EXP_start=2, max_runs=10)
-
-#SMAG_BI_CONST = [i/100. for i in range(1,11)]
-#USE_ZB2020 = ['True', 'False']
-#amplitude = [i/24. for i in range(1,25)]
-#LPF_iter = [i for i in range(7)]
-#LPF_order = [i for i in range(1,5)]
-#HPF_iter =  [i for i in range(7)]
-#HPF_order = [i for i in range(1,5)]
-#Stress_iter = [i for i in range(7)]
-#Stress_order = [i for i in range(1,5)]
+run_many_experiments('/scratch/pp2681/mom6/Apr2022/R4/', hpc, parameters)
