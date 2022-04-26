@@ -296,16 +296,22 @@ class dataset_experiments:
         axes = fig.add_subplot(1, 3, 3, projection='3d')
         plot(axes, 20, 240)
 
-    def plot_KE(self, exps, tstart=3650.):
+    def plot_KE(self, exps, tstart=3650., names=None):
         fig = plt.figure(figsize=(13,5))
         plt.rcParams.update({'font.size': 18})
-        for exp in exps:
+
+        if names is None:
+            names = []
+            for exp in exps:
+                names.append(self.names[exp])
+
+        for iexp,exp in enumerate(exps):
             plt.subplot(121)
             series = self[exp].series
             t = series.Time
             KE = series.KE.isel(Layer=0) / series.Mass
             KE_mean = KE[t >= tstart].mean()
-            p = plt.plot(t/365, KE, label=self.names[exp])
+            p = plt.plot(t/365, KE, label=names[iexp])
             color = p[0].get_color()
             plt.axhline(y = KE_mean, linestyle='--', color=color)
             plt.xlabel('Time, years')
@@ -318,7 +324,7 @@ class dataset_experiments:
             t = series.Time
             KE = series.KE.isel(Layer=1) / series.Mass
             KE_mean = KE[t >= tstart].mean()
-            p = plt.plot(t/365, KE, label=self.names[exp])
+            p = plt.plot(t/365, KE, label=names[iexp])
             color = p[0].get_color()
             plt.axhline(y = KE_mean, linestyle='--', color=color)
             plt.xlabel('Time, years')
@@ -326,9 +332,14 @@ class dataset_experiments:
             plt.title('Kinetic Energy, lower layer') 
         plt.tight_layout()
 
-    def plot_ssh(self, exps, tstart=3650.):
+    def plot_ssh(self, exps, tstart=3650., names=None):
         nfig = len(exps)
         plt.rcParams.update({'font.size': 12})
+
+        if names is None:
+            names = []
+            for exp in exps:
+                names.append(self.names[exp])
 
         if nfig > 3:
             xfig=3
@@ -355,7 +366,7 @@ class dataset_experiments:
             plt.yticks((30, 35, 40, 45, 50))
             plt.xlabel('Longitude')
             plt.ylabel('Latitude')
-            plt.title(self.names[exp])
+            plt.title(names[ifig])
 
         plt.tight_layout()
 
@@ -426,9 +437,14 @@ class dataset_experiments:
         
         fig.colorbar(p, ax=ax, label='$m^2/s^2$')
 
-    def plot_EKE(self, exps, tstart=3650., zl=0, vmax = 0.02):
+    def plot_EKE(self, exps, tstart=3650., zl=0, vmax = 0.02, names=None):
         nfig = len(exps)
         plt.rcParams.update({'font.size': 12})
+
+        if names is None:
+            names = []
+            for exp in exps:
+                names.append(self.names[exp])
 
         if nfig > 3:
             xfig=3
@@ -458,7 +474,7 @@ class dataset_experiments:
                 extent=[xh.min(),xh.max(),yh.min(),yh.max()], 
                 cmap='inferno', vmin = 0, vmax = vmax)
             ax[ifig].set_xlabel('Longitude')
-            ax[ifig].set_title(self.names[exp])
+            ax[ifig].set_title(names[ifig])
 
         ax[0].set_ylabel('Latitude')
         if (yfig>1):
@@ -586,7 +602,7 @@ class dataset_experiments:
             
         plt.tight_layout()
 
-    def plot_cospectrum_componentwise(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', **kw):
+    def plot_cospectrum_componentwise(self, exps, tstart = 7200., Lat=(30,50), Lon=(0,22), window='rect', ylim1=(-1.5e-9,1.5e-9), ylim2=(-2e-10,2e-10), **kw):
         fig = plt.figure(figsize=(13,4.5))
         plt.rcParams.update({'font.size': 16})
         for exp in exps:
@@ -625,7 +641,7 @@ class dataset_experiments:
             plt.ylabel(r'$k \oint Re(\mathbf{u}_k \mathbf{f}_k^*) dk ~[m^2/s^3]$')
             plt.title('Upper layer')
             plt.legend(fontsize=12)
-            plt.ylim((-4.5e-10,4.5e-10))
+            plt.ylim(ylim1)
             
             plt.subplot(122)
             k, E = compute_cospectrum_uv(u[:,1,:,:], v[:,1,:,:], fx[:,1,:,:], fy[:,1,:,:], window, dx, dy, **kw)
@@ -638,7 +654,7 @@ class dataset_experiments:
             plt.xlabel(r'wavenumber, $k [m^{-1}]$')
             plt.title('Lower layer')
             plt.legend(fontsize=12)
-            plt.ylim((-4e-11,4e-11))
+            plt.ylim(ylim2)
             
         plt.tight_layout()
 
