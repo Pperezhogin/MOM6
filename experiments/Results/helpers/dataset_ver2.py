@@ -3,26 +3,7 @@ import os
 import math
 import matplotlib.pyplot as plt
 import matplotlib
-
-def rename_coordinates(xr_dataset):
-    '''
-    in-place change of coordinate names to Longitude and Latitude.
-    For simplicity of plotting with xarray.plot()
-    '''
-    for key in ['xq', 'xh']:
-        try:
-            xr_dataset[key].attrs['long_name'] = 'Longitude'
-            xr_dataset[key].attrs['units'] = ''
-        except:
-            pass
-
-    for key in ['yq', 'yh']:
-        try:
-            xr_dataset[key].attrs['long_name'] = 'Latitude'
-            xr_dataset[key].attrs['units'] = ''
-        except:
-            pass
-    return
+import numpy as np
 
 class dataset:
     def __init__(self, folder):
@@ -46,6 +27,25 @@ class dataset:
         self.__energy = None
         self.__forcing = None
         self.__mom = None
+
+    def rename_coordinates(self, xr_dataset):
+        '''
+        in-place change of coordinate names to Longitude and Latitude.
+        For simplicity of plotting with xarray.plot()
+        '''
+        for key in ['xq', 'xh']:
+            try:
+                xr_dataset[key].attrs['long_name'] = 'Longitude'
+                xr_dataset[key].attrs['units'] = ''
+            except:
+                pass
+
+        for key in ['yq', 'yh']:
+            try:
+                xr_dataset[key].attrs['long_name'] = 'Latitude'
+                xr_dataset[key].attrs['units'] = ''
+            except:
+                pass
     
     @property
     def param(self):
@@ -53,7 +53,7 @@ class dataset:
             self.__param = xr.open_dataset(os.path.join(self.folder, 'ocean_geometry.nc')).rename(
                 {'latq': 'yq', 'lonq': 'xq', 'lath': 'yh', 'lonh': 'xh'} # change coordinates notation as in other files
             )
-            rename_coordinates(self.__param)
+            self.rename_coordinates(self.__param)
         return self.__param
     
     @property
@@ -66,35 +66,35 @@ class dataset:
     def ave(self):
         if self.__ave is None:
             self.__ave = xr.open_mfdataset(os.path.join(self.folder, 'ave_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            rename_coordinates(self.__ave)
+            self.rename_coordinates(self.__ave)
         return self.__ave
 
     @property
     def prog(self):
         if self.__prog is None:
             self.__prog = xr.open_mfdataset(os.path.join(self.folder, 'prog_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            rename_coordinates(self.__prog)
+            self.rename_coordinates(self.__prog)
         return self.__prog
     
     @property
     def energy(self):
         if self.__energy is None:
             self.__energy = xr.open_mfdataset(os.path.join(self.folder, 'energy_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            rename_coordinates(self.__energy)
+            self.rename_coordinates(self.__energy)
         return self.__energy
 
     @property
     def forcing(self):
         if self.__forcing is None:
             self.__forcing = xr.open_mfdataset(os.path.join(self.folder, 'forcing_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            rename_coordinates(self.__forcing)
+            self.rename_coordinates(self.__forcing)
         return self.__forcing
 
     @property
     def mom(self):
         if self.__mom is None:
             self.__mom = xr.open_mfdataset(os.path.join(self.folder, 'mom_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            rename_coordinates(self.__mom)
+            self.rename_coordinates(self.__mom)
         return self.__mom
 
     @property
@@ -144,7 +144,10 @@ class collection_of_experiments:
         figsize_x = size * ratio * xfig
         figsize_y = size * yfig
         fig, ax = plt.subplots(yfig, xfig, figsize=(figsize_x,figsize_y), constrained_layout=True)
-        ax = ax.reshape(-1)
+        try:
+            ax = ax.flat # 1d array of subplots
+        except:
+            ax = np.array([ax,]) # to make work only one picture
         return fig, ax
 
     #########################  snapshot plotters #########################
