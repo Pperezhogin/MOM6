@@ -29,6 +29,7 @@ class experiment:
         self.__forcing = None
         self.__mom = None
 
+    ########################## Service functions #############################
     def rename_coordinates(self, xr_dataset):
         '''
         in-place change of coordinate names to Longitude and Latitude.
@@ -48,6 +49,7 @@ class experiment:
             except:
                 pass
     
+    ########################### Getters for xarrays ##########################
     @property
     def param(self):
         if self.__param is None:
@@ -98,6 +100,7 @@ class experiment:
             self.rename_coordinates(self.__mom)
         return self.__mom
 
+    ############################# Computational tools ########################
     @property
     def RV_f(self):
         RV = self.prog.RV
@@ -113,33 +116,60 @@ class experiment:
         return self.energy.KE
 
 class collection_of_experiments:
-    def __init__(self, common_folder: str, exps: list[str], exps_names=None, additional_subfolder=''):
+    def __init__(self, exps, experiments_dict, names_dict):
         '''
-        exps - list of paths w.r.t. common folder; these
-        relative paths are used as keys in __getitem__ method
-        exps_names - default names for exeperiments
-        additional_subfolder - if results are stored not in common_folder+exps[i],
-        but in an additional subfolder
+        experiments_dict - "experiment" objects labeled by keys
+        names_dict - labels for plotting
         '''
-        self.common_folder = common_folder
         self.exps = exps
+        self.experiments = experiments_dict
+        self.names = names_dict
+
+    def __getitem__(self, q):
+        ''' 
+        Access experiments with key values directly
+        '''
+        try:
+            return self.experiments[q]
+        except:
+            print('item not found')
+    
+    def __add__(self, otherCollection):
+        # merge dictionaries and lists
+        exps = [*self.exps, *otherCollection.exps]
+        experiments_dict = {**self.experiments, **otherCollection.experiments}
+        names_dict = {**self.names, **otherCollection.names}
+
+        return collection_of_experiments(exps, experiments_dict, names_dict)
+    
+    def print_exps(self):
+        print(*self.exps)
+    
+    @classmethod
+    def init_folder(cls, common_folder, exps=None, exps_names=None, additional_subfolder=''):
+        '''
+        Scan folders in common_folder and returns class instance with exps given by these folders
+        exps - list of folders can be specified
+        exps_names - list of labels can be specified
+        additional_subfolder - if results are stored not in common_folder+exps[i],
+        but in an additional subfolder 
+        '''
+
+        if exps is None:
+            exps = sorted(os.listdir(common_folder))
 
         if exps_names is None:
             exps_names = exps
 
         # Construct dictionary of experiments, where keys are given by exps
-        self.ds = {}
-        self.names = {}
+        experiments_dict = {}
+        names_dict = {}
         for i in range(len(exps)):
             folder = os.path.join(common_folder,exps[i],additional_subfolder)
-            self.ds[exps[i]] = experiment(folder)
-            self.names[exps[i]] = exps_names[i] # convert array to dictionary
+            experiments_dict[exps[i]] = experiment(folder)
+            names_dict[exps[i]] = exps_names[i] # convert array to dictionary
 
-    def __getitem__(self, q):
-        try:
-            return self.ds[q]
-        except:
-            print('item not found')
+        return cls(exps, experiments_dict, names_dict)      
 
     ######################### service plotting functions #################
     def get_axes(self, nfig, ncol=3, size=4, ratio=1.15):
@@ -184,7 +214,7 @@ class collection_of_experiments:
 
             print("Converting list of figures to animation object...",end="\r")
             ani = animation.ArtistAnimation(fig, p, interval=100, blit=True, repeat_delay=0)
-            print("Saving animation as videofile....................",end="\r")
+            print("Saving animation as videofile...                 ",end="\r")
             ani.save(videoname)
             print("Done                                             ",end="\r")
             plt.close()
@@ -192,7 +222,6 @@ class collection_of_experiments:
         return new_plot_function
 
     #########################  snapshot plotters #########################
-
     def pcolormesh(self, exps, key, Time, zl, names, vmin, vmax, cmap, cbar_title, ax, use_colorbar):
         '''
         exps - list of experiments
@@ -279,4 +308,4 @@ class collection_of_experiments:
         ax[0].set_ylabel('Upper layer', fontsize=20)
         ax[4].set_ylabel('Lower layer', fontsize=20)
 
-        cbar = fig.colorbar(p, ax=ax, label='$m/s^2$')
+        fig.colorbar(p, ax=ax, label='$m/s^2$')
