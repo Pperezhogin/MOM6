@@ -3,8 +3,10 @@ import math
 
 def remesh(input, target):
     '''
-    Input and target should be xarrays of any type (u-array, v-array, q-array, h-array)
-    The result must have the same mesh as target, but the data should correspond to input
+    Input and target should be xarrays of any type (u-array, v-array, q-array, h-array).
+    Datasets are prohibited.
+    Horizontal mesh of input changes according to horizontal mesh of target.
+    Other dimensions are unchanged!
 
     If type of arrays is different:
         - Interpolation to correct points occurs
@@ -50,7 +52,9 @@ def remesh(input, target):
     result = result.interp({x_input.name: x_target, y_input.name: y_target}).fillna(0)
 
     # Remove unnecessary coordinates
-    target_set = set(target.coords)
-    result_set = set(result.coords)
-
-    return result.drop_vars(result_set-target_set)
+    if x_target.name != x_input.name:
+        result = result.drop_vars(x_input.name)
+    if y_target.name != y_input.name:
+        result = result.drop_vars(y_input.name)
+    
+    return result

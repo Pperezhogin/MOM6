@@ -1,6 +1,7 @@
 import xarray as xr
 import os
 import numpy as np
+from functools import cached_property
 
 # Imitates xarray. All variables are
 # returned as @property. Compared to xarray, allows
@@ -10,6 +11,7 @@ class Experiment:
         '''
         Initializes with folder containing all experiments.
         Xarray datasets are read only by demand within @property function
+        @cached_property allows to read each netcdf file only ones
 
         All fields needed for plotting snapshots must be registered
         as properties
@@ -19,20 +21,11 @@ class Experiment:
         if not os.path.exists(os.path.join(self.folder, 'ocean_geometry.nc')):
             print('Error, cannot find files in folder'+self.folder)
 
-        # xarray dataset. Private variable, access by @property function
-        self.__param = None
-        self.__series = None
-        self.__ave = None
-        self.__prog = None
-        self.__energy = None
-        self.__forcing = None
-        self.__mom = None
-
     ########################## Service functions #############################
     def rename_coordinates(self, xr_dataset):
         '''
         in-place change of coordinate names to Longitude and Latitude.
-        For simplicity of plotting with xarray.plot()
+        For convenience of plotting with xarray.plot()
         '''
         for key in ['xq', 'xh']:
             try:
@@ -49,91 +42,93 @@ class Experiment:
                 pass
     
     ################### Getters for netcdf files as xarrays #####################
-    @property
+    @cached_property
+    def series(self):
+        result = xr.open_dataset(os.path.join(self.folder, 'ocean.stats.nc'), decode_times=False)
+        return result
+
+    @cached_property
     def param(self):
-        if self.__param is None:
-            self.__param = xr.open_dataset(os.path.join(self.folder, 'ocean_geometry.nc')).rename(
+        result = xr.open_dataset(os.path.join(self.folder, 'ocean_geometry.nc')).rename(
                 {'latq': 'yq', 'lonq': 'xq', 'lath': 'yh', 'lonh': 'xh'} # change coordinates notation as in other files
             )
-            self.rename_coordinates(self.__param)
-        return self.__param
-    
-    @property
-    def series(self):
-        if self.__series is None:
-            self.__series = xr.open_dataset(os.path.join(self.folder, 'ocean.stats.nc'), decode_times=False)
-        return self.__series
+        self.rename_coordinates(result)
+        return result
 
-    @property
+    @cached_property
     def ave(self):
-        if self.__ave is None:
-            self.__ave = xr.open_mfdataset(os.path.join(self.folder, 'ave_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            self.rename_coordinates(self.__ave)
-        return self.__ave
+        result = xr.open_mfdataset(os.path.join(self.folder, 'ave_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
+        self.rename_coordinates(result)
+        return result
 
-    @property
+    @cached_property
     def prog(self):
-        if self.__prog is None:
-            self.__prog = xr.open_mfdataset(os.path.join(self.folder, 'prog_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            self.rename_coordinates(self.__prog)
-        return self.__prog
+        result = xr.open_mfdataset(os.path.join(self.folder, 'prog_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
+        self.rename_coordinates(result)
+        return result
     
-    @property
+    @cached_property
     def energy(self):
-        if self.__energy is None:
-            self.__energy = xr.open_mfdataset(os.path.join(self.folder, 'energy_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            self.rename_coordinates(self.__energy)
-        return self.__energy
+        result = xr.open_mfdataset(os.path.join(self.folder, 'energy_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
+        self.rename_coordinates(result)
+        return result
 
-    @property
+    @cached_property
     def forcing(self):
-        if self.__forcing is None:
-            self.__forcing = xr.open_mfdataset(os.path.join(self.folder, 'forcing_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            self.rename_coordinates(self.__forcing)
-        return self.__forcing
+        result = xr.open_mfdataset(os.path.join(self.folder, 'forcing_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
+        self.rename_coordinates(result)
+        return result
 
-    @property
+    @cached_property
     def mom(self):
-        if self.__mom is None:
-            self.__mom = xr.open_mfdataset(os.path.join(self.folder, 'mom_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
-            self.rename_coordinates(self.__mom)
-        return self.__mom
+        result = xr.open_mfdataset(os.path.join(self.folder, 'mom_*.nc'), decode_times=False, concat_dim='Time', parallel=True)
+        self.rename_coordinates(result)
+        return result
 
     ##################### Analog of xarray. Set variables ####################
     # It is good to define these @property fields to know which
     # variables will be used in computations
-    @property
+    @cached_property
+    def RV(self):
+        return self.prog.RV
+
+    @cached_property
     def RV_f(self):
-        RV = self.prog.RV
-        f = self.param.f
-        return RV/f
-    
-    @property
+        return self.RV / self.param.f
+
+    @cached_property
     def PV(self):
         return self.prog.PV
 
-    @property
-    def KE(self):
-        return self.energy.KE
-
-    @property
-    def smagx(self):
-        return self.mom.diffu-self.mom.ZB2020u
-
-    @property
-    def smagy(self):
-        return self.mom.diffv-self.mom.ZB2020v
-
-    @property
-    def ZB2020u(self):
-        return self.mom.ZB2020u
-
-    @property
-    def ZB2020v(self):
-        return self.mom.ZB2020v
-
-    @property
+    @cached_property
     def e(self):
         return self.prog.e
 
-    ######################## Coarsening tools ########################
+    @cached_property
+    def u(self):
+        return self.prog.u
+
+    @cached_property
+    def v(self):
+        return self.prog.v
+
+    ########### Auxiliary variables. Not involved in coarsegraining ##########
+    @cached_property
+    def KE(self):
+        return self.energy.KE
+
+    @cached_property
+    def smagx(self):
+        return self.mom.diffu-self.mom.ZB2020u
+
+    @cached_property
+    def smagy(self):
+        return self.mom.diffv-self.mom.ZB2020v
+
+    @cached_property
+    def ZB2020u(self):
+        return self.mom.ZB2020u
+
+    @cached_property
+    def ZB2020v(self):
+        return self.mom.ZB2020v
