@@ -6,7 +6,7 @@ import matplotlib
 import matplotlib.animation as animation
 import numpy as np
 
-class dataset:
+class experiment:
     def __init__(self, folder):
         '''
         Initializes with folder containing all experiments.
@@ -103,6 +103,14 @@ class dataset:
         RV = self.prog.RV
         f = self.param.f
         return RV/f
+    
+    @property
+    def PV(self):
+        return self.prog.PV
+
+    @property
+    def KE(self):
+        return self.energy.KE
 
 class collection_of_experiments:
     def __init__(self, common_folder: str, exps: list[str], exps_names=None, additional_subfolder=''):
@@ -119,12 +127,12 @@ class collection_of_experiments:
         if exps_names is None:
             exps_names = exps
 
-        # Construct dictionary of datasets, where keys are given by exps
+        # Construct dictionary of experiments, where keys are given by exps
         self.ds = {}
         self.names = {}
         for i in range(len(exps)):
             folder = os.path.join(common_folder,exps[i],additional_subfolder)
-            self.ds[exps[i]] = dataset(folder)
+            self.ds[exps[i]] = experiment(folder)
             self.names[exps[i]] = exps_names[i] # convert array to dictionary
 
     def __getitem__(self, q):
@@ -151,36 +159,54 @@ class collection_of_experiments:
             ax = np.array([ax,]) # to make work only one picture
         return fig, ax
 
-    def animate(self, plot_function, Time=range(-50,0), videoname='my_movie.mp4'):
+    def animate(self, plot_function, nfig, Time=range(-50,0), videoname='my_movie.mp4'):
         '''
-        Decorator for animation
+        Decorator for animation. 
+        Time - range of indices to plot
+        plot_function must have Time and ax argument,
+        and return list of "matplotlib.Artist" objects
         '''
         def new_plot_function(*args, **kwargs):
-            fig, ax = self.get_axes(nfig=3,ncol=3)
+            fig, ax = self.get_axes(nfig=nfig)
             p=[]
             N = len(Time)
+            n = 0
             use_colorbar=True
             for j in Time:
                 try:
                     p_ = plot_function(*args, **kwargs, Time=j, ax=ax, use_colorbar=use_colorbar)
                 except:
                     p_ = plot_function(*args, **kwargs, Time=j, ax=ax)
-                print(f"{j+1} Images of {N} are plotted\r",end="")
+                n += 1
+                print(f"{n} Images of {N} are plotted",end="\r")
                 use_colorbar=False
-                p.append([*p_])
-            plt.close()
+                p.append(p_)
 
+            print("Converting list of figures to animation object...",end="\r")
             ani = animation.ArtistAnimation(fig, p, interval=100, blit=True, repeat_delay=0)
+            print("Saving animation as videofile....................",end="\r")
             ani.save(videoname)
-            return ani
+            print("Done                                             ",end="\r")
+            plt.close()
+            return videoname
         return new_plot_function
 
     #########################  snapshot plotters #########################
 
-    def plot_relative_vorticity_snapshot(self, exps, Time=-1, zl=0, names=None, ax=None, use_colorbar=True):
+    def pcolormesh(self, exps, key, Time, zl, names, vmin, vmax, cmap, cbar_title, ax, use_colorbar):
         '''
-        Optionally takes axes, and allows to construct facet figure. 
-        Returns list of artists (p), and allows to build movies
+        exps - list of experiments
+        key - name of variable to plot
+        Time - index of time
+        zl - index in vertical
+        names - labels of experiments
+        vmin, vmax - range of colorbar
+        cmap - name of colormap
+        cbar_title - obviously
+        ax - Optionally takes axes. This allows to construct facet figure
+        use_colorbar - necessary evil to make movies (colorbar is plotted at first time index)
+
+        Returns list of "matplotlib.Artist" objects. Can be used later for movies
         '''
         plt.rcParams.update({'font.size': 14})
         nfig = len(exps)
@@ -189,57 +215,27 @@ class collection_of_experiments:
 
         if names is None:
             names = [self.names[exp] for exp in exps]
+
         p = []
         for ifig, exp in enumerate(exps):
-            p.append(self[exp].RV_f.isel(zl=zl,Time=Time).plot.pcolormesh(vmin=-0.2,vmax=0.2,
-                ax=ax[ifig],add_colorbar=False,cmap='bwr'))
+            p.append(self[exp].__getattribute__(key).isel(zl=zl,Time=Time).plot.pcolormesh(vmin=vmin,vmax=vmax,
+                ax=ax[ifig],add_colorbar=False,cmap=cmap))
             ax[ifig].set_title(names[ifig])
         if use_colorbar:
-            plt.colorbar(p[0],ax=ax,label='relative vorticity / local Coriolis ($\zeta/f$)')
+            plt.colorbar(p[0],ax=ax,label=cbar_title)
         return p
 
-    def plot_potential_vorticity_snapshot(self, exps, Time=-1, zl=0, names=None, ax=None, use_colorbar=True):
-        '''
-        Optionally takes axes, and allows to construct facet figure. 
-        Returns list of artists (p), and allows to build movies
-        '''
-        plt.rcParams.update({'font.size': 14})
-        nfig = len(exps)
-        if ax is None:
-            fig, ax = self.get_axes(nfig)
+    def plot_RV(self, exps, Time=-1, zl=0, names=None, ax=None, use_colorbar=True):
+        return self.pcolormesh(exps, 'RV_f', Time, zl, names, -0.2, 0.2, 'bwr', 
+            'Relative vorticity / local Coriolis ($\zeta/f$)', ax, use_colorbar)
 
-        if names is None:
-            names = [self.names[exp] for exp in exps]
-        p = []
-        for ifig, exp in enumerate(exps):
-            p.append(self[exp].prog.PV.isel(zl=zl,Time=Time).plot.pcolormesh(vmin=0,vmax=2e-7,
-                ax=ax[ifig],add_colorbar=False,cmap='seismic'))
-            ax[ifig].set_title(names[ifig])
-        if use_colorbar:
-            plt.colorbar(p[0],ax=ax,label='Potential vorticity, $m^{-1} s^{-1}$')
-        return p
+    def plot_PV(self, exps, Time=-1, zl=0, names=None, ax=None, use_colorbar=True):
+        return self.pcolormesh(exps, 'PV', Time, zl, names, 0, 2e-7, 'seismic', 
+            'Potential vorticity, $m^{-1} s^{-1}$', ax, use_colorbar)
     
-    def plot_KE_snapshot(self, exps, Time=-1, zl=0, names=None, vmax=0.05, ax=None, use_colorbar=True):
-        '''
-        Optionally takes axes, and allows to construct facet figure. 
-        Returns list of artists (p), and allows to build movies
-        '''
-        plt.rcParams.update({'font.size': 14})
-        nfig = len(exps)
-        if ax is None:
-            fig, ax = self.get_axes(nfig)
-
-        if names is None:
-            names = [self.names[exp] for exp in exps]
-
-        p= []
-        for ifig, exp in enumerate(exps):
-            p.append(self[exp].energy.KE.isel(zl=zl,Time=Time).plot.pcolormesh(vmin=0,vmax=vmax,
-                ax=ax[ifig],add_colorbar=False,cmap='inferno'))
-            ax[ifig].set_title(names[ifig])
-        if use_colorbar:
-            plt.colorbar(p[0],ax=ax,label='$m^2/s^2$')
-        return p
+    def plot_KE(self, exps, Time=-1, zl=0, names=None, vmax=0.05, ax=None, use_colorbar=True):
+        return self.pcolormesh(exps, 'KE', Time, zl, names, 0, vmax, 'inferno', 
+            'Kinetic energy, $m^2/s^2$', ax, use_colorbar)
 
     def plot_SGS_snapshot(self, exp, Time = -1):
         fig = plt.figure(figsize=(15,7.5))
