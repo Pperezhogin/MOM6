@@ -4,6 +4,8 @@ import math
 def remesh(input, target):
         '''
         Input and target should be xarrays of any type (u-array, v-array, q-array, h-array)
+        The result must have the same mesh as target, but the data should correspond to input
+
         If type of arrays is different:
             - Interpolation to correct points occurs
         If input is Hi-res:
@@ -46,5 +48,9 @@ def remesh(input, target):
 
         # Interpolating to target mesh
         result = result.interp({x_input.name: x_target, y_input.name: y_target}).fillna(0)
-        
-        return result
+
+        # Remove unnecessary coordinates
+        target_set = set(target.coords)
+        result_set = set(result.coords)
+
+        return result.drop_vars(result_set-target_set)
