@@ -1,5 +1,6 @@
 import xarray as xr
 import os
+import numpy as np
 
 # Imitates xarray. All variables are
 # returned as @property. Compared to xarray, allows
@@ -47,7 +48,7 @@ class Experiment:
             except:
                 pass
     
-    ########################### Getters for xarrays ##########################
+    ################### Getters for netcdf files as xarrays #####################
     @property
     def param(self):
         if self.__param is None:
@@ -134,3 +135,5 @@ class Experiment:
     @property
     def e(self):
         return self.prog.e
+
+    ######################## Coarsening tools ########################
