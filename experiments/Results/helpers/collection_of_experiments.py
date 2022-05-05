@@ -7,9 +7,11 @@ import matplotlib.animation as animation
 import numpy as np
 from helpers.experiment import Experiment
 
-# This class extend dictionary of experiments by additional
-# tools for plotting and comparing experiments
 class CollectionOfExperiments:
+    '''
+    This class extend dictionary of experiments by additional
+    tools for plotting and comparing experiments
+    '''
     def __init__(self, exps, experiments_dict, names_dict):
         '''
         experiments_dict - "experiment" objects labeled by keys
@@ -35,6 +37,24 @@ class CollectionOfExperiments:
         names_dict = {**self.names, **otherCollection.names}
 
         return CollectionOfExperiments(exps, experiments_dict, names_dict)
+
+    def remesh(self, input, target, exp=None, name=None):
+        '''
+        input  - key of experiment to coarsegrain
+        target - key of experiment we want to take coordinates from
+        '''
+        result = self[input].remesh(self[target])
+
+        if exp is None:
+            exp = input+'_'+target
+        if name is None:
+            name = input+' coarsegrained to '+target
+
+        print('Experiment '+input+' coarsegrained to '+target+
+            ' is created. Its identificator='+exp)
+        self.exps.append(exp)
+        self.experiments[exp] = result
+        self.names[exp] = name
     
     def print_exps(self):
         print(*self.exps)

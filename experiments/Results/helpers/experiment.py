@@ -2,6 +2,7 @@ import xarray as xr
 import os
 import numpy as np
 from functools import cached_property
+from helpers.computational_tools import remesh
 
 # Imitates xarray. All variables are
 # returned as @property. Compared to xarray, allows
@@ -9,17 +10,34 @@ from functools import cached_property
 class Experiment:
     def __init__(self, folder):
         '''
-        Initializes with folder containing all experiments.
-        Xarray datasets are read only by demand within @property function
+        Initializes with folder containing all netcdf files corresponding
+        to a given experiment.
+        Xarray datasets are read only by demand within @property decorator
         @cached_property allows to read each netcdf file only ones
 
-        All fields needed for plotting snapshots must be registered
-        as properties
+        All fields needed for plotting purposes are suggested to be
+        registered with @cached_property decorator (for convenience)
         '''
         self.folder = folder
 
-        if not os.path.exists(os.path.join(self.folder, 'ocean_geometry.nc')):
-            print('Error, cannot find files in folder'+self.folder)
+        if folder != 'This is detached experiment':
+            if not os.path.exists(os.path.join(self.folder, 'ocean_geometry.nc')):
+                print('Error, cannot find files in folder'+self.folder)
+    
+    def remesh(self, target):
+        '''
+        Returns object "experiment", where "Main variables"
+        are coarsegrained according to resolution of the target experiment
+        '''
+
+        # The coarsegrained experiment is no longer attached to the folder
+        result = Experiment(folder='This is detached experiment')
+
+        # Coarsegrain "Main variables" explicitly
+        for key in ['RV', 'RV_f', 'PV', 'e', 'u', 'v']:
+            setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)))
+
+        return result        
 
     ########################## Service functions #############################
     def rename_coordinates(self, xr_dataset):
@@ -85,9 +103,11 @@ class Experiment:
         self.rename_coordinates(result)
         return result
 
-    ##################### Analog of xarray. Set variables ####################
-    # It is good to define these @property fields to know which
-    # variables will be used in computations
+    ############################### Main variables  #########################
+    # These variables are suggested to be used in computations, i.e. coarsegraining,
+    # spectra and so on. They are recommended to be registered
+    # The use of @property decorator allows not to load data at initialization
+    # They must be registered in "coarsegrain" method
     @cached_property
     def RV(self):
         return self.prog.RV
@@ -112,11 +132,7 @@ class Experiment:
     def v(self):
         return self.prog.v
 
-    ########### Auxiliary variables. Not involved in coarsegraining ##########
-    @cached_property
-    def KE(self):
-        return self.energy.KE
-
+    ########### Auxiliary variables. Not involved in computations ##########
     @cached_property
     def smagx(self):
         return self.mom.diffu-self.mom.ZB2020u
@@ -132,3 +148,8 @@ class Experiment:
     @cached_property
     def ZB2020v(self):
         return self.mom.ZB2020v
+
+    ############## Computational tools. Spectra, and so on #################
+    @cached_property
+    def KE(self):
+        return self.energy.KE
