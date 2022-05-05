@@ -1,9 +1,9 @@
 import xarray as xr
 import os
 import numpy as np
+import xrft
 from functools import cached_property
-from helpers.computational_tools import remesh
-
+from helpers.computational_tools import remesh, compute_2dfft
 # Imitates xarray. All variables are
 # returned as @property. Compared to xarray, allows
 # additional computational tools and initialized instantly (within ms)
@@ -39,6 +39,8 @@ class Experiment:
                 setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)).compute())
             else:
                 setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)))
+
+        result.param = target.param # copy coordinates from target experiment
 
         return result        
 
@@ -156,3 +158,15 @@ class Experiment:
     @cached_property
     def KE(self):
         return 0.5 * (remesh(self.u**2, self.e) + remesh(self.v**2, self.e))
+
+    @cached_property
+    def fft_u(self):
+        return compute_2dfft(remesh(self.u, self.e), self.param.dxT, self.param.dyT, Lat=(35,45), Lon=(5,15), window='hann')
+
+    @cached_property
+    def fft_v(self):
+        return compute_2dfft(remesh(self.v, self.e), self.param.dxT, self.param.dyT, Lat=(35,45), Lon=(5,15), window='hann')
+
+    @cached_property
+    def KE_spectrum(self):
+        return xrft.isotropize((np.abs(self.fft_u)**2+np.abs(self.fft_v)**2)/2, fftdim=('kx','ky'), nfactor=2, truncate=True)

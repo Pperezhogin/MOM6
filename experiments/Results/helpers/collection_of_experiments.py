@@ -6,6 +6,7 @@ import matplotlib
 import matplotlib.animation as animation
 import numpy as np
 from helpers.experiment import Experiment
+from celluloid import Camera
 
 class CollectionOfExperiments:
     '''
@@ -103,7 +104,7 @@ class CollectionOfExperiments:
             ax = np.array([ax,]) # to make work only one picture
         return fig, ax
 
-    def animate(self, plot_function, nfig, ncol=3, Time=range(-50,0), videoname='my_movie.mp4'):
+    def animate(self, plot_function, nfig, ncol=3, ratio=1.15, Time=range(-50,0), videoname='my_movie.mp4'):
         '''
         Decorator for animation. 
         Time - range of indices to plot
@@ -111,7 +112,7 @@ class CollectionOfExperiments:
         and return list of "matplotlib.Artist" objects
         '''
         def new_plot_function(*args, **kwargs):
-            fig, ax = self.get_axes(nfig=nfig, ncol=ncol)
+            fig, ax = self.get_axes(nfig=nfig, ncol=ncol, ratio=ratio)
             p=[]
             N = len(Time)
             n = 0
@@ -128,6 +129,43 @@ class CollectionOfExperiments:
 
             print("Converting list of figures to animation object...",end="\r")
             ani = animation.ArtistAnimation(fig, p, interval=100, blit=True, repeat_delay=0)
+            print("Saving animation as videofile...                 ",end="\r")
+            ani.save(videoname)
+            print("Done                                             ",end="\r")
+            plt.close()
+            return videoname
+        return new_plot_function
+
+    def animate_celluloid(self, plot_function, nfig, ncol=3, ratio=1.15, Time=range(-50,0), videoname='my_movie.mp4'):
+        '''
+        Decorator for animation. 
+        Time - range of indices to plot
+        plot_function must have Time and ax argument,
+        and return list of "matplotlib.Artist" objects
+        '''
+        def new_plot_function(*args, **kwargs):
+            fig, ax = self.get_axes(nfig=nfig, ncol=ncol, ratio=ratio)
+            camera = Camera(fig)
+            n = 0
+            N = len(Time)
+            use_colorbar=True
+            p = None
+            for j in Time:
+                try:
+                    p_ = plot_function(*args, **kwargs, Time=j, ax=ax, use_colorbar=use_colorbar)
+                except:
+                    p_ = plot_function(*args, **kwargs, Time=j, ax=ax)
+                n += 1
+                print(f"{n} Images of {N} are plotted",end="\r")
+                use_colorbar=False
+                if p is not None:
+                    for pp in p:
+                        pp.remove()
+                    p = p_
+                camera.snap()
+
+            print("Converting list of figures to animation object...",end="\r")
+            ani = camera.animate(interval=100, blit=True, repeat_delay=0)
             print("Saving animation as videofile...                 ",end="\r")
             ani.save(videoname)
             print("Done                                             ",end="\r")
@@ -222,4 +260,44 @@ class CollectionOfExperiments:
 
         if use_colorbar:
             plt.colorbar(p[0], ax=ax, label='$m/s^2$')
+        return p
+
+    def plot_KE_spectrum(self, exps, Time=-1, ax=None):
+        
+        p = []
+        for exp in exps:
+            KE = self[exp].KE_spectrum
+            k = KE.freq_r
+
+            KE_upper = KE.isel(zl=0,Time=Time)
+            KE_lower = KE.isel(zl=0,Time=Time)
+
+            p.extend(ax[0].loglog(k, KE_upper, label=self.names[exp]))
+            ax[0].set_xlabel(r'wavenumber, $k [m^{-1}]$')
+            ax[0].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
+            ax[0].set_title('Upper layer')
+            #ax[0].legend(prop={'size': 14})
+            ax[0].grid(which='both',linestyle=':')
+
+            p.extend(ax[1].loglog(k, KE_lower, label=self.names[exp]))
+            ax[1].set_xlabel(r'wavenumber, $k [m^{-1}]$')
+            ax[1].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
+            ax[1].set_title('Lower layer')
+            #ax[1].legend(prop={'size': 14})
+            ax[1].grid(which='both',linestyle=':')
+
+        k = [5e-5, 1e-3]
+        E = [1.5e+2, 0]
+        E[1] = E[0] * (k[1]/k[0])**(-3)
+        ax[0].loglog(k,E,'--k')
+        ax[0].text(2e-4,1e+1,'$k^{-3}$')
+        ax[0].set_xlim([5e-6, 2e-3])
+        
+        ax[1].set_xlim([5e-6, 2e-3])
+        k = [5e-5, 1e-3]
+        E = [3e+1, 0]
+        E[1] = E[0] * (k[1]/k[0])**(-3)
+        ax[1].loglog(k,E,'--k')
+        ax[1].text(2e-4,1e+1,'$k^{-3}$')
+
         return p
