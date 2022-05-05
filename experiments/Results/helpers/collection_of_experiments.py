@@ -38,12 +38,12 @@ class CollectionOfExperiments:
 
         return CollectionOfExperiments(exps, experiments_dict, names_dict)
 
-    def remesh(self, input, target, exp=None, name=None):
+    def remesh(self, input, target, exp=None, name=None, compute=False):
         '''
         input  - key of experiment to coarsegrain
         target - key of experiment we want to take coordinates from
         '''
-        result = self[input].remesh(self[target])
+        result = self[input].remesh(self[target], compute) # call experiment method
 
         if exp is None:
             exp = input+'_'+target

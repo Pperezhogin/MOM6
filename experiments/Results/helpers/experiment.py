@@ -24,7 +24,7 @@ class Experiment:
             if not os.path.exists(os.path.join(self.folder, 'ocean_geometry.nc')):
                 print('Error, cannot find files in folder'+self.folder)
     
-    def remesh(self, target):
+    def remesh(self, target, compute=False):
         '''
         Returns object "experiment", where "Main variables"
         are coarsegrained according to resolution of the target experiment
@@ -35,7 +35,10 @@ class Experiment:
 
         # Coarsegrain "Main variables" explicitly
         for key in ['RV', 'RV_f', 'PV', 'e', 'u', 'v']:
-            setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)))
+            if compute:
+                setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)).compute())
+            else:
+                setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)))
 
         return result        
 
@@ -152,4 +155,4 @@ class Experiment:
     ############## Computational tools. Spectra, and so on #################
     @cached_property
     def KE(self):
-        return self.energy.KE
+        return 0.5 * (remesh(self.u**2, self.e) + remesh(self.v**2, self.e))

@@ -44,12 +44,21 @@ def remesh(input, target):
 
     ratioy = np.diff(y_target)[0] / np.diff(y_input)[0]
     ratioy = math.ceil(ratioy)
+    
+    # B.C.
+    result = input.fillna(0)
+    
+    if (ratiox > 1 or ratioy > 1):
+        # Coarsening; x_input.name returns 'xq' or 'xh'
+        result = result.coarsen({x_input.name: ratiox, y_input.name: ratioy}, boundary='pad').mean()
 
-    # Coarsening; x_input.name returns 'xq' or 'xh'
-    result = input.fillna(0).coarsen({x_input.name: ratiox, y_input.name: ratioy}, boundary='pad').mean()
+    # Coordinate points could change after coarsegraining
+    x_result = x_coord(result)
+    y_result = y_coord(result)
 
-    # Interpolating to target mesh
-    result = result.interp({x_input.name: x_target, y_input.name: y_target}).fillna(0)
+    # Interpolate if needed
+    if not x_result.equals(x_target) or not y_result.equals(y_target):
+        result = result.interp({x_result.name: x_target, y_result.name: y_target}).fillna(0)
 
     # Remove unnecessary coordinates
     if x_target.name != x_input.name:
