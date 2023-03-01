@@ -15,3 +15,5 @@ Makefile.mkmf
 experiments/test*
 *.ipynb_checkpoints*
 *__pycache__*
+.vscode/*
+experiments/Results/figures/*
