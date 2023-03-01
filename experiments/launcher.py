@@ -142,7 +142,8 @@ PARAMETERS = dictionary(
     SMAGORINSKY_AH='True',
     SMAG_BI_CONST=0.03, 
     USE_ZB2020='False',
-    amplitude=1., 
+    amplitude=1.,
+    amp_bottom=-1.,
     ZB_type=0, 
     ZB_cons=1, 
     LPF_iter=0, 
@@ -158,8 +159,14 @@ if __name__ == '__main__':
     # for ntasks in [1, 4, 8, 10, 16, 24, 48]:
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/runtime/R4-ntasks-{ntasks}', HPC.add(ntasks=ntasks, time=1), PARAMETERS.add(DAYMAX=100))
 
+    # parameters = PARAMETERS.add(USE_ZB2020='True')
+    # for amp in range(0,11):
+    #     for DT in [270, 1080, 4320]:
+    #         parameters = parameters.add(amplitude=amp/24., DT=DT)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-dt/Cs-0.03-ZB-{amp}-24-DT-{DT}', HPC, parameters)
+
     parameters = PARAMETERS.add(USE_ZB2020='True')
-    for amp in range(0,11):
-        for DT in [270, 1080, 4320]:
-            parameters = parameters.add(amplitude=amp/24., DT=DT)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-dt/Cs-0.03-ZB-{amp}-24-DT-{DT}', HPC, parameters)
+    for amplitude in [0,2,4,6,8,10]:
+        for amp_bottom in [0,2,4,6,8,10]:
+            parameters = parameters.add(amplitude=amplitude/24., amp_bottom=amp_bottom/24.)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-layers/upper-{amplitude}-24-lower-{amp_bottom}-24', HPC, parameters)
