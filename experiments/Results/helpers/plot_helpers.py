@@ -33,6 +33,48 @@ def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loo
         save_all=True,
         duration=duration,
         loop=loop)
+    
+def default_rcParams(kw={}):
+    '''
+    Also matplotlib.rcParamsDefault contains the default values,
+    but:
+    - backend is changed
+    - without plotting something as initialization,
+    inline does not work
+    '''
+    plt.plot()
+    plt.close()
+    rcParams = matplotlib.rcParamsDefault.copy()
+    try:
+        rcParams.pop('backend') # can break inlining
+    except:
+        pass
+    matplotlib.rcParams.update(rcParams)
+    
+    matplotlib.rcParams.update({
+        'font.family': 'MathJax_Main',
+        'mathtext.fontset': 'cm',
+
+        'figure.figsize': (4, 4),
+
+        'figure.subplot.wspace': 0.3,
+        
+        'font.size': 10,
+        'axes.labelsize': 10,
+        'axes.titlesize': 12,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'legend.fontsize': 10,
+
+        'axes.formatter.limits': (-1,2),
+        'axes.formatter.use_mathtext': True,
+        'axes.labelpad': 0,
+        'axes.titlelocation' : 'center',
+        
+        'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.1
+    })
+    matplotlib.rcParams.update(**kw)
 
 def latex_float(f):
     float_str = "{0:.2g}".format(f)

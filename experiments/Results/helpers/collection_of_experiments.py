@@ -63,7 +63,7 @@ class CollectionOfExperiments:
         self.names[exp] = name
     
     @classmethod
-    def init_folder(cls, common_folder, exps=None, exps_names=None, additional_subfolder=''):
+    def init_folder(cls, common_folder, exps=None, exps_names=None, additional_subfolder='', prefix=None):
         '''
         Scan folders in common_folder and returns class instance with exps given by these folders
         exps - list of folders can be specified
@@ -73,17 +73,62 @@ class CollectionOfExperiments:
         '''
 
         if exps is None:
-            exps = sorted(os.listdir(common_folder))
+            folders = sorted(os.listdir(common_folder))
 
         if exps_names is None:
-            exps_names = exps
+            exps_names = folders
+
+        if prefix:
+            exps = [prefix+'-'+exp for exp in folders]
+        else:
+            exps = folders
 
         # Construct dictionary of experiments, where keys are given by exps
         experiments_dict = {}
         names_dict = {}
         for i in range(len(exps)):
-            folder = os.path.join(common_folder,exps[i],additional_subfolder)
+            folder = os.path.join(common_folder,folders[i],additional_subfolder)
             experiments_dict[exps[i]] = Experiment(folder, exps[i])
             names_dict[exps[i]] = exps_names[i] # convert array to dictionary
 
         return cls(exps, experiments_dict, names_dict)
+    
+    def plot_KE_spectrum(self, exps, key='KE_spectrum', ax=None):
+        
+        p = []
+        for exp in exps:
+            KE = self[exp].__getattribute__(key)
+            k = KE.freq_r
+
+            KE_upper = KE.isel(zl=0)
+            KE_lower = KE.isel(zl=1)
+
+            p.extend(ax[0].loglog(k, KE_upper, label=self.names[exp]))
+            ax[0].set_xlabel(r'wavenumber, $k [m^{-1}]$')
+            ax[0].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
+            ax[0].set_title('Upper layer')
+            ax[0].legend(prop={'size': 14})
+            ax[0].grid(which='both',linestyle=':')
+
+            p.extend(ax[1].loglog(k, KE_lower, label=self.names[exp]))
+            ax[1].set_xlabel(r'wavenumber, $k [m^{-1}]$')
+            ax[1].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
+            ax[1].set_title('Lower layer')
+            ax[1].legend(prop={'size': 14})
+            ax[1].grid(which='both',linestyle=':')
+
+        k = [5e-5, 1e-3]
+        E = [1.5e+2, 0]
+        E[1] = E[0] * (k[1]/k[0])**(-3)
+        ax[0].loglog(k,E,'--k')
+        ax[0].text(2e-4,1e+1,'$k^{-3}$')
+        ax[0].set_xlim([2e-6, 2e-3])
+        
+        ax[1].set_xlim([2e-6, 2e-3])
+        k = [5e-5, 1e-3]
+        E = [3e+1, 0]
+        E[1] = E[0] * (k[1]/k[0])**(-3)
+        ax[1].loglog(k,E,'--k')
+        ax[1].text(2e-4,1e+1,'$k^{-3}$')
+
+        return p
