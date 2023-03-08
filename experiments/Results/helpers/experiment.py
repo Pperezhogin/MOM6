@@ -53,6 +53,7 @@ class Experiment:
                 setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)))
 
         result.param = target.param # copy coordinates from target experiment
+        result._hires = self # store reference to the original experiment
 
         return result
 
@@ -447,6 +448,7 @@ class Experiment:
         return self.PE_ssh_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE_ssh
     
     # ------------------ Advection Arakawa(gradKE)-Sadourny(PVxuv) ---------------------- #
+    # https://mom6.readthedocs.io/en/dev-gfdl/api/generated/pages/Governing_Equations.html
     @property
     def KE_Arakawa(self):
         '''
@@ -533,3 +535,31 @@ class Experiment:
         CAu, CAv = self.PV_cross_uv
         KEx, KEy = self.gradKE
         return (CAu - KEx, CAv - KEy)
+    
+    @property
+    def subgrid_forcing(self):
+        '''
+        self - coarsegrained experiment
+        hires - highres experiment from which 
+        it was coarsegrained
+        '''
+        if hasattr(self, '_hires'):
+            adv = self.advection
+            hires_advection = self._hires.advection
+
+            fx = remesh(hires_advection[0],adv[0]) - adv[0]
+            fy = remesh(hires_advection[1],adv[1]) - adv[1]
+
+            return (fx,fy)
+        else:
+            print('Error: subgrid forcing cannot be computed')
+            print('because there is no associated hires experiment')
+            return
+        
+    @netcdf_property
+    def SGSx(self):
+        return self.subgrid_forcing[0]
+    
+    @netcdf_property
+    def SGSy(self):
+        return self.subgrid_forcing[1]
