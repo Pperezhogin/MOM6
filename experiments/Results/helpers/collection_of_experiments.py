@@ -138,22 +138,29 @@ class CollectionOfExperiments:
     def plot_transfer(self, exp):
         smag = self[exp].Smagorinsky_transfer
         ZB = self[exp].ZB_transfer
-        k = smag.freq_r
+        kmax = self[exp].kmax
 
         matplotlib.rcParams.update({'font.family': 'MathJax_Main',
         'mathtext.fontset': 'cm','axes.formatter.limits': (-1,2), 
         'axes.formatter.use_mathtext': True, 'font.size': 16})
-        plt.figure(figsize=(14,3))
+        plt.figure(figsize=(15,4))
         for zl in range(2):
             plt.subplot(1,2,zl+1)
-            (ZB+smag).isel(zl=zl).plot(label='sum', color='tab:blue')
-            ZB.isel(zl=zl).plot(label='ZB2020', color='tab:orange', ls='--')
-            smag.isel(zl=zl).plot(label='bilap Smag', color='tab:green', ls='-.')
+            ZB.isel(zl=zl).plot(label='ZB', color='tab:orange', ls='--')
+            smag.isel(zl=zl).plot(label='Smag', color='tab:green', ls='-.')
+            (ZB+smag).isel(zl=zl).plot(label='ZB+Smag', color='tab:blue')
             plt.legend()
-            plt.axhline(y=0,ls=':',color='k')
+            plt.axhline(y=0,ls='-',color='gray',alpha=0.5)
+            ax2 = plt.gca().secondary_xaxis('top', functions=(lambda x: x/kmax, lambda x: x*kmax))
+            ax2.set_xlabel('Frequency/Nyquist')
+            ax2.set_ticks([0.25, 0.5, 1],[r'$1/4$', r'$1/2$', r'$1$'])
+            for k in [0.25, 0.5, 1]:
+                plt.axvline(x=kmax*k,ls='-',color='gray',alpha=0.5)
             plt.xlabel('wavenumber $k$ [m$^{-1}$]')
             plt.ylabel('KE transfer [m$^3$/s$^3$]')
             if zl==0:
-                plt.title('Upper layer')
+                plt.title('Upper layer',fontweight='bold',fontsize=25, loc='right')
+                plt.title('')
             else:
-                plt.title('Lower layer')
+                plt.title('Lower layer',fontweight='bold',fontsize=25, loc='right')
+                plt.title('')

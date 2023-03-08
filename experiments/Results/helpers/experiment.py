@@ -256,6 +256,16 @@ class Experiment:
     def ZB_transfer(self):
         return compute_isotropic_cospectrum(self.u, self.v, self.mom.ZB2020u, self.mom.ZB2020v,
             self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @property
+    def kmax(self):
+        '''
+        Nyquist wavenumber
+        '''
+        Lat=(35,45); Lon=(5,15)
+        dx = select_LatLon(self.param.dxT,Lat,Lon).mean().values
+        dy = select_LatLon(self.param.dyT,Lat,Lon).mean().values
+        return np.pi/np.max([dx,dy])
 
     @netcdf_property
     def MKE_spectrum(self):
