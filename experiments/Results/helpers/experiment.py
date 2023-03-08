@@ -259,6 +259,35 @@ class Experiment:
             self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
     
     @property
+    def Model_transfer(self):
+        return self.Smagorinsky_transfer+self.ZB_transfer
+    
+    @netcdf_property
+    def SGS_transfer(self):
+        return compute_isotropic_cospectrum(self.u, self.v, self.SGSx, self.SGSy,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @netcdf_property
+    def Smagorinsky_power(self):
+        return 2*compute_isotropic_KE(self.smagu, self.smagv,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @netcdf_property
+    def ZB_power(self):
+        return 2*compute_isotropic_KE(self.mom.ZB2020u, self.mom.ZB2020v,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @netcdf_property
+    def Model_power(self):
+        return 2*compute_isotropic_KE(self.mom.diffu, self.mom.diffv,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+
+    @netcdf_property
+    def SGS_power(self):
+        return 2*compute_isotropic_KE(self.SGSx, self.SGSy,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @property
     def kmax(self):
         '''
         Nyquist wavenumber
