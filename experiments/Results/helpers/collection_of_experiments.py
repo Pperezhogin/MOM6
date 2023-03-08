@@ -136,10 +136,12 @@ class CollectionOfExperiments:
 
         return p
     
-    def plot_transfer(self, exp):
+    def plot_transfer(self, exp, target='R64_R4', callback=True):
         smag = self[exp].Smagorinsky_transfer
         ZB = self[exp].ZB_transfer
         kmax = self[exp].kmax
+        if target is not None:
+            SGS = self[target].SGS_transfer
 
         matplotlib.rcParams.update({'font.family': 'MathJax_Main',
         'mathtext.fontset': 'cm','axes.formatter.limits': (-1,2), 
@@ -147,6 +149,8 @@ class CollectionOfExperiments:
         plt.figure(figsize=(15,4))
         for zl in range(2):
             plt.subplot(1,2,zl+1)
+            if target is not None:
+                SGS.isel(zl=zl).plot(label='SGS', color='k', ls='-')
             ZB.isel(zl=zl).plot(label='ZB', color='tab:orange', ls='--')
             smag.isel(zl=zl).plot(label='Smag', color='tab:green', ls='-.')
             (ZB+smag).isel(zl=zl).plot(label='ZB+Smag', color='tab:blue')
@@ -166,6 +170,38 @@ class CollectionOfExperiments:
             else:
                 plt.title('Lower layer',fontweight='bold',fontsize=25, loc='right')
                 plt.title('')
+
+        if callback:
+            self.plot_power(exp,target)
+
+    def plot_power(self, exp, target='R64_R4'):
+        smag = self[exp].Smagorinsky_power
+        ZB = self[exp].ZB_power
+        model = self[exp].Model_power
+        kmax = self[exp].kmax
+        if target is not None:
+            SGS = self[target].SGS_power
+
+        matplotlib.rcParams.update({'font.family': 'MathJax_Main',
+        'mathtext.fontset': 'cm','axes.formatter.limits': (-1,2), 
+        'axes.formatter.use_mathtext': True, 'font.size': 16})
+        plt.figure(figsize=(15,4))
+        for zl in range(2):
+            plt.subplot(1,2,zl+1)
+            if target is not None:
+                SGS.isel(zl=zl).plot(label='SGS', color='k', ls='-')
+            ZB.isel(zl=zl).plot(label='ZB', color='tab:orange', ls='--')
+            smag.isel(zl=zl).plot(label='Smag', color='tab:green', ls='-.')
+            model.isel(zl=zl).plot(label='ZB+Smag', color='tab:blue')
+            plt.legend()
+            plt.axhline(y=0,ls='-',color='gray',alpha=0.5)
+            for k in [0.25, 0.5, 1]:
+                plt.axvline(x=kmax*k,ls='-',color='gray',alpha=0.5)
+            plt.xlim([None, kmax])
+            plt.xlabel('wavenumber $k$ [m$^{-1}$]')
+            plt.ylabel('Power spectrum [m$^3$/s$^4$]')
+            plt.title('')
+            
 
     def plot_ssh(self, exps):
         plt.figure(figsize=(15,4))
