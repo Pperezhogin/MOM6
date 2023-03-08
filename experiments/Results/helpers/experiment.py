@@ -3,7 +3,7 @@ import os
 import numpy as np
 import xrft
 from functools import cached_property
-from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, L1_error, select_LatLon
+from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, L1_error, select_LatLon
 from helpers.netcdf_cache import netcdf_property
 
 Averaging_Time = slice(3650,7300)
@@ -122,6 +122,12 @@ class Experiment:
         result = xr.open_mfdataset(os.path.join(self.folder, 'prog_*.nc'), decode_times=False, parallel=True, chunks={'Time': 5, 'zl': 2})
         rename_coordinates(result)
         return result
+    
+    @cached_property
+    def mom(self):
+        result = xr.open_mfdataset(os.path.join(self.folder, 'mom_*.nc'), decode_times=False, parallel=True, chunks={'Time': 5, 'zl': 2})
+        rename_coordinates(result)
+        return result
 
     @cached_property
     def energy(self):
@@ -186,7 +192,14 @@ class Experiment:
     @main_property
     def PV(self):
         return self.prog.PV
-
+    
+    @property
+    def smagu(self):
+        return self.mom.diffu-self.mom.ZB2020u
+    
+    @property
+    def smagv(self):
+        return self.mom.diffv-self.mom.ZB2020v
 
     ########################  Statistical tools  #########################
     #################  Express through main properties ###################
@@ -233,6 +246,16 @@ class Experiment:
     @netcdf_property
     def KE_spectrum_global(self):
         return self.KE_spectrum_global_series.sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @netcdf_property
+    def Smagorinsky_transfer(self):
+        return compute_isotropic_cospectrum(self.u, self.v, self.smagu, self.smagv,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    @netcdf_property
+    def ZB_transfer(self):
+        return compute_isotropic_cospectrum(self.u, self.v, self.mom.ZB2020u, self.mom.ZB2020v,
+            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
 
     @netcdf_property
     def MKE_spectrum(self):

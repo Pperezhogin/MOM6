@@ -160,6 +160,41 @@ def compute_isotropic_KE(u_in, v_in, dx, dy, Lat=(35,45), Lon=(5,15), window='ha
     
     return E
 
+def compute_isotropic_cospectrum(u_in, v_in, fu_in, fv_in, dx, dy, Lat=(35,45), Lon=(5,15), window='hann', 
+        nfactor=2, truncate=False, detrend='linear', window_correction=True):
+    # Interpolate to the center of the cells
+    u = remesh(u_in, dx)
+    v = remesh(v_in, dy)
+    fu = remesh(fu_in, dx)
+    fv = remesh(fv_in, dy)
+
+    # Select desired Lon-Lat square
+    u = select_LatLon(u,Lat,Lon)
+    v = select_LatLon(v,Lat,Lon)
+    fu = select_LatLon(fu,Lat,Lon)
+    fv = select_LatLon(fv,Lat,Lon)
+
+    # mean grid spacing in metres
+    dx = select_LatLon(dx,Lat,Lon).mean().values
+    dy = select_LatLon(dy,Lat,Lon).mean().values
+
+    # define uniform grid
+    x = dx*np.arange(len(u.xh))
+    y = dy*np.arange(len(u.yh))
+    for variable in [u, v, fu, fv]:
+        variable['xh'] = x
+        variable['yh'] = y
+
+    Eu = xrft.isotropic_cross_spectrum(u, fu, dim=('xh','yh'), window=window, nfactor=nfactor, 
+        truncate=truncate, detrend=detrend, window_correction=window_correction)
+    Ev = xrft.isotropic_cross_spectrum(v, fv, dim=('xh','yh'), window=window, nfactor=nfactor, 
+        truncate=truncate, detrend=detrend, window_correction=window_correction)
+
+    E = (Eu+Ev)
+    E['freq_r'] = E['freq_r']*2*np.pi # because library returns frequencies, but not wavenumbers
+    
+    return np.real(E)
+
 def compute_isotropic_PE(h_int, dx, dy, Lat=(35,45), Lon=(5,15), window='hann', 
         nfactor=2, truncate=True, detrend='linear', window_correction=True):
     '''

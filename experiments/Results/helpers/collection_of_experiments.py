@@ -1,6 +1,8 @@
 import xarray as xr
 import os
 from helpers.experiment import Experiment
+import matplotlib.pyplot as plt
+import matplotlib
 
 class CollectionOfExperiments:
     '''
@@ -132,3 +134,26 @@ class CollectionOfExperiments:
         ax[1].text(2e-4,1e+1,'$k^{-3}$')
 
         return p
+    
+    def plot_transfer(self, exp):
+        smag = self[exp].Smagorinsky_transfer
+        ZB = self[exp].ZB_transfer
+        k = smag.freq_r
+
+        matplotlib.rcParams.update({'font.family': 'MathJax_Main',
+        'mathtext.fontset': 'cm','axes.formatter.limits': (-1,2), 
+        'axes.formatter.use_mathtext': True, 'font.size': 16})
+        plt.figure(figsize=(14,3))
+        for zl in range(2):
+            plt.subplot(1,2,zl+1)
+            (ZB+smag).isel(zl=zl).plot(label='sum', color='tab:blue')
+            ZB.isel(zl=zl).plot(label='ZB2020', color='tab:orange', ls='--')
+            smag.isel(zl=zl).plot(label='bilap Smag', color='tab:green', ls='-.')
+            plt.legend()
+            plt.axhline(y=0,ls=':',color='k')
+            plt.xlabel('wavenumber $k$ [m$^{-1}$]')
+            plt.ylabel('KE transfer [m$^3$/s$^3$]')
+            if zl==0:
+                plt.title('Upper layer')
+            else:
+                plt.title('Lower layer')
