@@ -3,6 +3,7 @@ import os
 from helpers.experiment import Experiment
 import matplotlib.pyplot as plt
 import matplotlib
+import numpy as np
 
 class CollectionOfExperiments:
     '''
@@ -156,6 +157,7 @@ class CollectionOfExperiments:
             ax2.set_ticks([0.25, 0.5, 1],[r'$1/4$', r'$1/2$', r'$1$'])
             for k in [0.25, 0.5, 1]:
                 plt.axvline(x=kmax*k,ls='-',color='gray',alpha=0.5)
+            plt.xlim([None, kmax])
             plt.xlabel('wavenumber $k$ [m$^{-1}$]')
             plt.ylabel('KE transfer [m$^3$/s$^3$]')
             if zl==0:
@@ -164,3 +166,18 @@ class CollectionOfExperiments:
             else:
                 plt.title('Lower layer',fontweight='bold',fontsize=25, loc='right')
                 plt.title('')
+
+    def plot_ssh(self, exps):
+        plt.figure(figsize=(15,4))
+        nfig = len(exps)
+        for ifig, exp in enumerate(exps):
+            plt.subplot(1,nfig,ifig+1)
+            Cplot = self[exp].ssh_mean.plot.contour(levels=np.arange(-4,4,0.5), colors='k', linewidths=1)
+            plt.gca().clabel(Cplot, Cplot.levels)
+            plt.xticks((0, 5, 10, 15, 20))
+            plt.yticks((30, 35, 40, 45, 50))
+            plt.xlabel('Longitude')
+            plt.ylabel('Latitude')
+            plt.title(self.names[exp])
+
+        plt.tight_layout()

@@ -3,7 +3,7 @@ import os
 import numpy as np
 import xrft
 from functools import cached_property
-from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, L1_error, select_LatLon
+from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon
 from helpers.netcdf_cache import netcdf_property
 
 Averaging_Time = slice(3650,7300)
@@ -56,7 +56,7 @@ class Experiment:
 
         return result
 
-    def L1_error(self, target_exp, features=['MKE_val']):
+    def Lk_error(self, target_exp, features=['MKE_val'], k=2):
         '''
         Computes averaged over characteristics
         normalized L1 error. Characteristics at each
@@ -70,7 +70,7 @@ class Experiment:
         for feature in features:
             input = self.__getattribute__(feature)
             target = target_exp.__getattribute__(feature)
-            error = L1_error(input, target)
+            error = Lk_error(input, target, k=k)
             errors_list.extend(error)
             errors_dict[feature] = error
 
