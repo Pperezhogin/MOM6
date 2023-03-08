@@ -3,7 +3,7 @@ import os
 import numpy as np
 import xrft
 from functools import cached_property
-from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon
+from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq
 from helpers.netcdf_cache import netcdf_property
 
 Averaging_Time = slice(3650,7300)
@@ -445,3 +445,91 @@ class Experiment:
     @netcdf_property
     def EPE_ssh(self):
         return self.PE_ssh_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE_ssh
+    
+    # ------------------ Advection Arakawa(gradKE)-Sadourny(PVxuv) ---------------------- #
+    @property
+    def KE_Arakawa(self):
+        '''
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L1000-L1003
+        '''
+        areaCu = self.param.dxCu * self.param.dyCu
+        areaCv = self.param.dxCv * self.param.dyCv
+        areaT = self.param.dxT * self.param.dyT
+        return 0.5 * (remesh(areaCu*self.u**2, areaT) + remesh(areaCv*self.v**2, areaT)) / areaT
+    
+    @property
+    def gradKE(self):
+        '''
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L1029-L1034
+        '''
+        KE = self.KE_Arakawa
+        IdxCu = 1. / self.param.dxCu
+        IdyCv = 1. / self.param.dyCv
+
+        KEx = diffx_uq(KE, IdxCu) * IdxCu
+        KEy = diffy_vq(KE, IdyCv) * IdyCv
+        return (KEx, KEy)
+    
+    @property
+    def relative_vorticity(self):
+        '''
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L472
+        '''
+        dyCv = self.param.dyCv
+        dxCu = self.param.dxCu
+        IareaBu = 1. / (self.param.dxBu * self.param.dyBu)
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L309-L310
+        dvdx = diffx_uq(self.v*dyCv,IareaBu)
+        dudy = diffy_vq(self.u*dxCu,IareaBu)
+        return (dvdx - dudy) * IareaBu
+    
+    @property
+    def PV_cross_uv(self):
+        '''
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L669-L671
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L788-L790
+        fx = + q * vh
+        fy = - q * uh
+        '''
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L131
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_continuity_PPM.F90#L569-L570
+        uh = self.u * remesh(self.h,self.u) * self.param.dyCu
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L133
+        vh = self.v * remesh(self.h,self.v) * self.param.dxCv
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L484
+        rel_vort = self.relative_vorticity
+
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L247
+        Area_h = self.param.dxT * self.param.dyT
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L272-L273
+        Area_q = remesh(Area_h, rel_vort) * 4
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L323
+        hArea_u = remesh(Area_h*self.h,uh)
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L320
+        hArea_v = remesh(Area_h*self.h,vh)
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L488
+        hArea_q = 2*remesh(hArea_u,rel_vort) + 2*remesh(hArea_v,rel_vort)
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L489
+        Ih_q = Area_q / hArea_q
+        
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L490
+        q = rel_vort * Ih_q
+
+        IdxCu = 1. / self.param.dxCu
+        IdyCv = 1. / self.param.dyCv
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L669-L671
+        CAu = + remesh(q * remesh(vh,q),IdxCu) * IdxCu
+        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L788-L790
+        CAv = - remesh(q * remesh(uh,q),IdyCv) * IdyCv
+
+        return (CAu, CAv)
+    
+    @property
+    def advection(self):
+        '''
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L751
+        https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L875
+        '''
+        CAu, CAv = self.PV_cross_uv
+        KEx, KEy = self.gradKE
+        return (CAu - KEx, CAv - KEy)

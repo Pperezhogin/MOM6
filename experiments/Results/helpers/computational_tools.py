@@ -6,6 +6,30 @@ from scipy import signal
 import xarray as xr
 import os
 
+def diffx_uq(array,target):
+    '''
+    finite x-difference of array defined in 
+    T points, and result belongs to U (or Q) points
+    target - u-array to inherit coordinates from
+    '''
+    p = array.isel(xh=slice(1,None)).rename({'xh':'xq'})
+    p['xq'] = target['xq'].isel(xq=slice(1,-1))
+    m = array.isel(xh=slice(None,-1)).rename({'xh':'xq'})
+    m['xq'] = target['xq'].isel(xq=slice(1,-1))
+    return remesh(p-m,target)
+
+def diffy_vq(array,target):
+    '''
+    finite y-difference of array defined in 
+    T points, and result belongs to V (or Q) points
+    target - v-array to inherit coordinates from
+    '''
+    p = array.isel(yh=slice(1,None)).rename({'yh':'yq'})
+    p['yq'] = target['yq'].isel(yq=slice(1,-1))
+    m = array.isel(yh=slice(None,-1)).rename({'yh':'yq'})
+    m['yq'] = target['yq'].isel(yq=slice(1,-1))
+    return remesh(p-m,target)
+
 def x_coord(array):
     '''
     Returns horizontal coordinate, 'xq' or 'xh'
