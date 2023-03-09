@@ -709,3 +709,25 @@ class Experiment:
         ) * IareaCv / self.h_v
 
         return (fx,fy)
+    
+    def ZB_offline_cartesian(self,amplitude=1./24):
+        D = self.sh_xy
+        RV = self.relative_vorticity
+        D_hat = self.sh_xx
+
+        trace = 0.5 * (remesh(RV**2+D**2,self.h)+D_hat**2)
+
+        RVD = remesh(RV*D,self.h)
+        S_11 = - RVD + trace
+        S_22 = + RVD + trace
+        S_12 = RV * remesh(D_hat,RV)
+
+        kappa = - amplitude * self.param.dxT * self.param.dyT
+        S_11 = S_11 * kappa
+        S_22 = S_22 * kappa
+        S_12 = S_12 * remesh(kappa,S_12)
+
+        fx = diffx_uq(S_11,self.u) / self.param.dxCu + diffy_tu(S_12,self.u) / self.param.dyCu
+        fy = diffx_tv(S_12,self.v) / self.param.dxCv + diffy_vq(S_22,self.v) / self.param.dyCv
+
+        return (fx,fy)
