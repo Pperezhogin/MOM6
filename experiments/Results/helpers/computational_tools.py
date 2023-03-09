@@ -6,6 +6,59 @@ from scipy import signal
 import xarray as xr
 import os
 
+def filter_apply(q):
+    x = x_coord(q)
+    y = y_coord(q)
+    def sel(i,j):
+        qsel = q.isel({x.name: slice(1+i,-1+i if i<1 else None), y.name: slice(1+j,-1+j if j<1 else None)})
+        qsel[x.name] = q[x.name][1:-1]
+        qsel[y.name] = q[y.name][1:-1]
+        return qsel
+    wside = 1. / 8.
+    wcorner = 1. / 16.
+    wcenter = 1. - (wside*4. + wcorner*4.)
+
+    qf =  wcenter * sel(0,0)   \
+        + wcorner * sel(-1,-1) \
+        + wcorner * sel(-1,1)  \
+        + wcorner * sel(1,-1)  \
+        + wcorner * sel(1,1)   \
+        + wside   * sel(-1,0)  \
+        + wside   * sel(1,0)   \
+        + wside   * sel(0,-1)  \
+        + wside   * sel(0,1)
+    
+    return remesh(qf,q)
+
+def filter_iteration(q, nwidth=0, nselect=1, h=None, residual=False):
+    '''
+    nwidth - width integer parameter
+    nselect - selectivity integer parameter
+    Total operator is I - (I-G^nwidth)^nselect
+    '''
+    if nwidth == 0:
+        return q
+    if nselect == 0:
+        print('Error')
+    
+    if h is not None:
+        h = remesh(h,q)
+        mask = h>2e-10
+    else:
+        mask = 1 + 0*q
+
+    q = q * mask
+    q1 = q
+    for i in range(nselect):
+        q2 = q1
+        for j in range(nwidth):
+            q2 = filter_apply(q2*mask)*mask
+        q1 = q1 - q2
+    if residual:
+        return q1
+    else:
+        return q - q1
+
 def diffy_tu(array,target):
     '''
     finite y-difference of array defined in 

@@ -3,7 +3,7 @@ import os
 import numpy as np
 import xrft
 from functools import cached_property
-from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq, diffx_tv, diffy_tu, prodx_uq, prody_vq
+from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq, diffx_tv, diffy_tu, prodx_uq, prody_vq, filter_iteration
 from helpers.netcdf_cache import netcdf_property
 
 Averaging_Time = slice(3650,7300)
@@ -644,7 +644,11 @@ class Experiment:
         h2vq = 4.0 * prodx_uq(self.h_v,self.RV)
         return (2. * (h2uq * h2vq)) / ((h2uq + h2vq) * (2.*remesh(self.h_u,self.RV) + 2.*remesh(self.h_v,self.RV)))
 
-    def ZB_offline(self, amplitude=1./24, amp_bottom=-1, ZB_type=0, ZB_cons=1):
+    def ZB_offline(self, amplitude=1./24, amp_bottom=-1, 
+            ZB_type=0, ZB_cons=1, 
+            LPF_iter=0, LPF_order=1,
+            HPF_iter=0, HPF_order=1,
+            Stress_iter=0, Stress_order=1, **kw):
         amp = xr.DataArray([amplitude, amp_bottom if amp_bottom > -0.5 else amplitude], dims=['zl'])
 
         areaBu = self.param.dxBu * self.param.dyBu
@@ -662,27 +666,38 @@ class Experiment:
         dx2h = self.param.dxT**2
         dy2h = self.param.dyT**2
 
+        def ftr(x):
+            x = filter_iteration(x,HPF_iter,HPF_order,self.h,residual=True)
+            return filter_iteration(x,LPF_iter,LPF_order,self.h,residual=False)
+
+        sh_xx = ftr(self.sh_xx)
+        sh_xy = ftr(self.sh_xy)
+        vort_xy = ftr(self.vort_xy)
+
         if ZB_type == 0:
-            sum_sq = 0.5 * (remesh(self.vort_xy,self.h)**2+remesh(self.sh_xy,self.h)**2+self.sh_xx**2)
+            sum_sq = 0.5 * (remesh(vort_xy,self.h)**2+remesh(sh_xy,self.h)**2+sh_xx**2)
         elif ZB_type == 1:
             sum_sq = 0.
         
         if ZB_cons == 0:
-            vort_sh = remesh(self.vort_xy,self.h) * remesh(self.sh_xy,self.h)
+            vort_sh = remesh(vort_xy,self.h) * remesh(sh_xy,self.h)
         elif ZB_cons == 1:
-            vort_sh = remesh(areaBu*self.vort_xy*self.sh_xy,self.h) / areaT
+            vort_sh = remesh(areaBu*vort_xy*sh_xy,self.h) / areaT
         
         k_bc = - amp * areaT
         S_11 = k_bc * (- vort_sh + sum_sq)
         S_22 = k_bc * (+ vort_sh + sum_sq)
 
-        vort_sh = self.vort_xy * remesh(self.sh_xx,self.vort_xy)
+        vort_sh = vort_xy * remesh(sh_xx,vort_xy)
         k_bc =  - amp * areaBu
         S_12 = k_bc * vort_sh
 
-        S_11 = S_11 * self.h
-        S_22 = S_22 * self.h
-        S_12 = S_12 * self.hq
+        def ftr(x):
+            return filter_iteration(x,Stress_iter,Stress_order,self.h)
+
+        S_11 = ftr(S_11) * self.h
+        S_22 = ftr(S_22) * self.h
+        S_12 = ftr(S_12) * self.hq
 
         fx = (
                 IdyCu * diffx_uq(dy2h*S_11,IdyCu) +
