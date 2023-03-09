@@ -643,17 +643,8 @@ class Experiment:
         h2uq = 4.0 * prody_vq(self.h_u,self.RV)
         h2vq = 4.0 * prodx_uq(self.h_v,self.RV)
         return (2. * (h2uq * h2vq)) / ((h2uq + h2vq) * (2.*remesh(self.h_u,self.RV) + 2.*remesh(self.h_v,self.RV)))
-
-    def ZB_offline(self, amplitude=1./24, amp_bottom=-1, 
-            ZB_type=0, ZB_cons=1, 
-            LPF_iter=0, LPF_order=1,
-            HPF_iter=0, HPF_order=1,
-            Stress_iter=0, Stress_order=1, **kw):
-        amp = xr.DataArray([amplitude, amp_bottom if amp_bottom > -0.5 else amplitude], dims=['zl'])
-
-        areaBu = self.param.dxBu * self.param.dyBu
-        areaT = self.param.dxT * self.param.dyT
-
+    
+    def divergence(self, S_11, S_12, S_22):
         IdxCu = 1. / self.param.dxCu
         IdyCu = 1. / self.param.dyCu
         IdxCv = 1. / self.param.dxCv
@@ -665,6 +656,32 @@ class Experiment:
         dy2q = self.param.dyBu**2
         dx2h = self.param.dxT**2
         dy2h = self.param.dyT**2
+
+        S_11 = S_11 * self.h
+        S_22 = S_22 * self.h
+        S_12 = S_12 * self.hq
+
+        fx = (
+                IdyCu * diffx_uq(dy2h*S_11,IdyCu) +
+                IdxCu * diffy_tu(dx2q*S_12,IdxCu)
+        ) * IareaCu / self.h_u
+        
+        fy = (
+                IdyCv * diffx_tv(dy2q*S_12,IdyCv) + 
+                IdxCv * diffy_vq(dx2h*S_22,IdxCv)
+        ) * IareaCv / self.h_v
+
+        return (fx,fy)
+
+    def ZB_offline(self, amplitude=1./24, amp_bottom=-1, 
+            ZB_type=0, ZB_cons=1, 
+            LPF_iter=0, LPF_order=1,
+            HPF_iter=0, HPF_order=1,
+            Stress_iter=0, Stress_order=1, **kw):
+        amp = xr.DataArray([amplitude, amp_bottom if amp_bottom > -0.5 else amplitude], dims=['zl'])
+
+        areaBu = self.param.dxBu * self.param.dyBu
+        areaT = self.param.dxT * self.param.dyT
 
         def ftr(x):
             x = filter_iteration(x,HPF_iter,HPF_order,self.h,residual=True)
@@ -693,23 +710,9 @@ class Experiment:
 
         def ftr(x):
             return filter_iteration(x,Stress_iter,Stress_order,self.h)
-
-        S_11 = ftr(S_11) * self.h
-        S_22 = ftr(S_22) * self.h
-        S_12 = ftr(S_12) * self.hq
-
-        fx = (
-                IdyCu * diffx_uq(dy2h*S_11,IdyCu) +
-                IdxCu * diffy_tu(dx2q*S_12,IdxCu)
-        ) * IareaCu / self.h_u
         
-        fy = (
-                IdyCv * diffx_tv(dy2q*S_12,IdyCv) + 
-                IdxCv * diffy_vq(dx2h*S_22,IdxCv)
-        ) * IareaCv / self.h_v
+        return self.divergence(ftr(S_11), ftr(S_12), ftr(S_22))
 
-        return (fx,fy)
-    
     def ZB_offline_cartesian(self,amplitude=1./24):
         D = self.sh_xy
         RV = self.relative_vorticity
