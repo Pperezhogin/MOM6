@@ -688,9 +688,8 @@ class Experiment:
         S_11 = k_bc * (- vort_sh + sum_sq)
         S_22 = k_bc * (+ vort_sh + sum_sq)
 
-        vort_sh = vort_xy * remesh(sh_xx,vort_xy)
         k_bc =  - amp * areaBu
-        S_12 = k_bc * vort_sh
+        S_12 = k_bc * vort_xy * remesh(sh_xx,vort_xy)
 
         def ftr(x):
             return filter_iteration(x,Stress_iter,Stress_order,self.h)
