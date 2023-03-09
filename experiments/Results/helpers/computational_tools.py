@@ -6,6 +6,30 @@ from scipy import signal
 import xarray as xr
 import os
 
+def diffy_tu(array,target):
+    '''
+    finite y-difference of array defined in 
+    V points, and result belongs to T (or U) points
+    target - T-array to inherit coordinates from
+    '''
+    p = array.isel(yq=slice(1,None)).rename({'yq':'yh'})
+    p['yh'] = target['yh']
+    m = array.isel(yq=slice(None,-1)).rename({'yq':'yh'})
+    m['yh'] = target['yh']
+    return remesh(p-m,target)
+
+def diffx_tv(array,target):
+    '''
+    finite x-difference of array defined in 
+    U points, and result belongs to T (or V) points
+    target - T-array to inherit coordinates from
+    '''
+    p = array.isel(xq=slice(1,None)).rename({'xq':'xh'})
+    p['xh'] = target['xh']
+    m = array.isel(xq=slice(None,-1)).rename({'xq':'xh'})
+    m['xh'] = target['xh']
+    return remesh(p-m,target)
+
 def diffx_uq(array,target):
     '''
     finite x-difference of array defined in 
@@ -29,6 +53,30 @@ def diffy_vq(array,target):
     m = array.isel(yh=slice(None,-1)).rename({'yh':'yq'})
     m['yq'] = target['yq'].isel(yq=slice(1,-1))
     return remesh(p-m,target)
+
+def prodx_uq(array,target):
+    '''
+    product in x direction of array defined in 
+    T points, and result belongs to U (or Q) points
+    target - u-array to inherit coordinates from
+    '''
+    p = array.isel(xh=slice(1,None)).rename({'xh':'xq'})
+    p['xq'] = target['xq'].isel(xq=slice(1,-1))
+    m = array.isel(xh=slice(None,-1)).rename({'xh':'xq'})
+    m['xq'] = target['xq'].isel(xq=slice(1,-1))
+    return remesh(p*m,target)
+
+def prody_vq(array,target):
+    '''
+    product in y direction of array defined in 
+    T points, and result belongs to V (or Q) points
+    target - v-array to inherit coordinates from
+    '''
+    p = array.isel(yh=slice(1,None)).rename({'yh':'yq'})
+    p['yq'] = target['yq'].isel(yq=slice(1,-1))
+    m = array.isel(yh=slice(None,-1)).rename({'yh':'yq'})
+    m['yq'] = target['yq'].isel(yq=slice(1,-1))
+    return remesh(p*m,target)
 
 def x_coord(array):
     '''
@@ -71,7 +119,7 @@ def rename_coordinates(xr_dataset):
         except:
             pass
 
-def select_LatLon(array, Lat, Lon):
+def select_LatLon(array, Lat=(35,45), Lon=(5,15)):
     '''
     array is xarray
     Lat, Lon = tuples of floats

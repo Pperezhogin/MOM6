@@ -202,7 +202,6 @@ class CollectionOfExperiments:
             plt.ylabel('Power spectrum [m$^3$/s$^4$]')
             plt.title('')
             
-
     def plot_ssh(self, exps):
         plt.figure(figsize=(15,4))
         nfig = len(exps)

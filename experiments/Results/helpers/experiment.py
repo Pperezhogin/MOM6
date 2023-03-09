@@ -3,7 +3,7 @@ import os
 import numpy as np
 import xrft
 from functools import cached_property
-from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq
+from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq, diffx_tv, diffy_tu, prodx_uq, prody_vq
 from helpers.netcdf_cache import netcdf_property
 
 Averaging_Time = slice(3650,7300)
@@ -592,3 +592,106 @@ class Experiment:
     @netcdf_property
     def SGSy(self):
         return self.subgrid_forcing[1]
+    
+    # --------------------- ZB offline ---------------------- #
+    @property
+    def dudx(self):
+        IdyCu = 1. / self.param.dyCu
+        DY_dxT = self.param.dyT / self.param.dxT
+        return DY_dxT * diffx_tv(self.u*IdyCu,DY_dxT)
+    
+    @property
+    def dvdy(self):
+        IdxCv = 1. / self.param.dxCv
+        DX_dyT = self.param.dxT / self.param.dyT
+        return DX_dyT * diffy_tu(self.v*IdxCv,DX_dyT)
+    
+    @property
+    def dudy(self):
+        IdxCu = 1. / self.param.dxCu
+        DX_dyBu = self.param.dxBu / self.param.dyBu
+        return DX_dyBu * diffy_vq(self.u*IdxCu,DX_dyBu)
+    
+    @property
+    def dvdx(self):
+        IdyCv = 1. / self.param.dyCv
+        DY_dxBu = self.param.dyBu / self.param.dxBu
+        return DY_dxBu * diffx_uq(self.v*IdyCv,DY_dxBu)
+    
+    @property
+    def sh_xx(self):
+        return self.dudx - self.dvdy
+    
+    @property
+    def sh_xy(self):
+        return self.dvdx + self.dudy
+    
+    @property
+    def vort_xy(self):
+        return self.dvdx - self.dudy
+    
+    @property
+    def h_u(self):
+        return remesh(self.h, self.u)
+    
+    @property
+    def h_v(self):
+        return remesh(self.h, self.v)
+    
+    @property
+    def hq(self):
+        h2uq = 4.0 * prody_vq(self.h_u,self.RV)
+        h2vq = 4.0 * prodx_uq(self.h_v,self.RV)
+        return (2. * (h2uq * h2vq)) / ((h2uq + h2vq) * (2.*remesh(self.h_u,self.RV) + 2.*remesh(self.h_v,self.RV)))
+
+    def ZB_offline(self, amplitude=1./24, amp_bottom=-1, ZB_type=0, ZB_cons=1):
+        amp = xr.DataArray([amplitude, amp_bottom if amp_bottom > -0.5 else amplitude], dims=['zl'])
+
+        areaBu = self.param.dxBu * self.param.dyBu
+        areaT = self.param.dxT * self.param.dyT
+
+        IdxCu = 1. / self.param.dxCu
+        IdyCu = 1. / self.param.dyCu
+        IdxCv = 1. / self.param.dxCv
+        IdyCv = 1. / self.param.dyCv
+        
+        IareaCu = 1. / (self.param.dxCu * self.param.dyCu)
+        IareaCv = 1. / (self.param.dxCv * self.param.dyCv)
+        dx2q = self.param.dxBu**2
+        dy2q = self.param.dyBu**2
+        dx2h = self.param.dxT**2
+        dy2h = self.param.dyT**2
+
+        if ZB_type == 0:
+            sum_sq = 0.5 * (remesh(self.vort_xy,self.h)**2+remesh(self.sh_xy,self.h)**2+self.sh_xx**2)
+        elif ZB_type == 1:
+            sum_sq = 0.
+        
+        if ZB_cons == 0:
+            vort_sh = remesh(self.vort_xy,self.h) * remesh(self.sh_xy,self.h)
+        elif ZB_cons == 1:
+            vort_sh = remesh(areaBu*self.vort_xy*self.sh_xy,self.h) / areaT
+        
+        k_bc = - amp * areaT
+        S_11 = k_bc * (- vort_sh + sum_sq)
+        S_22 = k_bc * (+ vort_sh + sum_sq)
+
+        vort_sh = self.vort_xy * remesh(self.sh_xx,self.vort_xy)
+        k_bc =  - amp * areaBu
+        S_12 = k_bc * vort_sh
+
+        S_11 = S_11 * self.h
+        S_22 = S_22 * self.h
+        S_12 = S_12 * self.hq
+
+        fx = (
+                IdyCu * diffx_uq(dy2h*S_11,IdyCu) +
+                IdxCu * diffy_tu(dx2q*S_12,IdxCu)
+        ) * IareaCu / self.h_u
+        
+        fy = (
+                IdyCv * diffx_tv(dy2q*S_12,IdyCv) + 
+                IdxCv * diffy_vq(dx2h*S_22,IdxCv)
+        ) * IareaCv / self.h_v
+
+        return (fx,fy)
