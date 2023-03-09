@@ -96,8 +96,8 @@ class CollectionOfExperiments:
 
         return cls(exps, experiments_dict, names_dict)
     
-    def plot_KE_spectrum(self, exps, key='KE_spectrum', ax=None):
-        
+    def plot_KE_spectrum(self, exps, key='KE_spectrum'):
+        fig, ax = plt.subplots(1,2,figsize=(13,7))
         p = []
         for exp in exps:
             KE = self[exp].__getattribute__(key)
@@ -216,3 +216,60 @@ class CollectionOfExperiments:
             plt.title(self.names[exp])
 
         plt.tight_layout()
+
+    def plot_KE_PE(self, exps=['R4', 'R8', 'R64_R4'], labels=None, color=['k', 'tab:cyan', 'tab:blue', 'tab:red']):
+        if labels is None:
+            labels = exps
+        plt.figure(figsize=(9,9))
+        plt.subplots_adjust(wspace=0.4, hspace=0.6)
+        width = (len(exps)-1) * [0.4] + [1]
+        for zl in range(2):
+            plt.subplot(2,2,zl+1)
+            MKE = []
+            EKE = []
+            for exp in exps:          
+                MKE.append(1e-15*self[exp].MKE_joul.isel(zl=zl).values)
+                EKE.append(1e-15*self[exp].EKE_joul.isel(zl=zl).values)
+            x=np.arange(len(exps));
+            x[-1] += 1.5
+            plt.bar(x,MKE,width,label='MKE',color=color[0])
+            plt.bar(x,EKE,width,bottom=MKE,label='EKE',color=color[1])
+            plt.ylabel('Kinetic energy, PJ', fontsize=14);
+            plt.xticks(ticks=x,labels=labels);
+            if zl==0:
+                plt.title('KE, Upper layer')
+            else:
+                plt.title('KE, Lower layer')
+            plt.legend(loc='upper left', fontsize=14)
+            plt.ylim([0, (EKE[-1]+MKE[-1])*(1.55-zl/2)])
+            
+        plt.subplot(2,2,3)
+        MPE = []
+        EPE = []
+        for exp in exps:
+            MPE.append(1e-15*self[exp].MPE_joul.values)
+            EPE.append(1e-15*self[exp].EPE_joul.values)     
+        x=np.arange(len(exps));
+        x[-1] += 1.5
+        plt.bar(x,MPE,width,label='MPE',color=color[2])
+        plt.bar(x,EPE,width,bottom=MPE,label='EPE',color=color[3])
+        plt.ylabel('Interface displacement \n potential energy, PJ', fontsize=14);
+        plt.xticks(ticks=x,labels=labels);
+        plt.title('Potential energy')
+        plt.legend(loc='upper left', fontsize=14)
+        plt.ylim([0, (EPE[-1]+MPE[-1])*1.8])
+        plt.axhline(y=MPE[-1], ls=':', color=color[2])
+        
+        plt.subplot(2,2,4)
+        EKE = []
+        for exp in exps:          
+            EKE.append(1e-15*self[exp].EKE_joul.values.sum())
+        x=np.arange(len(exps));
+        x[-1] += 1.5
+        plt.bar(x,EKE,width,label='EKE',color=color[1])
+        plt.bar(x,EPE,width,bottom=EKE, label='EPE',color=color[3])
+        plt.ylabel('Eddy energy, PJ', fontsize=14)
+        plt.title('Energy of eddies')
+        plt.xticks(ticks=x,labels=labels);
+        plt.legend(loc='upper left', fontsize=14)
+        plt.ylim([0, (EKE[-1]+EPE[-1])*1.4])

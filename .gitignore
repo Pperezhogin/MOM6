@@ -18,3 +18,4 @@ experiments/test*
 .vscode/*
 experiments/Results/figures/*
 experiments/Results/*.pdf
+experiments/Results/*.png
