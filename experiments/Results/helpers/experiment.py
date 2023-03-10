@@ -681,7 +681,7 @@ class Experiment:
 
         return (fx,fy)
 
-    def ZB_offline(self, amplitude=1./24, amp_bottom=-1, 
+    def ZB_offline(self, amplitude=1., amp_bottom=-1, 
             ZB_type=0, ZB_cons=1, 
             LPF_iter=0, LPF_order=1,
             HPF_iter=0, HPF_order=1,

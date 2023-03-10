@@ -6,6 +6,52 @@ from scipy import signal
 import xarray as xr
 import os
 
+def optimal_amplitude(ZBx,ZBy,Smagx,Smagy,SGSx,SGSy,u,v,amp_Eng):
+    '''
+    Model:
+    SGSx = Smagx + amp * ZBx
+    SGSy = Smagy + amp * ZBy
+    '''
+    def sel(x):
+        return select_LatLon(x).sel(Time=slice(3650,7300))
+    ZBx = sel(ZBx)
+    ZBy = sel(ZBy)
+    Smagx = sel(Smagx)
+    Smagy = sel(Smagy)
+    SGSx = sel(SGSx)
+    SGSy = sel(SGSy)
+    u = sel(u)
+    v = sel(v)
+    
+    y1 = SGSx - Smagx
+    y2 = SGSy - Smagy
+    x1 = ZBx
+    x2 = ZBy
+    
+    dim_u = [d for d in u.dims if d != 'zl']
+    dim_v = [d for d in v.dims if d != 'zl']
+    
+    def scal(y1,x1,y2,x2):
+        return (y1*x1).sum(dim=dim_u)+(y2*x2).sum(dim=dim_v)
+    
+    # MSE optimization
+    amp_MSE = scal(y1,x1,y2,x2) / scal(x1,x1,x2,x2)
+    # Energy influx optimization
+    #amp_Eng = scal(y1,u,y2,v) / scal(x1,u,x2,v)
+    
+    def fMSE(x,y):
+        try:
+            return ((x-y)**2).sum(dim=dim_u) / ((y)**2).sum(dim=dim_u)
+        except:
+            return ((x-y)**2).sum(dim=dim_v) / ((y)**2).sum(dim=dim_v)
+    
+    # metrics
+    MSE     = (fMSE(amp_MSE*ZBx+Smagx,SGSx) + fMSE(amp_MSE*ZBy+Smagy,SGSy))/2
+    MSE_Eng = (fMSE(amp_Eng*ZBx+Smagx,SGSx) + fMSE(amp_Eng*ZBy+Smagy,SGSy))/2
+    
+    corr = (xr.corr(ZBx.chunk({'zl':1,'Time':1}),SGSx,dim=dim_u)+xr.corr(ZBy.chunk({'zl':1,'Time':1}),SGSy,dim=dim_v))/2
+    return amp_MSE, MSE, MSE_Eng, corr
+
 def filter_apply(q):
     x = x_coord(q)
     y = y_coord(q)
@@ -36,10 +82,8 @@ def filter_iteration(q, nwidth=0, nselect=1, h=None, residual=False):
     nselect - selectivity integer parameter
     Total operator is I - (I-G^nwidth)^nselect
     '''
-    if nwidth == 0:
+    if nwidth == 0 or nselect == 0:
         return q
-    if nselect == 0:
-        print('Error')
     
     if h is not None:
         h = remesh(h,q)
@@ -290,8 +334,8 @@ def compute_isotropic_cospectrum(u_in, v_in, fu_in, fv_in, dx, dy, Lat=(35,45), 
     # Interpolate to the center of the cells
     u = remesh(u_in, dx)
     v = remesh(v_in, dy)
-    fu = remesh(fu_in, dx)
-    fv = remesh(fv_in, dy)
+    fu = remesh(fu_in.transpose(*u_in.dims), dx)
+    fv = remesh(fv_in.transpose(*v_in.dims), dy)
 
     # Select desired Lon-Lat square
     u = select_LatLon(u,Lat,Lon)
