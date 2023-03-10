@@ -594,41 +594,42 @@ class Experiment:
         return self.subgrid_forcing[1]
     
     # --------------------- ZB offline ---------------------- #
-    @property
-    def dudx(self):
+    def dudx(self,u=None):
+        if u is None:
+            u = self.u
         IdyCu = 1. / self.param.dyCu
         DY_dxT = self.param.dyT / self.param.dxT
-        return DY_dxT * diffx_tv(self.u*IdyCu,DY_dxT)
+        return DY_dxT * diffx_tv(u*IdyCu,DY_dxT)
     
-    @property
-    def dvdy(self):
+    def dvdy(self,v=None):
+        if v is None:
+            v = self.v
         IdxCv = 1. / self.param.dxCv
         DX_dyT = self.param.dxT / self.param.dyT
-        return DX_dyT * diffy_tu(self.v*IdxCv,DX_dyT)
+        return DX_dyT * diffy_tu(v*IdxCv,DX_dyT)
     
-    @property
-    def dudy(self):
+    def dudy(self,u=None):
+        if u is None:
+            u = self.u
         IdxCu = 1. / self.param.dxCu
         DX_dyBu = self.param.dxBu / self.param.dyBu
-        return DX_dyBu * diffy_vq(self.u*IdxCu,DX_dyBu)
+        return DX_dyBu * diffy_vq(u*IdxCu,DX_dyBu)
     
-    @property
-    def dvdx(self):
+    def dvdx(self,v=None):
+        if v is None:
+            v = self.v
         IdyCv = 1. / self.param.dyCv
         DY_dxBu = self.param.dyBu / self.param.dxBu
-        return DY_dxBu * diffx_uq(self.v*IdyCv,DY_dxBu)
+        return DY_dxBu * diffx_uq(v*IdyCv,DY_dxBu)
     
-    @property
-    def sh_xx(self):
-        return self.dudx - self.dvdy
+    def sh_xx(self,u=None,v=None):
+        return self.dudx(u) - self.dvdy(v)
     
-    @property
-    def sh_xy(self):
-        return self.dvdx + self.dudy
+    def sh_xy(self,u=None,v=None):
+        return self.dvdx(v) + self.dudy(u)
     
-    @property
-    def vort_xy(self):
-        return self.dvdx - self.dudy
+    def vort_xy(self,u=None,v=None):
+        return self.dvdx(v) - self.dudy(u)
     
     @property
     def h_u(self):
@@ -644,7 +645,7 @@ class Experiment:
         h2vq = 4.0 * prodx_uq(self.h_v,self.RV)
         return (2. * (h2uq * h2vq)) / ((h2uq + h2vq) * (2.*remesh(self.h_u,self.RV) + 2.*remesh(self.h_v,self.RV)))
     
-    def divergence(self, S_11, S_12, S_22):
+    def divergence(self, S_11, S_12, S_22, h=True):
         IdxCu = 1. / self.param.dxCu
         IdyCu = 1. / self.param.dyCu
         IdxCv = 1. / self.param.dxCv
@@ -657,19 +658,26 @@ class Experiment:
         dx2h = self.param.dxT**2
         dy2h = self.param.dyT**2
 
-        S_11 = S_11 * self.h
-        S_22 = S_22 * self.h
-        S_12 = S_12 * self.hq
+        if h:
+            S_11 = S_11 * self.h
+            S_22 = S_22 * self.h
+            S_12 = S_12 * self.hq
 
         fx = (
                 IdyCu * diffx_uq(dy2h*S_11,IdyCu) +
                 IdxCu * diffy_tu(dx2q*S_12,IdxCu)
-        ) * IareaCu / self.h_u
+        ) * IareaCu
+
+        if h:
+            fx = fx / self.h_u
         
         fy = (
                 IdyCv * diffx_tv(dy2q*S_12,IdyCv) + 
                 IdxCv * diffy_vq(dx2h*S_22,IdxCv)
-        ) * IareaCv / self.h_v
+        ) * IareaCv
+
+        if h:
+            fy = fy / self.h_v
 
         return (fx,fy)
 
@@ -687,9 +695,9 @@ class Experiment:
             x = filter_iteration(x,HPF_iter,HPF_order,self.h,residual=True)
             return filter_iteration(x,LPF_iter,LPF_order,self.h,residual=False)
 
-        sh_xx = ftr(self.sh_xx)
-        sh_xy = ftr(self.sh_xy)
-        vort_xy = ftr(self.vort_xy)
+        sh_xx = ftr(self.sh_xx())
+        sh_xy = ftr(self.sh_xy())
+        vort_xy = ftr(self.vort_xy())
 
         if ZB_type == 0:
             sum_sq = 0.5 * (remesh(vort_xy,self.h)**2+remesh(sh_xy,self.h)**2+sh_xx**2)
@@ -714,9 +722,9 @@ class Experiment:
         return self.divergence(ftr(S_11), ftr(S_12), ftr(S_22))
 
     def ZB_offline_cartesian(self,amplitude=1./24):
-        D = self.sh_xy
+        D = self.sh_xy()
         RV = self.relative_vorticity
-        D_hat = self.sh_xx
+        D_hat = self.sh_xx()
 
         trace = 0.5 * (remesh(RV**2+D**2,self.h)+D_hat**2)
 
@@ -734,3 +742,24 @@ class Experiment:
         fy = diffx_tv(S_12,self.v) / self.param.dxCv + diffy_vq(S_22,self.v) / self.param.dyCv
 
         return (fx,fy)
+    
+    def Smagorinsky(self, Cs=0.03):
+        dx2h = self.param.dxT**2
+        dy2h = self.param.dyT**2
+        grid_sp2 = (2 * dx2h * dy2h) / (dx2h + dy2h)
+        Biharm_const = Cs * grid_sp2**2
+
+        Shear_mag = (self.sh_xx()**2+remesh(self.sh_xy()**2,self.h))**0.5
+
+        AhSm = Biharm_const * Shear_mag
+
+        # Del2u = Laplace(u)
+        Del2u, Del2v = self.divergence(self.sh_xx(), self.sh_xy(), -self.sh_xx(), h=False)
+
+        S_11 = AhSm * self.sh_xx(Del2u,Del2v)
+        S_12 = remesh(AhSm,self.RV) * self.sh_xy(Del2u,Del2v)
+
+        fx, fy = self.divergence(S_11, S_12, -S_11)
+
+        # Viscosity and ZB are different in sign in from of divergence
+        return (-fx, -fy)
