@@ -76,6 +76,48 @@ def filter_apply(q):
     
     return remesh(qf,q)
 
+def filter_AD(q, nwidth=1, norder=0):
+    '''
+    Implements operator
+    sum_{i=0}^{norder} (I - G^nwidth)^i = 
+    I + (I-G^nwidth) + (I-G^nwidth)^2 + ... + (I-G^nwidth)^norder
+    for norder=0 returns the same field
+    '''
+    if norder==0 or nwidth==0:
+        return q
+    
+    residual = q
+    for i in range(norder):
+        residual = I_minus_G(residual, nwidth)
+        q = q + residual
+
+    return q
+
+def I_minus_G(q, nwidth=1, mask=1):
+    '''
+    Implements operator
+    I - G^nwidth
+    '''
+    
+    q0 = q
+    for j in range(nwidth):
+        q = filter_apply(q*mask)*mask
+
+    return q0 - q
+
+def I_minus_G_nselect(q, nwidth=1, nselect=1, mask=1):
+    '''
+    Implements operator
+    (I-G^nwidth)^nselect
+    '''
+    if nselect==0 or nwidth==0:
+        return q
+    
+    for i in range(nselect):
+        q = I_minus_G(q, nwidth, mask)
+
+    return q
+
 def filter_iteration(q, nwidth=0, nselect=1, h=None, residual=False):
     '''
     nwidth - width integer parameter
@@ -89,19 +131,14 @@ def filter_iteration(q, nwidth=0, nselect=1, h=None, residual=False):
         h = remesh(h,q)
         mask = h>2e-10
     else:
-        mask = 1 + 0*q
+        mask = 1
 
     q = q * mask
-    q1 = q
-    for i in range(nselect):
-        q2 = q1
-        for j in range(nwidth):
-            q2 = filter_apply(q2*mask)*mask
-        q1 = q1 - q2
+    
     if residual:
-        return q1
+        return I_minus_G_nselect(q, nwidth, nselect, mask)
     else:
-        return q - q1
+        return q - I_minus_G_nselect(q, nwidth, nselect, mask)
 
 def diffy_tu(array,target):
     '''

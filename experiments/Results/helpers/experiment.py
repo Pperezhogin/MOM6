@@ -3,7 +3,7 @@ import os
 import numpy as np
 import xrft
 from functools import cached_property
-from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq, diffx_tv, diffy_tu, prodx_uq, prody_vq, filter_iteration
+from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq, diffx_tv, diffy_tu, prodx_uq, prody_vq, filter_iteration, filter_AD
 from helpers.netcdf_cache import netcdf_property
 
 Averaging_Time = slice(3650,7300)
@@ -248,45 +248,46 @@ class Experiment:
     def KE_spectrum_global(self):
         return self.KE_spectrum_global_series.sel(Time=Averaging_Time).mean(dim='Time')
     
+    def transfer(self, fx, fy, **kw):
+        return compute_isotropic_cospectrum(self.u, self.v, fx, fy,
+            self.param.dxT, self.param.dyT, **kw).sel(Time=Averaging_Time).mean(dim='Time')
+    
+    def power(self, fx, fy, **kw):
+        return 2*compute_isotropic_KE(fx, fy,
+            self.param.dxT, self.param.dyT, **kw).sel(Time=Averaging_Time).mean(dim='Time')
+
     @netcdf_property
     def Smagorinsky_transfer(self):
-        return compute_isotropic_cospectrum(self.u, self.v, self.smagu, self.smagv,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+        return self.transfer(self.smagu, self.smagv)
     
     @netcdf_property
     def ZB_transfer(self):
-        return compute_isotropic_cospectrum(self.u, self.v, self.mom.ZB2020u, self.mom.ZB2020v,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
-    
+        return self.transfer(self.mom.ZB2020u, self.mom.ZB2020v)
+        
     @property
     def Model_transfer(self):
         return self.Smagorinsky_transfer+self.ZB_transfer
     
     @netcdf_property
     def SGS_transfer(self):
-        return compute_isotropic_cospectrum(self.u, self.v, self.SGSx, self.SGSy,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
-    
+        return self.transfer(self.SGSx, self.SGSy)
+        
     @netcdf_property
     def Smagorinsky_power(self):
-        return 2*compute_isotropic_KE(self.smagu, self.smagv,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
-    
+        return self.power(self.smagu, self.smagv)
+        
     @netcdf_property
     def ZB_power(self):
-        return 2*compute_isotropic_KE(self.mom.ZB2020u, self.mom.ZB2020v,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
-    
+        return self.power(self.mom.ZB2020u, self.mom.ZB2020v)
+        
     @netcdf_property
     def Model_power(self):
-        return 2*compute_isotropic_KE(self.mom.diffu, self.mom.diffv,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
-
+        return self.power(self.mom.diffu, self.mom.diffv)
+        
     @netcdf_property
     def SGS_power(self):
-        return 2*compute_isotropic_KE(self.SGSx, self.SGSy,
-            self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
-    
+        return self.power(self.SGSx, self.SGSy)
+        
     @property
     def kmax(self):
         '''
@@ -685,7 +686,8 @@ class Experiment:
             ZB_type=0, ZB_cons=1, 
             LPF_iter=0, LPF_order=1,
             HPF_iter=0, HPF_order=1,
-            Stress_iter=0, Stress_order=1, **kw):
+            Stress_iter=0, Stress_order=1,
+            AD_iter=0, AD_order=0, **kw):
         amp = xr.DataArray([amplitude, amp_bottom if amp_bottom > -0.5 else amplitude], dims=['zl'])
 
         areaBu = self.param.dxBu * self.param.dyBu
@@ -693,7 +695,9 @@ class Experiment:
 
         def ftr(x):
             x = filter_iteration(x,HPF_iter,HPF_order,self.h,residual=True)
-            return filter_iteration(x,LPF_iter,LPF_order,self.h,residual=False)
+            x = filter_iteration(x,LPF_iter,LPF_order,self.h,residual=False)
+            x = filter_AD(x,AD_iter,AD_order)
+            return x
 
         sh_xx = ftr(self.sh_xx())
         sh_xy = ftr(self.sh_xy())
@@ -743,6 +747,7 @@ class Experiment:
 
         return (fx,fy)
     
+    # --------------------------- Smagorinsky biharmonic model --------------------------- #
     def Smagorinsky(self, Cs=0.03):
         dx2h = self.param.dxT**2
         dy2h = self.param.dyT**2
@@ -763,3 +768,78 @@ class Experiment:
 
         # Viscosity and ZB are different in sign in from of divergence
         return (-fx, -fy)
+    
+    # -------------------------- Reynolds stress model -------------------------- #
+    
+    def Reynolds(self, nwidth=1, nselect=1, Cr=10):
+        u = self.u
+        v = self.v
+
+        def bar(x):
+            return filter_iteration(x,nwidth,nselect,self.h,residual=False)
+
+        def dash(x):
+            return filter_iteration(x,nwidth,nselect,self.h,residual=True)
+        
+        ud = dash(u)
+        vd = dash(v)
+
+        S_11 = remesh(bar(ud) * bar(ud) - bar(ud * ud),self.h)
+        S_12 = remesh(bar(ud),self.RV) * remesh(bar(vd),self.RV) - bar(remesh(ud,self.RV) * remesh(vd,self.RV))
+        S_22 = remesh(bar(vd) * bar(vd) - bar(vd * vd),self.h)
+
+        return self.divergence(Cr * S_11, Cr * S_12, Cr * S_22)
+    
+    # -------------------------- SSM model -------------------------- #
+
+    def SSM(self, nwidth=1, nselect=1, C=1):
+        u = self.u
+        v = self.v
+
+        def bar(x):
+            return filter_iteration(x,nwidth,nselect,self.h,residual=False)
+        
+        ub = u
+        vb = v
+
+        S_11 = remesh(bar(ub) * bar(ub) - bar(ub * ub),self.h)
+        S_12 = remesh(bar(ub),self.RV) * remesh(bar(vb),self.RV) - bar(remesh(ub,self.RV) * remesh(vb,self.RV))
+        S_22 = remesh(bar(vb) * bar(vb) - bar(vb * vb),self.h)
+
+        return self.divergence(C * S_11, C * S_12, C * S_22)
+    
+    def ADM(self, nwidth=1, norder=1, C=1):
+        u = self.u
+        v = self.v
+
+        def bar(x):
+            return filter_iteration(x,nwidth,1,self.h,residual=False)
+        
+        ub = filter_AD(u,nwidth,norder)
+        vb = filter_AD(v,nwidth,norder)
+
+        S_11 = remesh(bar(ub) * bar(ub) - bar(ub * ub),self.h)
+        S_12 = remesh(bar(ub),self.RV) * remesh(bar(vb),self.RV) - bar(remesh(ub,self.RV) * remesh(vb,self.RV))
+        S_22 = remesh(bar(vb) * bar(vb) - bar(vb * vb),self.h)
+
+        return self.divergence(C * S_11, C * S_12, C * S_22)
+    
+    # -------------------------- Jansen-Held model -------------------------- #
+    def LaplacianViscosity(self):
+        '''
+        This is dissipative operator with unit viscosity
+        '''
+        return self.divergence(self.sh_xx(), self.sh_xy(), -self.sh_xx(), h=True)
+
+    def JansenHeld(self, ratio=1, Cs=0.03, nu=1):
+        Dx,Dy = self.Smagorinsky(Cs=Cs)
+        Bx,By = self.LaplacianViscosity()
+
+        #Ediss = select_LatLon(Dx * self.u).mean(dim=('xq','yh')) + select_LatLon(Dy * self.v).mean(dim=('xh','yq'))
+        #Eback = select_LatLon(Bx * self.u).mean(dim=('xq','yh')) + select_LatLon(By * self.v).mean(dim=('xh','yq'))
+        
+        #mass_average(remesh(Dx*self.u,self.h)+remesh(Dy*self.v,self.h), self.h, self.param.dxT, self.param.dyT)
+        #Eback = mass_average(remesh(Bx*self.u,self.h)+remesh(By*self.v,self.h), self.h, self.param.dxT, self.param.dyT)
+        
+#        nu = -ratio * Ediss / Eback
+        return (nu*Bx+Dx, nu*By+Dy)

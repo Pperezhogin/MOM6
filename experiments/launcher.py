@@ -202,6 +202,18 @@ if __name__ == '__main__':
     #     parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=1,HPF_order=1,LPF_iter=1,LPF_order=2,amplitude=amplitude)
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/HPF-LPF/EXP{j}', HPC.add(ntasks=2), parameters)
 
+    # for j, amplitude in enumerate(np.linspace(0,10,41)):
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=amplitude)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best/EXP{j}', HPC.add(ntasks=10), parameters)
+
     for j, amplitude in enumerate(np.linspace(0,10,41)):
-        parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=amplitude)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best/EXP{j}', HPC.add(ntasks=10), parameters)
+        parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,amplitude=amplitude)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-noLPF/EXP{j}', HPC.add(ntasks=10), parameters)
+
+    for j, amplitude in enumerate(np.linspace(0,10,41)):
+        parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=amplitude)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-noStress/EXP{j}', HPC.add(ntasks=10), parameters)
+
+    for j, amplitude in enumerate(np.linspace(0,10,41)):
+        parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,amplitude=amplitude)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-HPFonly/EXP{j}', HPC.add(ntasks=10), parameters)
