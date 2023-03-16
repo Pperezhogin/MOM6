@@ -96,43 +96,45 @@ class CollectionOfExperiments:
 
         return cls(exps, experiments_dict, names_dict)
     
-    def plot_KE_spectrum(self, exps, key='KE_spectrum'):
-        fig, ax = plt.subplots(1,2,figsize=(13,7))
+    def plot_KE_spectrum(self, exps, key='EKE_spectrum', labels=None):
+        if labels is None:
+            labels=exps
+        fig, ax = plt.subplots(1,2,figsize=(15,6))
         p = []
-        for exp in exps:
+        for j,exp in enumerate(exps):
             KE = self[exp].__getattribute__(key)
             k = KE.freq_r
 
             KE_upper = KE.isel(zl=0)
             KE_lower = KE.isel(zl=1)
 
-            p.extend(ax[0].loglog(k, KE_upper, label=self.names[exp]))
+            p.extend(ax[0].loglog(k, KE_upper, label=labels[j], color='k' if exp==exps[-1] else None))
             ax[0].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[0].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[0].set_title('Upper layer')
             ax[0].legend(prop={'size': 14})
             ax[0].grid(which='both',linestyle=':')
 
-            p.extend(ax[1].loglog(k, KE_lower, label=self.names[exp]))
+            p.extend(ax[1].loglog(k, KE_lower, label=labels[j], color='k' if exp==exps[-1] else None))
             ax[1].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[1].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[1].set_title('Lower layer')
             ax[1].legend(prop={'size': 14})
             ax[1].grid(which='both',linestyle=':')
 
-        k = [5e-5, 1e-3]
+        k = [5e-5, 1e-4]
         E = [1.5e+2, 0]
         E[1] = E[0] * (k[1]/k[0])**(-3)
         ax[0].loglog(k,E,'--k')
-        ax[0].text(2e-4,1e+1,'$k^{-3}$')
-        ax[0].set_xlim([2e-6, 2e-3])
+        ax[0].text(8e-5,5e+1,'$k^{-3}$')
+        #ax[0].set_xlim([2e-6, 2e-3])
         
-        ax[1].set_xlim([2e-6, 2e-3])
-        k = [5e-5, 1e-3]
+        #ax[1].set_xlim([2e-6, 2e-3])
+        k = [5e-5, 1e-4]
         E = [3e+1, 0]
         E[1] = E[0] * (k[1]/k[0])**(-3)
         ax[1].loglog(k,E,'--k')
-        ax[1].text(2e-4,1e+1,'$k^{-3}$')
+        ax[1].text(8e-5,1e+1,'$k^{-3}$')
 
         return p
     
@@ -202,8 +204,10 @@ class CollectionOfExperiments:
             plt.ylabel('Power spectrum [m$^3$/s$^4$]')
             plt.title('')
             
-    def plot_ssh(self, exps):
-        plt.figure(figsize=(15,4))
+    def plot_ssh(self, exps, labels=None):
+        if labels is None:
+            labels=exps
+        plt.figure(figsize=(4*len(exps),4))
         nfig = len(exps)
         for ifig, exp in enumerate(exps):
             plt.subplot(1,nfig,ifig+1)
@@ -213,7 +217,7 @@ class CollectionOfExperiments:
             plt.yticks((30, 35, 40, 45, 50))
             plt.xlabel('Longitude')
             plt.ylabel('Latitude')
-            plt.title(self.names[exp])
+            plt.title(labels[ifig])
 
         plt.tight_layout()
 

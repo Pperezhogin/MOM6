@@ -230,6 +230,9 @@ class Experiment:
     def e_mean(self):
         return self.ea.sel(Time=Averaging_Time).mean(dim='Time')
 
+    def average(self, prop):
+        return eval(f'self.{prop}').sel(Time=Averaging_Time).mean(dim='Time')
+
     #-----------------------  Spectral analysis  ------------------------#
     @netcdf_property
     def KE_spectrum_series(self):
@@ -585,6 +588,26 @@ class Experiment:
             print('Error: subgrid forcing cannot be computed')
             print('because there is no associated hires experiment')
             return
+    
+    @property
+    def subgrid_momentum_flux(self):
+        uc = self.u
+        vc = self.v
+        hc = self.h
+        RVc = self.RV
+
+        u = self._hires.u
+        v = self._hires.v
+        h = self._hires.h
+        
+        ub = u
+        vb = v
+
+        S_11 = remesh(u*u,hc) - remesh(uc*uc,hc)
+        S_22 = remesh(v*v,hc) - remesh(vc*vc,hc)
+        S_12 = remesh(remesh(u,h) * remesh(v,h),RVc) - remesh(uc,RVc) * remesh(vc,RVc)
+        return S_11, S_12, S_22
+    
         
     @netcdf_property
     def SGSx(self):
@@ -723,7 +746,7 @@ class Experiment:
         def ftr(x):
             return filter_iteration(x,Stress_iter,Stress_order,self.h)
         
-        return self.divergence(ftr(S_11), ftr(S_12), ftr(S_22))
+        return self.divergence(ftr(S_11), ftr(S_12), ftr(S_22)), -S_11, -S_12, -S_22
 
     def ZB_offline_cartesian(self,amplitude=1./24):
         D = self.sh_xy()
