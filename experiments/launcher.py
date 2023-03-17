@@ -12,6 +12,7 @@ def create_slurm(p, filename):
     '#SBATCH --cpus-per-task=1',
     '#SBATCH --mem='+str(p['mem'])+'GB',
     '#SBATCH --time='+str(p['time'])+':00:00',
+    '#SBATCH --begin=now+'+str(p['begin']),
     '#SBATCH --job-name='+str(p['name']),
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
@@ -69,61 +70,71 @@ def configuration(exp='R4'):
         return dictionary(
             NIGLOBAL=44,
             NJGLOBAL=40,
-            DT=2160.
+            DT=2160.,
+            DT_FORCING=2160.
         )
     if exp=='R3':
         return dictionary(
             NIGLOBAL=66,
             NJGLOBAL=60,
-            DT=1440.
+            DT=1440.,
+            DT_FORCING=1440.
         )
     if exp=='R4':
         return dictionary(
             NIGLOBAL=88,
             NJGLOBAL=80,
-            DT=1080.
+            DT=1080.,
+            DT_FORCING=1080.
         )
     if exp=='R6':
         return dictionary(
             NIGLOBAL=132,
             NJGLOBAL=120,
-            DT=720.
+            DT=720.,
+            DT_FORCING=720.
         )
     if exp=='R8':
         return dictionary(
             NIGLOBAL=176,
             NJGLOBAL=160,
-            DT=540.
+            DT=540.,
+            DT_FORCING=540.
         )
     if exp=='R10':
         return dictionary(
             NIGLOBAL=220,
             NJGLOBAL=200,
-            DT=432.
+            DT=432.,
+            DT_FORCING=432.
         )
     if exp=='R12':
         return dictionary(
             NIGLOBAL=264,
             NJGLOBAL=240,
-            DT=360.
+            DT=360.,
+            DT_FORCING=360.
         )
     if exp=='R16':
         return dictionary(
             NIGLOBAL=352,
             NJGLOBAL=320,
-            DT=270.
+            DT=270.,
+            DT_FORCING=270.
         )
     if exp=='R32':
         return dictionary(
             NIGLOBAL=704,
             NJGLOBAL=640,
-            DT=135.
+            DT=135.,
+            DT_FORCING=135.
         )
     if exp=='R64':
         return dictionary(
             NIGLOBAL=1408,
             NJGLOBAL=1280,
-            DT=67.5
+            DT=67.5,
+            DT_FORCING=67.5
         )
 
 HPC = dictionary(
@@ -131,7 +142,8 @@ HPC = dictionary(
     ntasks=4,
     mem=10,
     time=24,
-    name='mom6'
+    name='mom6',
+    begin='0hour'
 )  
 
 PARAMETERS = dictionary(
@@ -206,14 +218,27 @@ if __name__ == '__main__':
     #     parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=amplitude)
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best/EXP{j}', HPC.add(ntasks=10), parameters)
 
-    for j, amplitude in enumerate(np.linspace(0,10,41)):
-        parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,amplitude=amplitude)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-noLPF/EXP{j}', HPC.add(ntasks=10), parameters)
+    # for j, amplitude in enumerate(np.linspace(0,10,41)):
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,amplitude=amplitude)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-noLPF/EXP{j}', HPC.add(ntasks=10), parameters)
 
-    for j, amplitude in enumerate(np.linspace(0,10,41)):
-        parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=amplitude)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-noStress/EXP{j}', HPC.add(ntasks=10), parameters)
+    # for j, amplitude in enumerate(np.linspace(0,10,41)):
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=amplitude)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-noStress/EXP{j}', HPC.add(ntasks=10), parameters)
 
-    for j, amplitude in enumerate(np.linspace(0,10,41)):
-        parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,amplitude=amplitude)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-HPFonly/EXP{j}', HPC.add(ntasks=10), parameters)
+    # for j, amplitude in enumerate(np.linspace(0,10,41)):
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,amplitude=amplitude)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-HPFonly/EXP{j}', HPC.add(ntasks=10), parameters)
+
+    for conf in ['R10', 'R12']:#['R2', 'R3', 'R4', 'R6', 'R8', 'R10', 'R12', 'R16']:
+        ntasks = dict(R2=4, R3=4, R4=16, R6=48, R8=48, R10=48, R12=48, R16=48)[conf]
+        nodes = dict(R2=1, R3=1, R4=1, R6=1, R8=1, R10=2, R12=2, R16=3)[conf]
+        begin = '0hour' if conf in ['R2', 'R3', 'R4', 'R6', 'R8'] else '0hour'
+        parameters0 = PARAMETERS.add(**configuration(conf))
+        run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_ref', HPC.add(ntasks=ntasks,nodes=nodes,mem=32,begin=begin,name=conf+'-ref'), parameters0)
+        parameters = parameters0.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=7.0)
+        #run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_EXP205', HPC.add(ntasks=ntasks,ndoes=nodes,mem=32,begin=begin,name=conf+'-205'), parameters)
+        parameters = parameters0.add(USE_ZB2020='True',Stress_iter=4,Stress_order=1,amplitude=0.75)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_momf', HPC.add(ntasks=ntasks,nodes=nodes,mem=32,begin=begin,name=conf+'-mom'), parameters)
+        print(conf+' done')
+        input()

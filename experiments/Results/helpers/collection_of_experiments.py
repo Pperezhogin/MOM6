@@ -239,13 +239,13 @@ class CollectionOfExperiments:
             plt.bar(x,MKE,width,label='MKE',color=color[0])
             plt.bar(x,EKE,width,bottom=MKE,label='EKE',color=color[1])
             plt.ylabel('Kinetic energy, PJ', fontsize=14);
-            plt.xticks(ticks=x,labels=labels);
+            plt.xticks(ticks=x,labels=labels,rotation='vertical')
             if zl==0:
                 plt.title('KE, Upper layer')
             else:
                 plt.title('KE, Lower layer')
             plt.legend(loc='upper left', fontsize=14)
-            plt.ylim([0, (EKE[-1]+MKE[-1])*(1.55-zl/2)])
+            plt.ylim([0, 1.5*(EKE[-1]+MKE[-1])*(1.55-zl/2)])
             
         plt.subplot(2,2,3)
         MPE = []
@@ -258,7 +258,7 @@ class CollectionOfExperiments:
         plt.bar(x,MPE,width,label='MPE',color=color[2])
         plt.bar(x,EPE,width,bottom=MPE,label='EPE',color=color[3])
         plt.ylabel('Interface displacement \n potential energy, PJ', fontsize=14);
-        plt.xticks(ticks=x,labels=labels);
+        plt.xticks(ticks=x,labels=labels,rotation='vertical')
         plt.title('Potential energy')
         plt.legend(loc='upper left', fontsize=14)
         plt.ylim([0, (EPE[-1]+MPE[-1])*1.8])
@@ -274,6 +274,6 @@ class CollectionOfExperiments:
         plt.bar(x,EPE,width,bottom=EKE, label='EPE',color=color[3])
         plt.ylabel('Eddy energy, PJ', fontsize=14)
         plt.title('Energy of eddies')
-        plt.xticks(ticks=x,labels=labels);
+        plt.xticks(ticks=x,labels=labels,rotation='vertical')
         plt.legend(loc='upper left', fontsize=14)
-        plt.ylim([0, (EKE[-1]+EPE[-1])*1.4])
+        plt.ylim([0, 1.5*(EKE[-1]+EPE[-1])*1.4])

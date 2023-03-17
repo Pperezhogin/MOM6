@@ -57,7 +57,7 @@ class Experiment:
 
         return result
 
-    def Lk_error(self, target_exp, features=['MKE_val'], k=2):
+    def Lk_error(self, target_exp, features=['MKE_val'], normalize=True, k=2):
         '''
         Computes averaged over characteristics
         normalized L1 error. Characteristics at each
@@ -71,7 +71,7 @@ class Experiment:
         for feature in features:
             input = self.__getattribute__(feature)
             target = target_exp.__getattribute__(feature)
-            error = Lk_error(input, target, k=k)
+            error = Lk_error(input, target, normalize=normalize, k=k)
             errors_list.extend(error)
             errors_dict[feature] = error
 
