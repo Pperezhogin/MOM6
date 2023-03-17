@@ -92,31 +92,10 @@
 "ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","kbc_ZB2020","kbc_ZB2020","mom_%4yr_%3dy","all",.false.,"none",2
-
 "ocean_model","maskT","maskT","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","onesT","onesT","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","chessT","chessT","mom_%4yr_%3dy","all",.false.,"none",2
-
 "ocean_model","maskq","maskq","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","onesq","onesq","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","chessq","chessq","mom_%4yr_%3dy","all",.false.,"none",2
-
-"ocean_model","sh_xx","sh_xx","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","sh_xxf","sh_xxf","mom_%4yr_%3dy","all",.false.,"none",2
-
-"ocean_model","sh_xy","sh_xy","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","sh_xyf","sh_xyf","mom_%4yr_%3dy","all",.false.,"none",2
-
-"ocean_model","vort_xy","vort_xy","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","vort_xyf","vort_xyf","mom_%4yr_%3dy","all",.false.,"none",2
-
-"ocean_model","S_11","S_11","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","S_11f","S_11f","mom_%4yr_%3dy","all",.false.,"none",2
-
-"ocean_model","S_22","S_22","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","S_22f","S_22f","mom_%4yr_%3dy","all",.false.,"none",2
-
-"ocean_model","S_12","S_12","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","S_12f","S_12f","mom_%4yr_%3dy","all",.false.,"none",2
 
 # Barotropic Momentum Balance Terms:

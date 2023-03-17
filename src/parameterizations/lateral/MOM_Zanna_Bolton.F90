@@ -52,7 +52,7 @@ contains
 
 subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   type(time_type),         intent(in)    :: Time       !< The current model time.
-  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(verticalGrid_type), intent(in)    :: GV         !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)    :: US         !< A dimensional unit scaling type
   type(param_file_type),   intent(in)    :: param_file !< Parameter file parser structure.
   type(diag_ctrl), target, intent(inout) :: diag       !< Diagnostics structure.
@@ -127,47 +127,17 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   ! masks and action of filter on test fields
   CS%id_maskT  = register_diag_field('ocean_model', 'maskT', diag%axesTL, Time, &
       'mask of wet T points', '1', conversion=1.)
-  CS%id_onesT  = register_diag_field('ocean_model', 'onesT', diag%axesTL, Time, &
-      'result of action of the filter on ones array at T', '1', conversion=1.)
-  CS%id_chessT  = register_diag_field('ocean_model', 'chessT', diag%axesTL, Time, &
-      'result of action of the filter on chess array at T', '1', conversion=1.)
-
+  
   CS%id_maskq  = register_diag_field('ocean_model', 'maskq', diag%axesBL, Time, &
       'mask of wet q points', '1', conversion=1.)
-  CS%id_onesq  = register_diag_field('ocean_model', 'onesq', diag%axesBL, Time, &
-      'result of action of the filter on ones array at q', '1', conversion=1.)
-  CS%id_chessq  = register_diag_field('ocean_model', 'chessq', diag%axesBL, Time, &
-      'result of action of the filter on chess array at q', '1', conversion=1.)
-
-  ! action of filter on velocity gradients
-  CS%id_sh_xx = register_diag_field('ocean_model', 'sh_xx', diag%axesTL, Time, &
-      'tension', 's-1', conversion=US%s_to_T)
-  CS%id_sh_xxf = register_diag_field('ocean_model', 'sh_xxf', diag%axesTL, Time, &
-      'tension filtered', 's-1', conversion=US%s_to_T)
-
-  CS%id_sh_xy = register_diag_field('ocean_model', 'sh_xy', diag%axesBL, Time, &
-      'shear', 's-1', conversion=US%s_to_T)
-  CS%id_sh_xyf = register_diag_field('ocean_model', 'sh_xyf', diag%axesBL, Time, &
-      'shear filtered', 's-1', conversion=US%s_to_T)
-
-  CS%id_vort_xy = register_diag_field('ocean_model', 'vort_xy', diag%axesBL, Time, &
-      'vorticity', 's-1', conversion=US%s_to_T)
-  CS%id_vort_xyf = register_diag_field('ocean_model', 'vort_xyf', diag%axesBL, Time, &
-      'vorticity filtered', 's-1', conversion=US%s_to_T)
-
+  
   ! action of filter on momentum flux
-  CS%id_S_11 = register_diag_field('ocean_model', 'S_11', diag%axesTL, Time, &
-      '11 momentum flux', 'm2s-2', conversion=US%L_T_to_m_s**2)
   CS%id_S_11f = register_diag_field('ocean_model', 'S_11f', diag%axesTL, Time, &
       '11 momentum flux filtered', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
-  CS%id_S_22 = register_diag_field('ocean_model', 'S_22', diag%axesTL, Time, &
-      '22 momentum flux', 'm2s-2', conversion=US%L_T_to_m_s**2)
   CS%id_S_22f = register_diag_field('ocean_model', 'S_22f', diag%axesTL, Time, &
       '22 momentum flux filtered', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
-  CS%id_S_12 = register_diag_field('ocean_model', 'S_12', diag%axesBL, Time, &
-      '12 momentum flux', 'm2s-2', conversion=US%L_T_to_m_s**2)
   CS%id_S_12f = register_diag_field('ocean_model', 'S_12f', diag%axesBL, Time, &
       '12 momentum flux filtered', 'm2s-2', conversion=US%L_T_to_m_s**2)
   
@@ -255,25 +225,12 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     kbc_3d,    &          ! k_bc parameter as 3d field [L2 ~> m2]
-    mask_T_3d, &
-    onesT_3d,  &          
-    chessT_3d, &         
-    sh_xx_3d,  &         
-    sh_xx_3df, &         
-    S_11_3d,   &          
-    S_11_3df,  &          
-    S_22_3d,   &          
+    mask_T_3d, &          
+    S_11_3df,  &                    
     S_22_3df
 
     real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
     mask_q_3d, &          
-    onesq_3d,  &
-    chessq_3d, &
-    sh_xy_3d,  &         
-    sh_xy_3df, &         
-    vort_xy_3d,  &         
-    vort_xy_3df, &         
-    S_12_3d,   &          
     S_12_3df      
 
   real, dimension(SZIB_(G),SZJ_(G)) :: &
@@ -373,24 +330,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xy(:,:) = sh_xy(:,:) * mask_q(:,:)
     vort_xy(:,:) = vort_xy(:,:) * mask_q(:,:)
 
-    onesT_3d(:,:,k) = mask_T(:,:)
-    onesq_3d(:,:,k) = mask_q(:,:)
-    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=onesT_3d(:,:,k))
-    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=onesT_3d(:,:,k))
-
-    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=onesq_3d(:,:,k))
-    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=onesq_3d(:,:,k))
-
-    call set_chessnoise(G, T=chessT_3d(:,:,k), q=chessq_3d(:,:,k))
-    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=chessT_3d(:,:,k))
-    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=chessT_3d(:,:,k))
-
-    call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=chessq_3d(:,:,k))
-    call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=chessq_3d(:,:,k))
-
-    sh_xx_3d(:,:,k) = sh_xx(:,:)
-    sh_xy_3d(:,:,k) = sh_xy(:,:)
-    vort_xy_3d(:,:,k) = vort_xy(:,:)
     call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=sh_xx)
     call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=sh_xx)
 
@@ -399,10 +338,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
     call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, q=vort_xy)
     call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, q=vort_xy)
-    sh_xx_3df(:,:,k) = sh_xx(:,:)
-    sh_xy_3df(:,:,k) = sh_xy(:,:)
-    vort_xy_3df(:,:,k) = vort_xy(:,:)
-
+    
     ! Corner to center interpolation (line 901 of MOM_hor_visc.F90)
     ! lower index as in loop for sh_xy, but minus 1
     ! upper index is identical 
@@ -475,9 +411,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 
-    S_11_3d(:,:,k) = S_11(:,:)
-    S_22_3d(:,:,k) = S_22(:,:)
-    S_12_3d(:,:,k) = S_12(:,:)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_11)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_22)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, q=S_12)
@@ -524,29 +457,12 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   if (CS%id_kbc>0)       call post_data(CS%id_kbc, kbc_3d, CS%diag)
   
   if (CS%id_maskT>0)     call post_data(CS%id_maskT, mask_T_3d, CS%diag)
-  if (CS%id_onesT>0)     call post_data(CS%id_onesT, onesT_3d, CS%diag)
-  if (CS%id_chessT>0)    call post_data(CS%id_chessT, chessT_3d, CS%diag)
-
   if (CS%id_maskq>0)     call post_data(CS%id_maskq, mask_q_3d, CS%diag)
-  if (CS%id_onesq>0)     call post_data(CS%id_onesq, onesq_3d, CS%diag)
-  if (CS%id_chessq>0)    call post_data(CS%id_chessq, chessq_3d, CS%diag)
-
-  if (CS%id_sh_xx>0)     call post_data(CS%id_sh_xx, sh_xx_3d, CS%diag)
-  if (CS%id_sh_xxf>0)    call post_data(CS%id_sh_xxf, sh_xx_3df, CS%diag)
-
-  if (CS%id_sh_xy>0)     call post_data(CS%id_sh_xy, sh_xy_3d, CS%diag)
-  if (CS%id_sh_xyf>0)    call post_data(CS%id_sh_xyf, sh_xy_3df, CS%diag)
-
-  if (CS%id_vort_xy>0)   call post_data(CS%id_vort_xy, vort_xy_3d, CS%diag)
-  if (CS%id_vort_xyf>0)  call post_data(CS%id_vort_xyf, vort_xy_3df, CS%diag)
-
-  if (CS%id_S_11>0)      call post_data(CS%id_S_11, S_11_3d, CS%diag)
+  
   if (CS%id_S_11f>0)     call post_data(CS%id_S_11f, S_11_3df, CS%diag)
 
-  if (CS%id_S_22>0)      call post_data(CS%id_S_22, S_22_3d, CS%diag)
   if (CS%id_S_22f>0)     call post_data(CS%id_S_22f, S_22_3df, CS%diag)
 
-  if (CS%id_S_12>0)      call post_data(CS%id_S_12, S_12_3d, CS%diag)
   if (CS%id_S_12f>0)     call post_data(CS%id_S_12f, S_12_3df, CS%diag)
 
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
@@ -604,7 +520,7 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
       q(:,:) = q1(:,:)
     endif
     
-    call check_nan(q, 'applying filter at q points')
+    !call check_nan(q, 'applying filter at q points')
 
     if (n_highpass==1 .AND. n_lowpass>0) then
       call min_max(q, min_after, max_after)
@@ -635,7 +551,7 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
       T(:,:) = T1(:,:)
     endif
     
-    call check_nan(T, 'applying filter at T points')
+    !call check_nan(T, 'applying filter at T points')
 
     if (n_highpass==1 .AND. n_lowpass>0) then
       call min_max(T, min_after, max_after)
