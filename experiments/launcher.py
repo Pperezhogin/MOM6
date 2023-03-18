@@ -163,7 +163,9 @@ PARAMETERS = dictionary(
     HPF_iter=0,
     HPF_order=1,
     Stress_iter=0,
-    Stress_order=1
+    Stress_order=1,
+    ssd_iter=-1,
+    ssd_bound_coef=0.8
 ) + configuration('R4')
 
 #########################################################################################
@@ -230,15 +232,33 @@ if __name__ == '__main__':
     #     parameters = PARAMETERS.add(USE_ZB2020='True',HPF_iter=2,HPF_order=2,amplitude=amplitude)
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/Smagorinsky-ZB-1D/best-HPFonly/EXP{j}', HPC.add(ntasks=10), parameters)
 
-    for conf in ['R10', 'R12']:#['R2', 'R3', 'R4', 'R6', 'R8', 'R10', 'R12', 'R16']:
-        ntasks = dict(R2=4, R3=4, R4=16, R6=48, R8=48, R10=48, R12=48, R16=48)[conf]
-        nodes = dict(R2=1, R3=1, R4=1, R6=1, R8=1, R10=2, R12=2, R16=3)[conf]
-        begin = '0hour' if conf in ['R2', 'R3', 'R4', 'R6', 'R8'] else '0hour'
-        parameters0 = PARAMETERS.add(**configuration(conf))
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_ref', HPC.add(ntasks=ntasks,nodes=nodes,mem=32,begin=begin,name=conf+'-ref'), parameters0)
-        parameters = parameters0.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=7.0)
-        #run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_EXP205', HPC.add(ntasks=ntasks,ndoes=nodes,mem=32,begin=begin,name=conf+'-205'), parameters)
-        parameters = parameters0.add(USE_ZB2020='True',Stress_iter=4,Stress_order=1,amplitude=0.75)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_momf', HPC.add(ntasks=ntasks,nodes=nodes,mem=32,begin=begin,name=conf+'-mom'), parameters)
-        print(conf+' done')
-        input()
+    # for conf in ['R10', 'R12']:#['R2', 'R3', 'R4', 'R6', 'R8', 'R10', 'R12', 'R16']:
+    #     ntasks = dict(R2=4, R3=4, R4=16, R6=48, R8=48, R10=48, R12=48, R16=48)[conf]
+    #     nodes = dict(R2=1, R3=1, R4=1, R6=1, R8=1, R10=2, R12=2, R16=3)[conf]
+    #     begin = '0hour' if conf in ['R2', 'R3', 'R4', 'R6', 'R8'] else '0hour'
+    #     parameters0 = PARAMETERS.add(**configuration(conf))
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_ref', HPC.add(ntasks=ntasks,nodes=nodes,mem=32,begin=begin,name=conf+'-ref'), parameters0)
+    #     parameters = parameters0.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=7.0)
+    #     #run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_EXP205', HPC.add(ntasks=ntasks,ndoes=nodes,mem=32,begin=begin,name=conf+'-205'), parameters)
+    #     parameters = parameters0.add(USE_ZB2020='True',Stress_iter=4,Stress_order=1,amplitude=0.75)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_momf', HPC.add(ntasks=ntasks,nodes=nodes,mem=32,begin=begin,name=conf+'-mom'), parameters)
+    #     print(conf+' done')
+    #     input()
+
+    # parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=0., ssd_iter=4, ssd_bound_coef=0.05)
+    # run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/R4-filter-4-0.05', HPC.add(ntasks=14), parameters)
+
+    # parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=0., ssd_iter=10, ssd_bound_coef=0.05)
+    # run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/R4-filter-10-0.05', HPC.add(ntasks=14), parameters)
+
+    # for amplitude in [i/10. for i in range(0,11)]:
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=4, ssd_bound_coef=0.05)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-4-iter/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)
+
+    # for amplitude in [i/10. for i in range(0,11)]:
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=10, ssd_bound_coef=0.05)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-10-iter/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)
+
+    for amplitude in [i/10. for i in range(0,11)]:
+        parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=10, ssd_bound_coef=0.2)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-10-iter-0.2/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)

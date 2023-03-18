@@ -21,29 +21,30 @@ public Zanna_Bolton_2020, ZB_2020_init
 !> Control structure that contains MEKE parameters and diagnostics handles
 type, public :: ZB2020_CS
   ! Parameters
-  logical   :: use_ZB2020    !< If true, parameterization works
-  real      :: amplitude     !< k_bc = - amplitude * cell_area
-  real      :: amp_bottom    !< amplitude in the bottom layer; -1 = use same
-  integer   :: ZB_type       !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
-  integer   :: ZB_cons       !< 0: nonconservative; 1: conservative without interface;
-  integer   :: LPF_iter      !< Low-pass filter for Velocity gradient; number of iterations
-  integer   :: LPF_order     !< Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
-  integer   :: HPF_iter      !< High-pass filter for Velocity gradient; number of iterations
-  integer   :: HPF_order     !< High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
-  integer   :: Stress_iter  !< Low-pass filter for Stress (Momentum Flux); number of iterations
-  integer   :: Stress_order  !< Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian
+  logical   :: use_ZB2020     !< If true, parameterization works
+  real      :: amplitude      !< k_bc = - amplitude * cell_area
+  real      :: amp_bottom     !< amplitude in the bottom layer; -1 = use same
+  integer   :: ZB_type        !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
+  integer   :: ZB_cons        !< 0: nonconservative; 1: conservative without interface;
+  integer   :: LPF_iter       !< Low-pass filter for Velocity gradient; number of iterations
+  integer   :: LPF_order      !< Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
+  integer   :: HPF_iter       !< High-pass filter for Velocity gradient; number of iterations
+  integer   :: HPF_order      !< High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
+  integer   :: Stress_iter    !< Low-pass filter for Stress (Momentum Flux); number of iterations
+  integer   :: Stress_order   !< Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian
+  integer   :: ssd_iter       !< Small-scale dissipation in RHS of momentum eq; -1: off, 0:Laplacian, 4:Laplacian^5
+  real      :: ssd_bound_coef !< the viscosity bounds to the theoretical maximum for stability
+
+  real      :: DT            !< The (baroclinic) dynamics time step.
   
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1, id_kbc = -1
-  integer :: id_maskT = -1, id_onesT = -1, id_chessT = -1
-  integer :: id_maskq = -1, id_onesq = -1, id_chessq = -1
-  integer :: id_sh_xx = -1, id_sh_xxf = -1
-  integer :: id_sh_xy = -1, id_sh_xyf = -1
-  integer :: id_vort_xy = -1, id_vort_xyf = -1
-  integer :: id_S_11 = -1, id_S_11f = -1
-  integer :: id_S_22 = -1, id_S_22f = -1
-  integer :: id_S_12 = -1, id_S_12f = -1
+  integer :: id_maskT = -1
+  integer :: id_maskq = -1
+  integer :: id_S_11f = -1
+  integer :: id_S_22f = -1
+  integer :: id_S_12f = -1
   !>@}
 
 end type ZB2020_CS
@@ -109,6 +110,18 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "Stress_order", CS%Stress_order, &
                  "Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian", &
                  default=2)
+
+  call get_param(param_file, mdl, "ssd_iter", CS%ssd_iter, &
+                 "Small-scale dissipation in RHS of momentum eq; -1: off, 0:Laplacian, 4:Laplacian^5", &
+                 default=-1)
+
+  call get_param(param_file, mdl, "ssd_bound_coef", CS%ssd_bound_coef, &
+                 "The viscosity bounds to the theoretical maximum for stability", units="nondim", &
+                 default=0.8)
+  
+  call get_param(param_file, mdl, "DT", CS%dt, &
+                 "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
+                 fail_if_missing=.true.)
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -208,6 +221,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     vort_xy_center, &  ! vort_xy in the center
     sh_xy_center, &    ! sh_xy in the center
     S_11, S_22, &      ! flux tensor in the cell center, multiplied with interface height [m^2/s^2 * h]
+    ssd_11, &          ! diagonal part of ssd in cell center
     mask_T             ! mask of wet center points
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
@@ -220,6 +234,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xy, &           ! horizontal shearing strain (du/dy + dv/dx) including metric terms [T-1 ~> s-1]
     sh_xx_corner, &    ! sh_xx in the corner
     S_12, &            ! flux tensor in the corner, multiplied with interface height [m^2/s^2 * h]
+    ssd_12, &          ! off-diagonal part of ssd in corner
     hq, &              ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
     mask_q             ! mask of wet corner points
 
@@ -330,6 +345,20 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xy(:,:) = sh_xy(:,:) * mask_q(:,:)
     vort_xy(:,:) = vort_xy(:,:) * mask_q(:,:)
 
+    if (CS%ssd_iter > -1) then
+      ssd_11(:,:) = sh_xx(:,:) * &
+                  CS%ssd_bound_coef * 0.25 / CS%DT * &
+                  dx2h(:,:) * dy2h(:,:) / (dx2h(:,:) + dy2h(:,:))
+      ssd_12(:,:) = sh_xy(:,:) * &
+                  CS%ssd_bound_coef * 0.25 / CS%DT * &
+                  dx2q(:,:) * dy2q(:,:) / (dx2q(:,:) + dy2q(:,:))
+     
+      if (CS%ssd_iter > 0) then
+        call filter(G, mask_T, mask_q, -1, CS%ssd_iter, T=ssd_11)
+        call filter(G, mask_T, mask_q, -1, CS%ssd_iter, q=ssd_12)
+      endif
+    endif
+
     call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=sh_xx)
     call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=sh_xx)
 
@@ -414,9 +443,16 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_11)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_22)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, q=S_12)
+   
     S_11_3df(:,:,k) = S_11(:,:)
     S_22_3df(:,:,k) = S_22(:,:)
     S_12_3df(:,:,k) = S_12(:,:)
+
+    if (CS%ssd_iter>-1) then
+      S_11(:,:) = S_11(:,:) + ssd_11(:,:)
+      S_12(:,:) = S_12(:,:) + ssd_12(:,:)
+      S_22(:,:) = S_22(:,:) - ssd_11(:,:)
+    endif
 
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
     ! Note that reduction is removed
