@@ -168,6 +168,28 @@ PARAMETERS = dictionary(
     ssd_bound_coef=0.8
 ) + configuration('R4')
 
+JansenHeld = dictionary(
+    USE_MEKE='True',
+    MEKE_VISCOSITY_COEFF_KU=-0.15, #See Jansen2019, top of page 2852
+    RES_SCALE_MEKE_VISC='False', # Do not turn off parameterization if deformation radius is resolved
+    MEKE_ADVECTION_FACTOR=0.0, # No advection of MEKE
+    MEKE_BACKSCAT_RO_POW=0.0, # Turn off Klower correction for MEKE source
+    MEKE_USCALE=0.1, # velocity scale in bottom drag, see Eq. 9 in Jansen2019
+    # MEKE_CDRAG is responsible for dissipation of MEKE near the bottom and automatically
+    # will be chosen as 0.003, which is 10 smaller than the value in Jansen2019
+    MEKE_GMCOEFF=-1.0, # No GM contribution
+    MEKE_KHCOEFF=0.15, # Compute diffusivity from MEKE, with same parameter as for backscatter
+    MEKE_KHMEKE_FAC=1.0, # diffusivity of MEKE is defined by the diffusivity coefficient
+    MEKE_KH=0.0, # backgorund diffusivity of MEKE
+
+    LAPLACIAN='True', # Allow Laplacian operator for backscattering
+    KH=0.0, # No background diffusivity
+    KH_VEL_SCALE=0.0, # No velocity scale to calculate diffusivity
+    SMAGORINSKY_KH='False', # No Smagorinsky diffusivity
+    BOUND_KH='False', # bounding is not needed for negative diffusivity
+    BETTER_BOUND_KH='False'
+)
+
 #########################################################################################
 if __name__ == '__main__':
     # for ntasks in [1, 4, 8, 10, 16, 24, 48]:
@@ -259,6 +281,33 @@ if __name__ == '__main__':
     #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=10, ssd_bound_coef=0.05)
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-10-iter/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)
 
-    for amplitude in [i/10. for i in range(0,11)]:
-        parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=10, ssd_bound_coef=0.2)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-10-iter-0.2/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)
+    # for amplitude in [i/10. for i in range(0,11)]:
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=10, ssd_bound_coef=0.2)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-10-iter-0.2/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)
+
+    # for amplitude in [i/10. for i in range(0,11)]:
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=amplitude, ssd_iter=10, ssd_bound_coef=0.8)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/gov-eq-filter/ZB-ssd-10-iter-0.8/amplitude-{str(amplitude)}', HPC.add(ntasks=10), parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R6', 'R8']:
+    #     ntasks = dict(R2=4, R3=4, R4=16, R6=24, R8=24, R10=48, R12=48, R16=48)[conf]
+    #     nodes = dict(R2=1, R3=1, R4=1, R6=1, R8=1, R10=2, R12=2, R16=3)[conf]
+    #     parameters0 = PARAMETERS.add(**configuration(conf))
+    #     parameters = parameters0.add(USE_ZB2020='True',amplitude=0.3)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_ZB', HPC.add(ntasks=ntasks,nodes=nodes,mem=16,name=conf+'-ZB'), parameters)
+    #     parameters = parameters0.add(USE_ZB2020='True',amplitude=0.3,ssd_iter=10,ssd_bound_coef=0.2)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/generalization/{conf}_ZB-ssd', HPC.add(ntasks=ntasks,nodes=nodes,mem=16,name=conf+'-ZBsd'), parameters)
+    #     print(conf+' done')
+    #     input()
+
+    # for ZB_type, postfix in zip([0,1,2],['full','trace-free','trace-only']):
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=1,Stress_order=2,HPF_iter=2,HPF_order=2,LPF_iter=1,LPF_order=4,amplitude=7.0, ZB_type=ZB_type)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/trace/EXP205-{postfix}', HPC, parameters)
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',Stress_iter=4,Stress_order=1,amplitude=0.75, ZB_type=ZB_type)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/trace/momf-{postfix}', HPC, parameters)
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=0.3, ZB_type=ZB_type)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/trace/ZB-{postfix}', HPC, parameters)
+    #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=0.3,ssd_iter=10,ssd_bound_coef=0.2, ZB_type=ZB_type)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/trace/ZB-ssd-{postfix}', HPC, parameters)
+
+    run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/JansenHeld/R4-JH', HPC, PARAMETERS+JansenHeld)

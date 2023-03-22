@@ -24,7 +24,7 @@ type, public :: ZB2020_CS
   logical   :: use_ZB2020     !< If true, parameterization works
   real      :: amplitude      !< k_bc = - amplitude * cell_area
   real      :: amp_bottom     !< amplitude in the bottom layer; -1 = use same
-  integer   :: ZB_type        !< 0 = Zanna Bolton 2020, 1 = Anstey Zanna 2017
+  integer   :: ZB_type        !< 0 = Full model, 1 = trace-free part, 2 = only trace part
   integer   :: ZB_cons        !< 0: nonconservative; 1: conservative without interface;
   integer   :: LPF_iter       !< Low-pass filter for Velocity gradient; number of iterations
   integer   :: LPF_order      !< Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian
@@ -80,7 +80,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   if (CS%amp_bottom < -0.5) CS%amp_bottom = CS%amplitude
   
   call get_param(param_file, mdl, "ZB_type", CS%ZB_type, &
-                 "Type of parameterization: 0 = ZB2020, 1 = AZ2017", &
+                 "Type of parameterization: 0 = full, 1 = trace-free, 2 = trace-only", &
                  default=0)
 
   call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
@@ -408,22 +408,26 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! Indices - intersection of loops for
     ! sh_xy_center and sh_xx
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      if (CS%ZB_type == 0) then
+      if (CS%ZB_type == 1) then 
+        sum_sq = 0.
+      else
         sum_sq = 0.5 * &
         (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j)**2)
-      elseif (CS%ZB_type == 1) then
-        sum_sq = 0.
       endif
       
-      if (CS%ZB_cons == 1) then
-        vort_sh = 0.25 * (                                          &
-          (G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1)  + &
-           G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  )) + &
-          (G%areaBu(I-1,J  ) * vort_xy(I-1,J  ) * sh_xy(I-1,J  )  + &
-           G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1))   &
-          ) * G%IareaT(i,j)
-      else if (CS%ZB_cons == 0) then
-        vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
+      if (CS%ZB_type == 2) then
+        vort_sh = 0.
+      else
+        if (CS%ZB_cons == 1) then
+          vort_sh = 0.25 * (                                          &
+            (G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1)  + &
+            G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  )) + &
+            (G%areaBu(I-1,J  ) * vort_xy(I-1,J  ) * sh_xy(I-1,J  )  + &
+            G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1))   &
+            ) * G%IareaT(i,j)
+        else if (CS%ZB_cons == 0) then
+          vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
+        endif
       endif
       k_bc = - amplitude * G%areaT(i,j)
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
@@ -435,7 +439,11 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ! Form S_12 tensor
     ! indices correspond to sh_xx_corner loop
     do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
-      vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
+      if (CS%ZB_type == 2) then
+        vort_sh = 0.
+      else 
+        vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
+      endif
       k_bc = - amplitude * G%areaBu(i,j)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
