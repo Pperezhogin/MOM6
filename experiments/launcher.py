@@ -171,23 +171,32 @@ PARAMETERS = dictionary(
 JansenHeld = dictionary(
     USE_MEKE='True',
     MEKE_VISCOSITY_COEFF_KU=-0.15, #See Jansen2019, top of page 2852
-    RES_SCALE_MEKE_VISC='False', # Do not turn off parameterization if deformation radius is resolved
-    MEKE_ADVECTION_FACTOR=0.0, # No advection of MEKE
+    RES_SCALE_MEKE_VISC=False, # Do not turn off parameterization if deformation radius is resolved
+    MEKE_ADVECTION_FACTOR=1.0, # YES advection of MEKE
     MEKE_BACKSCAT_RO_POW=0.0, # Turn off Klower correction for MEKE source
     MEKE_USCALE=0.1, # velocity scale in bottom drag, see Eq. 9 in Jansen2019
     # MEKE_CDRAG is responsible for dissipation of MEKE near the bottom and automatically
     # will be chosen as 0.003, which is 10 smaller than the value in Jansen2019
     MEKE_GMCOEFF=-1.0, # No GM contribution
     MEKE_KHCOEFF=0.15, # Compute diffusivity from MEKE, with same parameter as for backscatter
+    MEKE_FRCOEFF=1.0, # Conersion of dissipated KE to MEKE
     MEKE_KHMEKE_FAC=1.0, # diffusivity of MEKE is defined by the diffusivity coefficient
     MEKE_KH=0.0, # backgorund diffusivity of MEKE
+    MEKE_CD_SCALE=1.0, # No intensification on the surface
+    MEKE_CB=0.0,
+    MEKE_CT=0.0,
+    MEKE_MIN_LSCALE=True,
+    MEKE_ALPHA_RHINES=1.0,
+    MEKE_ALPHA_GRID=1.0,
+    MEKE_COLD_START=True,
+    MEKE_TOPOGRAPHIC_BETA=1.0,
 
-    LAPLACIAN='True', # Allow Laplacian operator for backscattering
+    LAPLACIAN=True, # Allow Laplacian operator for backscattering
     KH=0.0, # No background diffusivity
     KH_VEL_SCALE=0.0, # No velocity scale to calculate diffusivity
-    SMAGORINSKY_KH='False', # No Smagorinsky diffusivity
-    BOUND_KH='False', # bounding is not needed for negative diffusivity
-    BETTER_BOUND_KH='False'
+    SMAGORINSKY_KH=False, # No Smagorinsky diffusivity
+    BOUND_KH=False, # bounding is not needed for negative diffusivity
+    BETTER_BOUND_KH=False
 )
 
 #########################################################################################

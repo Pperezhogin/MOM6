@@ -108,19 +108,19 @@ class CollectionOfExperiments:
             KE_upper = KE.isel(zl=0)
             KE_lower = KE.isel(zl=1)
 
-            p.extend(ax[0].loglog(k, KE_upper, label=labels[j], color='k' if exp==exps[-1] else None))
+            p.extend(ax[0].loglog(k, KE_upper, lw=3, label=labels[j], color='k' if exp==exps[-1] else None))
             ax[0].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[0].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[0].set_title('Upper layer')
             ax[0].legend(prop={'size': 14})
-            ax[0].grid(which='both',linestyle=':')
+            #ax[0].grid(which='both',linestyle=':')
 
-            p.extend(ax[1].loglog(k, KE_lower, label=labels[j], color='k' if exp==exps[-1] else None))
+            p.extend(ax[1].loglog(k, KE_lower, lw=3, label=labels[j], color='k' if exp==exps[-1] else None))
             ax[1].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[1].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[1].set_title('Lower layer')
             ax[1].legend(prop={'size': 14})
-            ax[1].grid(which='both',linestyle=':')
+            #ax[1].grid(which='both',linestyle=':')
 
         k = [5e-5, 1e-4]
         E = [1.5e+2, 0]
@@ -207,11 +207,12 @@ class CollectionOfExperiments:
     def plot_ssh(self, exps, labels=None):
         if labels is None:
             labels=exps
-        plt.figure(figsize=(4*len(exps),4))
+        plt.figure(figsize=(4*len(exps),3))
         nfig = len(exps)
         for ifig, exp in enumerate(exps):
             plt.subplot(1,nfig,ifig+1)
-            Cplot = self[exp].ssh_mean.plot.contour(levels=np.arange(-4,4,0.5), colors='k', linewidths=1)
+            self[exp].ssh_mean.plot.contourf(levels=np.arange(-4,4.5,0.5), cmap='bwr', linewidths=1, cbar_kwargs={'label': 'SSH [m]'})
+            Cplot = self[exp].ssh_mean.plot.contour(levels=np.arange(-4,4.5,0.5), colors='k', linewidths=1)
             plt.gca().clabel(Cplot, Cplot.levels)
             plt.xticks((0, 5, 10, 15, 20))
             plt.yticks((30, 35, 40, 45, 50))
