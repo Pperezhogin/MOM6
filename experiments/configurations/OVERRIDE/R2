@@ -1,4 +1,0 @@
-#override NIGLOBAL = 44
-#override NJGLOBAL = 40
-#override DT = 2160.
-#override DT_FORCING = 2160.
