@@ -21,7 +21,7 @@ use MOM_coupler_types, only : coupler_1d_bc_type, coupler_2d_bc_type
 use MOM_coupler_types, only : coupler_type_spawn, coupler_type_write_chksums
 use MOM_coupler_types, only : coupler_type_initialized, coupler_type_copy_data
 use MOM_coupler_types, only : coupler_type_set_diags, coupler_type_send_data
-use MOM_diag_mediator, only : diag_ctrl, enable_averaging, disable_averaging
+use MOM_diag_mediator, only : diag_ctrl, enable_averages, disable_averaging
 use MOM_diag_mediator, only : diag_mediator_close_registration, diag_mediator_end
 use MOM_domains, only : MOM_domain_type, domain2d, clone_MOM_domain, get_domain_extent
 use MOM_domains, only : pass_var, pass_vector, AGRID, BGRID_NE, CGRID_NE, TO_ALL, Omit_Corners
@@ -53,6 +53,7 @@ use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : surface
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_ice_shelf, only : initialize_ice_shelf, shelf_calc_flux, ice_shelf_CS
+use MOM_ice_shelf, only : initialize_ice_shelf_fluxes, initialize_ice_shelf_forces
 use MOM_ice_shelf, only : add_shelf_forces, ice_shelf_end, ice_shelf_save_restart
 use MOM_wave_interface, only: wave_parameters_CS, MOM_wave_interface_init
 use MOM_wave_interface, only: Update_Surface_Waves
@@ -170,8 +171,8 @@ type, public :: ocean_state_type ; private
                               !! If false, the two phases are advanced with
                               !! separate calls. The default is true.
   ! The following 3 variables are only used here if single_step_call is false.
-  real    :: dt               !< (baroclinic) dynamics time step [s]
-  real    :: dt_therm         !< thermodynamics time step [s]
+  real    :: dt               !< (baroclinic) dynamics time step [T ~> s]
+  real    :: dt_therm         !< thermodynamics time step [T ~> s]
   logical :: thermo_spans_coupling !< If true, thermodynamic and tracer time
                               !! steps can span multiple coupled time steps.
   logical :: diabatic_first   !< If true, apply diabatic and thermodynamic
@@ -274,9 +275,13 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, wind_stagger, gas
   if (.not.OS%is_ocean_pe) return
 
   OS%Time = Time_in ; OS%Time_dyn = Time_in
+  ! Call initialize MOM with an optional Ice Shelf CS which, if present triggers
+  ! initialization of ice shelf parameters and arrays.
+
   call initialize_MOM(OS%Time, Time_init, param_file, OS%dirs, OS%MOM_CSp, &
                       OS%restart_CSp, Time_in, offline_tracer_mode=OS%offline_tracer_mode, &
-                      diag_ptr=OS%diag, count_calls=.true.)
+                      diag_ptr=OS%diag, count_calls=.true., ice_shelf_CSp=OS%ice_shelf_CSp, &
+                      waves_CSp=OS%Waves)
   call get_MOM_state_elements(OS%MOM_CSp, G=OS%grid, GV=OS%GV, US=OS%US, C_p=OS%C_p, &
                               C_p_scaled=OS%fluxes%C_p, use_temp=use_temperature)
 
@@ -288,16 +293,17 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, wind_stagger, gas
                  "including both dynamics and thermodynamics.  If false, "//&
                  "the two phases are advanced with separate calls.", default=.true.)
   call get_param(param_file, mdl, "DT", OS%dt, &
-                 "The (baroclinic) dynamics time step.  The time-step that "//&
-                 "is actually used will be an integer fraction of the "//&
-                 "forcing time-step.", units="s", fail_if_missing=.true.)
+                 "The (baroclinic) dynamics time step.  The time-step that is actually "//&
+                 "used will be an integer fraction of the forcing time-step.", &
+                 units="s", scale=OS%US%s_to_T, fail_if_missing=.true.)
   call get_param(param_file, mdl, "DT_THERM", OS%dt_therm, &
                  "The thermodynamic and tracer advection time step. "//&
                  "Ideally DT_THERM should be an integer multiple of DT "//&
                  "and less than the forcing or coupling time-step, unless "//&
                  "THERMO_SPANS_COUPLING is true, in which case DT_THERM "//&
                  "can be an integer multiple of the coupling timestep.  By "//&
-                 "default DT_THERM is set to DT.", units="s", default=OS%dt)
+                 "default DT_THERM is set to DT.", &
+                 units="s", scale=OS%US%s_to_T, default=OS%US%T_to_s*OS%dt)
   call get_param(param_file, "MOM", "THERMO_SPANS_COUPLING", OS%thermo_spans_coupling, &
                  "If true, the MOM will take thermodynamic and tracer "//&
                  "timesteps that can be longer than the coupling timestep. "//&
@@ -372,9 +378,10 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, wind_stagger, gas
   endif
 
   if (OS%use_ice_shelf)  then
-    call initialize_ice_shelf(param_file, OS%grid, OS%Time, OS%ice_shelf_CSp, &
-                              OS%diag, OS%forces, OS%fluxes)
+    call initialize_ice_shelf_fluxes(OS%ice_shelf_CSp, OS%grid, OS%US, OS%fluxes)
+    call initialize_ice_shelf_forces(OS%ice_shelf_CSp, OS%grid, OS%US, OS%forces)
   endif
+
   if (OS%icebergs_alter_ocean)  then
     call marine_ice_init(OS%Time, OS%grid, param_file, OS%diag, OS%marine_ice_CSp)
     if (.not. OS%use_ice_shelf) &
@@ -455,12 +462,12 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
                             ! internal modules.
   type(time_type) :: Time1  ! The value of the ocean model's time at the start of a call to step_MOM.
   integer :: index_bnds(4)  ! The computational domain index bounds in the ice-ocean boundary type.
-  real :: weight            ! Flux accumulation weight of the current fluxes.
-  real :: dt_coupling       ! The coupling time step [s].
-  real :: dt_therm          ! A limited and quantized version of OS%dt_therm [s].
-  real :: dt_dyn            ! The dynamics time step [s].
-  real :: dtdia             ! The diabatic time step [s].
-  real :: t_elapsed_seg     ! The elapsed time in this update segment [s].
+  real :: weight            ! Flux accumulation weight of the current fluxes [nondim].
+  real :: dt_coupling       ! The coupling time step [T ~> s].
+  real :: dt_therm          ! A limited and quantized version of OS%dt_therm [T ~> s].
+  real :: dt_dyn            ! The dynamics time step [T ~> s].
+  real :: dtdia             ! The diabatic time step [T ~> s].
+  real :: t_elapsed_seg     ! The elapsed time in this update segment [T ~> s].
   integer :: n              ! The internal iteration counter.
   integer :: nts            ! The number of baroclinic dynamics time steps in a thermodynamic step.
   integer :: n_max          ! The number of calls to step_MOM dynamics in this call to update_ocean_model.
@@ -472,7 +479,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
   integer :: is, ie, js, je
 
   call callTree_enter("update_ocean_model(), ocean_model_MOM.F90")
-  dt_coupling = time_type_to_real(Ocean_coupling_time_step)
+  dt_coupling = OS%US%s_to_T*time_type_to_real(Ocean_coupling_time_step)
 
   if (.not.associated(OS)) then
     call MOM_error(FATAL, "update_ocean_model called with an unassociated "// &
@@ -528,7 +535,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
                             OS%sfc_state, dt_coupling, OS%marine_ice_CSp)
 
 #ifdef _USE_GENERIC_TRACER
-      call enable_averaging(dt_coupling, OS%Time + Ocean_coupling_time_step, OS%diag) !Is this needed?
+      call enable_averages(dt_coupling, OS%Time + Ocean_coupling_time_step, OS%diag) !Is this needed?
       call MOM_generic_tracer_fluxes_accumulate(OS%fluxes, 1.0) ! Here weight=1, so just store the current fluxes
       call disable_averaging(OS%diag)
 #endif
@@ -540,7 +547,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
                                  OS%grid, OS%US, OS%forcing_CSp, OS%sfc_state)
 
       if (OS%use_ice_shelf) &
-        call shelf_calc_flux(OS%sfc_state, OS%flux_tmp, OS%Time, dt_coupling, OS%Ice_shelf_CSp)
+        call shelf_calc_flux(OS%sfc_state, OS%flux_tmp, OS%Time,dt_coupling, OS%Ice_shelf_CSp)
       if (OS%icebergs_alter_ocean) &
         call iceberg_fluxes(OS%grid, OS%US, OS%flux_tmp, OS%use_ice_shelf, &
                             OS%sfc_state, dt_coupling, OS%marine_ice_CSp)
@@ -576,10 +583,16 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
     call step_offline(OS%forces, OS%fluxes, OS%sfc_state, Time1, dt_coupling, OS%MOM_CSp)
   elseif ((.not.do_thermo) .or. (.not.do_dyn)) then
     ! The call sequence is being orchestrated from outside of update_ocean_model.
-    call step_MOM(OS%forces, OS%fluxes, OS%sfc_state, Time1, dt_coupling, OS%MOM_CSp, &
+    if (present(cycle_length)) then
+      call step_MOM(OS%forces, OS%fluxes, OS%sfc_state, Time1, dt_coupling, OS%MOM_CSp, &
                   Waves=OS%Waves, do_dynamics=do_dyn, do_thermodynamics=do_thermo, &
-                  start_cycle=start_cycle, end_cycle=end_cycle, cycle_length=cycle_length, &
+                  start_cycle=start_cycle, end_cycle=end_cycle, cycle_length=OS%US%s_to_T*cycle_length, &
                   reset_therm=Ocn_fluxes_used)
+    else
+      call step_MOM(OS%forces, OS%fluxes, OS%sfc_state, Time1, dt_coupling, OS%MOM_CSp, &
+                  Waves=OS%Waves, do_dynamics=do_dyn, do_thermodynamics=do_thermo, &
+                  start_cycle=start_cycle, end_cycle=end_cycle, reset_therm=Ocn_fluxes_used)
+    endif
   elseif (OS%single_step_call) then
     call step_MOM(OS%forces, OS%fluxes, OS%sfc_state, Time1, dt_coupling, OS%MOM_CSp, Waves=OS%Waves)
   else  ! Step both the dynamics and thermodynamics with separate calls.
@@ -628,7 +641,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
 
         if (step_thermo) then
           ! Back up Time1 to the start of the thermodynamic segment.
-          Time1 = Time1 - real_to_time(dtdia - dt_dyn)
+          Time1 = Time1 - real_to_time(OS%US%T_to_s*(dtdia - dt_dyn))
           call step_MOM(OS%forces, OS%fluxes, OS%sfc_state, Time1, dtdia, OS%MOM_CSp, &
                         Waves=OS%Waves, do_dynamics=.false., do_thermodynamics=.true., &
                         start_cycle=.false., end_cycle=(n==n_max), cycle_length=dt_coupling)
@@ -636,7 +649,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, time_start_upda
       endif
 
       t_elapsed_seg = t_elapsed_seg + dt_dyn
-      Time1 = Time_seg_start + real_to_time(t_elapsed_seg)
+      Time1 = Time_seg_start + real_to_time(OS%US%T_to_s*t_elapsed_seg)
     enddo
   endif
 
@@ -821,7 +834,6 @@ subroutine convert_state_to_ocean_type(sfc_state, Ocean_sfc, G, US, patm, press_
   real,        optional, intent(in)    :: press_to_z !< A conversion factor between pressure and ocean
                                                !! depth, usually 1/(rho_0*g) [Z T2 R-1 L-2 ~> m Pa-1]
   ! Local variables
-  real :: IgR0
   character(len=48)  :: val_str
   integer :: isc_bnd, iec_bnd, jsc_bnd, jec_bnd
   integer :: i, j, i0, j0, is, ie, js, je
@@ -840,22 +852,22 @@ subroutine convert_state_to_ocean_type(sfc_state, Ocean_sfc, G, US, patm, press_
   if (sfc_state%T_is_conT) then
     ! Convert the surface T from conservative T to potential T.
     do j=jsc_bnd,jec_bnd ; do i=isc_bnd,iec_bnd
-      Ocean_sfc%t_surf(i,j) = gsw_pt_from_ct(sfc_state%SSS(i+i0,j+j0), &
-                               sfc_state%SST(i+i0,j+j0)) + CELSIUS_KELVIN_OFFSET
+      Ocean_sfc%t_surf(i,j) = gsw_pt_from_ct(US%S_to_ppt*sfc_state%SSS(i+i0,j+j0), &
+                               US%C_to_degC*sfc_state%SST(i+i0,j+j0)) + CELSIUS_KELVIN_OFFSET
     enddo ; enddo
   else
     do j=jsc_bnd,jec_bnd ; do i=isc_bnd,iec_bnd
-      Ocean_sfc%t_surf(i,j) = sfc_state%SST(i+i0,j+j0) + CELSIUS_KELVIN_OFFSET
+      Ocean_sfc%t_surf(i,j) = US%C_to_degC*sfc_state%SST(i+i0,j+j0) + CELSIUS_KELVIN_OFFSET
     enddo ; enddo
   endif
   if (sfc_state%S_is_absS) then
     ! Convert the surface S from absolute salinity to practical salinity.
     do j=jsc_bnd,jec_bnd ; do i=isc_bnd,iec_bnd
-      Ocean_sfc%s_surf(i,j) = gsw_sp_from_sr(sfc_state%SSS(i+i0,j+j0))
+      Ocean_sfc%s_surf(i,j) = gsw_sp_from_sr(US%S_to_ppt*sfc_state%SSS(i+i0,j+j0))
     enddo ; enddo
   else
     do j=jsc_bnd,jec_bnd ; do i=isc_bnd,iec_bnd
-      Ocean_sfc%s_surf(i,j) = sfc_state%SSS(i+i0,j+j0)
+      Ocean_sfc%s_surf(i,j) = US%S_to_ppt*sfc_state%SSS(i+i0,j+j0)
     enddo ; enddo
   endif
 
@@ -976,7 +988,7 @@ subroutine Ocean_stock_pe(OS, index, value, time_index)
   type(ocean_state_type), pointer     :: OS         !< A structure containing the internal ocean state.
                                                     !! The data in OS is intent in.
   integer,                intent(in)  :: index      !< The stock index for the quantity of interest.
-  real,                   intent(out) :: value      !< Sum returned for the conservation quantity of interest.
+  real,                   intent(out) :: value      !< Sum returned for the conservation quantity of interest [various]
   integer,      optional, intent(in)  :: time_index !< An unused optional argument, present only for
                                                     !! interfacial compatibility with other models.
 ! Arguments: OS - A structure containing the internal ocean state.
@@ -984,24 +996,24 @@ subroutine Ocean_stock_pe(OS, index, value, time_index)
 !  (in)      value -  Sum returned for the conservation quantity of interest.
 !  (in,opt)  time_index - Index for time level to use if this is necessary.
 
-  real :: salt
+  real :: salt ! The total salt in the ocean [kg]
 
   value = 0.0
   if (.not.associated(OS)) return
   if (.not.OS%is_ocean_pe) return
 
   select case (index)
-    case (ISTOCK_WATER)  ! Return the mass of fresh water in the ocean in kg.
+    case (ISTOCK_WATER)  ! Return the mass of fresh water in the ocean in [kg].
       if (OS%GV%Boussinesq) then
         call get_ocean_stocks(OS%MOM_CSp, mass=value, on_PE_only=.true.)
       else  ! In non-Boussinesq mode, the mass of salt needs to be subtracted.
         call get_ocean_stocks(OS%MOM_CSp, mass=value, salt=salt, on_PE_only=.true.)
         value = value - salt
       endif
-    case (ISTOCK_HEAT)  ! Return the heat content of the ocean in J.
+    case (ISTOCK_HEAT)  ! Return the heat content of the ocean in [J].
       call get_ocean_stocks(OS%MOM_CSp, heat=value, on_PE_only=.true.)
-    case (ISTOCK_SALT)  ! Return the mass of the salt in the ocean in kg.
-       call get_ocean_stocks(OS%MOM_CSp, salt=value, on_PE_only=.true.)
+    case (ISTOCK_SALT)  ! Return the mass of the salt in the ocean in [kg].
+      call get_ocean_stocks(OS%MOM_CSp, salt=value, on_PE_only=.true.)
     case default ; value = 0.0
   end select
   ! If the FMS coupler is changed so that Ocean_stock_PE is only called on
@@ -1019,7 +1031,7 @@ subroutine ocean_model_data2D_get(OS, Ocean, name, array2D, isc, jsc)
                                                   !! visible ocean surface fields.
   character(len=*)          , intent(in) :: name  !< The name of the field to extract
   real, dimension(isc:,jsc:), intent(out):: array2D !< The values of the named field, it must
-                                                  !! cover only the computational domain
+                                                  !! cover only the computational domain [various]
   integer                   , intent(in) :: isc   !< The starting i-index of array2D
   integer                   , intent(in) :: jsc   !< The starting j-index of array2D
 
@@ -1079,8 +1091,8 @@ subroutine ocean_model_data1D_get(OS, Ocean, name, value)
                                                   !! internal ocean state (intent in).
   type(ocean_public_type),    intent(in) :: Ocean !< A structure containing various publicly
                                                   !! visible ocean surface fields.
-  character(len=*)          , intent(in) :: name  !< The name of the field to extract
-  real                      , intent(out):: value !< The value of the named field
+  character(len=*),           intent(in) :: name  !< The name of the field to extract
+  real,                       intent(out):: value !< The value of the named field [various]
 
   if (.not.associated(OS)) return
   if (.not.OS%is_ocean_pe) return
@@ -1142,7 +1154,7 @@ subroutine ocean_model_get_UV_surf(OS, Ocean, name, array2D, isc, jsc)
                                                   !! visible ocean surface fields.
   character(len=*)          , intent(in) :: name  !< The name of the current (ua or va) to extract
   real, dimension(isc:,jsc:), intent(out):: array2D !< The values of the named field, it must
-                                                  !! cover only the computational domain
+                                                  !! cover only the computational domain [L T-1 ~> m s-1]
   integer                   , intent(in) :: isc   !< The starting i-index of array2D
   integer                   , intent(in) :: jsc   !< The starting j-index of array2D
 

@@ -75,8 +75,8 @@ type, public :: ocean_grid_type
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEM_) :: &
     mask2dT, &   !< 0 for land points and 1 for ocean points on the h-grid [nondim].
-    geoLatT, &   !< The geographic latitude at q points in degrees of latitude or m.
-    geoLonT, &   !< The geographic longitude at q points in degrees of longitude or m.
+    geoLatT, &   !< The geographic latitude at q points [degrees_N] or [km] or [m].
+    geoLonT, &   !< The geographic longitude at q points [degrees_E] or [km] or [m].
     dxT, &       !< dxT is delta x at h points [L ~> m].
     IdxT, &      !< 1/dxT [L-1 ~> m-1].
     dyT, &       !< dyT is delta y at h points [L ~> m].
@@ -84,14 +84,15 @@ type, public :: ocean_grid_type
     areaT, &     !< The area of an h-cell [L2 ~> m2].
     IareaT, &    !< 1/areaT [L-2 ~> m-2].
     sin_rot, &   !< The sine of the angular rotation between the local model grid's northward
-                 !! and the true northward directions.
+                 !! and the true northward directions [nondim].
     cos_rot      !< The cosine of the angular rotation between the local model grid's northward
-                 !! and the true northward directions.
+                 !! and the true northward directions [nondim].
 
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_) :: &
     mask2dCu, &  !< 0 for boundary points and 1 for ocean points on the u grid [nondim].
-    geoLatCu, &  !< The geographic latitude at u points in degrees of latitude or m.
-    geoLonCu, &  !< The geographic longitude at u points in degrees of longitude or m.
+    OBCmaskCu, & !< 0 for boundary or OBC points and 1 for ocean points on the u grid [nondim].
+    geoLatCu, &  !< The geographic latitude at u points [degrees_N] or [km] or [m]
+    geoLonCu, &  !< The geographic longitude at u points [degrees_E] or [km] or [m].
     dxCu, &      !< dxCu is delta x at u points [L ~> m].
     IdxCu, &     !< 1/dxCu [L-1 ~> m-1].
     dyCu, &      !< dyCu is delta y at u points [L ~> m].
@@ -102,8 +103,9 @@ type, public :: ocean_grid_type
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_) :: &
     mask2dCv, &  !< 0 for boundary points and 1 for ocean points on the v grid [nondim].
-    geoLatCv, &  !< The geographic latitude at v points in degrees of latitude or m.
-    geoLonCv, &  !< The geographic longitude at v points in degrees of longitude or m.
+    OBCmaskCv, & !< 0 for boundary or OBC points and 1 for ocean points on the v grid [nondim].
+    geoLatCv, &  !< The geographic latitude at v points [degrees_N] or [km] or [m]
+    geoLonCv, &  !< The geographic longitude at v points [degrees_E] or [km] or [m].
     dxCv, &      !< dxCv is delta x at v points [L ~> m].
     IdxCv, &     !< 1/dxCv [L-1 ~> m-1].
     dyCv, &      !< dyCv is delta y at v points [L ~> m].
@@ -113,19 +115,19 @@ type, public :: ocean_grid_type
     areaCv       !< The areas of the v-grid cells [L2 ~> m2].
 
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_) :: &
-    porous_DminU, & !< minimum topographic height of U-face [Z ~> m]
-    porous_DmaxU, & !< maximum topographic height of U-face [Z ~> m]
+    porous_DminU, & !< minimum topographic height (deepest) of U-face [Z ~> m]
+    porous_DmaxU, & !< maximum topographic height (shallowest) of U-face [Z ~> m]
     porous_DavgU    !< average topographic height of U-face [Z ~> m]
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_) :: &
-    porous_DminV, & !< minimum topographic height of V-face [Z ~> m]
-    porous_DmaxV, & !< maximum topographic height of V-face [Z ~> m]
+    porous_DminV, & !< minimum topographic height (deepest) of V-face [Z ~> m]
+    porous_DmaxV, & !< maximum topographic height (shallowest) of V-face [Z ~> m]
     porous_DavgV    !< average topographic height of V-face [Z ~> m]
 
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEMB_PTR_) :: &
     mask2dBu, &  !< 0 for boundary points and 1 for ocean points on the q grid [nondim].
-    geoLatBu, &  !< The geographic latitude at q points in degrees of latitude or m.
-    geoLonBu, &  !< The geographic longitude at q points in degrees of longitude or m.
+    geoLatBu, &  !< The geographic latitude at q points [degrees_N] or [km] or [m]
+    geoLonBu, &  !< The geographic longitude at q points [degrees_E] or [km] or [m].
     dxBu, &      !< dxBu is delta x at q points [L ~> m].
     IdxBu, &     !< 1/dxBu [L-1 ~> m-1].
     dyBu, &      !< dyBu is delta y at q points [L ~> m].
@@ -144,8 +146,12 @@ type, public :: ocean_grid_type
     gridLonB => NULL()    !< The longitude of B points for the purpose of labeling the output axes.
                           !! On many grids this is the same as geoLonBu.
   character(len=40) :: &
+    ! Except on a Cartesian grid, these are usually some variant of "degrees".
     x_axis_units, &     !< The units that are used in labeling the x coordinate axes.
-    y_axis_units        !< The units that are used in labeling the y coordinate axes.
+    y_axis_units, &     !< The units that are used in labeling the y coordinate axes.
+    ! These are internally generated names, including "m", "km", "deg_E" and "deg_N".
+    x_ax_unit_short, &  !< A short description of the x-axis units for documenting parameter units
+    y_ax_unit_short     !< A short description of the y-axis units for documenting parameter units
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEM_) :: &
     bathyT           !< Ocean bottom depth at tracer points, in depth units [Z ~> m].
@@ -179,8 +185,8 @@ type, public :: ocean_grid_type
 
   ! These parameters are run-time parameters that are used during some
   ! initialization routines (but not all)
-  real :: south_lat     !< The latitude (or y-coordinate) of the first v-line
-  real :: west_lon      !< The longitude (or x-coordinate) of the first u-line
+  real :: south_lat     !< The latitude (or y-coordinate) of the first v-line [degrees_N] or [km] or [m]
+  real :: west_lon      !< The longitude (or x-coordinate) of the first u-line [degrees_E] or [km] or [m]
   real :: len_lat       !< The latitudinal (or y-coord) extent of physical domain
   real :: len_lon       !< The longitudinal (or x-coord) extent of physical domain
   real :: Rad_Earth     !< The radius of the planet [m]
@@ -207,7 +213,7 @@ subroutine MOM_grid_init(G, param_file, US, HI, global_indexing, bathymetry_at_v
 
   ! Local variables
   real :: mean_SeaLev_scale ! A scaling factor for the reference height variable [1] or [Z m-1 ~> 1]
-  integer :: isd, ied, jsd, jed, nk
+  integer :: isd, ied, jsd, jed
   integer :: IsdB, IedB, JsdB, JedB
   integer :: ied_max, jed_max
   integer :: niblock, njblock, nihalo, njhalo, nblocks, n, i, j
@@ -219,9 +225,11 @@ subroutine MOM_grid_init(G, param_file, US, HI, global_indexing, bathymetry_at_v
   integer, allocatable, dimension(:) :: ibegin, iend, jbegin, jend
   character(len=40)  :: mod_nm  = "MOM_grid" ! This module's name.
 
+  mean_SeaLev_scale = 1.0 ;  if (associated(G%US)) mean_SeaLev_scale = G%US%m_to_Z
 
   ! Read all relevant parameters and write them to the model log.
-  call get_param(param_file, mod_nm, "REFERENCE_HEIGHT", G%Z_ref, default=0.0, do_not_log=.true.)
+  call get_param(param_file, mod_nm, "REFERENCE_HEIGHT", G%Z_ref, &
+                 units="m", default=0.0, scale=mean_SeaLev_scale, do_not_log=.true.)
   call log_version(param_file, mod_nm, version, &
                    "Parameters providing information about the lateral grid.", &
                    log_to_all=.true., layout=.true., all_default=(G%Z_ref==0.0))
@@ -234,7 +242,6 @@ subroutine MOM_grid_init(G, param_file, US, HI, global_indexing, bathymetry_at_v
                  layoutParam=.true.)
   if (present(US)) then ; if (associated(US)) G%US => US ; endif
 
-  mean_SeaLev_scale = 1.0 ;  if (associated(G%US)) mean_SeaLev_scale = G%US%m_to_Z
   call get_param(param_file, mod_nm, "REFERENCE_HEIGHT", G%Z_ref, &
                  "A reference value for geometric height fields, such as bathyT.", &
                  units="m", default=0.0, scale=mean_SeaLev_scale)
@@ -475,8 +482,8 @@ end subroutine set_derived_metrics
 
 !> Adcroft_reciprocal(x) = 1/x for |x|>0 or 0 for x=0.
 function Adcroft_reciprocal(val) result(I_val)
-  real, intent(in) :: val  !< The value being inverted.
-  real :: I_val            !< The Adcroft reciprocal of val.
+  real, intent(in) :: val  !< The value being inverted [A].
+  real :: I_val            !< The Adcroft reciprocal of val [A-1].
 
   I_val = 0.0 ; if (val /= 0.0) I_val = 1.0/val
 end function Adcroft_reciprocal
@@ -486,12 +493,12 @@ logical function isPointInCell(G, i, j, x, y)
   type(ocean_grid_type), intent(in) :: G !< Grid type
   integer,               intent(in) :: i !< i index of cell to test
   integer,               intent(in) :: j !< j index of cell to test
-  real,                  intent(in) :: x !< x coordinate of point
-  real,                  intent(in) :: y !< y coordinate of point
+  real,                  intent(in) :: x !< x coordinate of point [degrees_E]
+  real,                  intent(in) :: y !< y coordinate of point [degrees_N]
   ! Local variables
-  real :: xNE, xNW, xSE, xSW ! Longitudes of cell corners [degLon]
-  real :: yNE, yNW, ySE, ySW ! Latitudes of cell corners [degLat]
-  real :: l0, l1, l2, l3 ! Crossed products of differences in position [degLon degLat]
+  real :: xNE, xNW, xSE, xSW ! Longitudes of cell corners [degrees_E]
+  real :: yNE, yNW, ySE, ySW ! Latitudes of cell corners [degrees_N]
+  real :: l0, l1, l2, l3 ! Crossed products of differences in position [degrees_E degrees_N]
   real :: p0, p1, p2, p3 ! Trinary unitary values reflecting the signs of the crossed products [nondim]
   isPointInCell = .false.
   xNE = G%geoLonBu(i  ,j  ) ; yNE = G%geoLatBu(i  ,j  )
@@ -573,7 +580,9 @@ subroutine allocate_metrics(G)
 
   ALLOC_(G%mask2dT(isd:ied,jsd:jed))      ; G%mask2dT(:,:) = 0.0
   ALLOC_(G%mask2dCu(IsdB:IedB,jsd:jed))   ; G%mask2dCu(:,:) = 0.0
+  ALLOC_(G%OBCmaskCu(IsdB:IedB,jsd:jed))  ; G%OBCmaskCu(:,:) = 0.0
   ALLOC_(G%mask2dCv(isd:ied,JsdB:JedB))   ; G%mask2dCv(:,:) = 0.0
+  ALLOC_(G%OBCmaskCv(isd:ied,JsdB:JedB))  ; G%OBCmaskCv(:,:) = 0.0
   ALLOC_(G%mask2dBu(IsdB:IedB,JsdB:JedB)) ; G%mask2dBu(:,:) = 0.0
   ALLOC_(G%geoLatT(isd:ied,jsd:jed))      ; G%geoLatT(:,:) = 0.0
   ALLOC_(G%geoLatCu(IsdB:IedB,jsd:jed))   ; G%geoLatCu(:,:) = 0.0
@@ -637,8 +646,8 @@ subroutine MOM_grid_end(G)
   DEALLOC_(G%areaCu) ; DEALLOC_(G%IareaCu)
   DEALLOC_(G%areaCv)  ; DEALLOC_(G%IareaCv)
 
-  DEALLOC_(G%mask2dT)  ; DEALLOC_(G%mask2dCu)
-  DEALLOC_(G%mask2dCv) ; DEALLOC_(G%mask2dBu)
+  DEALLOC_(G%mask2dT)  ; DEALLOC_(G%mask2dCu) ; DEALLOC_(G%OBCmaskCu)
+  DEALLOC_(G%mask2dCv) ; DEALLOC_(G%OBCmaskCv) ; DEALLOC_(G%mask2dBu)
 
   DEALLOC_(G%geoLatT)  ; DEALLOC_(G%geoLatCu)
   DEALLOC_(G%geoLatCv) ; DEALLOC_(G%geoLatBu)
@@ -686,6 +695,7 @@ end subroutine MOM_grid_end
 !!
 !! Each location also has a 2D mask indicating whether the entire column is land or ocean.
 !! `mask2dT` is 1 if the column is wet or 0 if the T-cell is land.
-!! `mask2dCu` is 1 if both neighboring column are ocean, and 0 if either is land.
+!! `mask2dCu` is 1 if both neighboring columns are ocean, and 0 if either is land.
+!! `OBCmasku` is 1 if both neighboring columns are ocean, and 0 if either is land of if this is OBC point.
 
 end module MOM_grid

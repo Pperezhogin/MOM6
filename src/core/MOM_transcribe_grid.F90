@@ -76,6 +76,7 @@ subroutine copy_dyngrid_to_MOM_grid(dG, oG, US)
     oG%porous_DavgU(I,j) = dG%porous_DavgU(I+ido,j+jdo) - oG%Z_ref
 
     oG%mask2dCu(I,j) = dG%mask2dCu(I+ido,j+jdo)
+    oG%OBCmaskCu(I,j) = dG%OBCmaskCu(I+ido,j+jdo)
     oG%areaCu(I,j) = dG%areaCu(I+ido,j+jdo)
     oG%IareaCu(I,j) = dG%IareaCu(I+ido,j+jdo)
   enddo ; enddo
@@ -92,6 +93,7 @@ subroutine copy_dyngrid_to_MOM_grid(dG, oG, US)
     oG%porous_DavgV(i,J) = dG%porous_DavgV(i+ido,J+jdo) - oG%Z_ref
 
     oG%mask2dCv(i,J) = dG%mask2dCv(i+ido,J+jdo)
+    oG%OBCmaskCv(i,J) = dG%OBCmaskCv(i+ido,J+jdo)
     oG%areaCv(i,J) = dG%areaCv(i+ido,J+jdo)
     oG%IareaCv(i,J) = dG%IareaCv(i+ido,J+jdo)
   enddo ; enddo
@@ -131,6 +133,7 @@ subroutine copy_dyngrid_to_MOM_grid(dG, oG, US)
 
   ! Copy various scalar variables and strings.
   oG%x_axis_units = dG%x_axis_units ; oG%y_axis_units = dG%y_axis_units
+  oG%x_ax_unit_short = dG%x_ax_unit_short ; oG%y_ax_unit_short = dG%y_ax_unit_short
   oG%areaT_global = dG%areaT_global ; oG%IareaT_global = dG%IareaT_global
   oG%south_lat = dG%south_lat ; oG%west_lon  = dG%west_lon
   oG%len_lat = dG%len_lat ; oG%len_lon = dG%len_lon
@@ -152,6 +155,7 @@ subroutine copy_dyngrid_to_MOM_grid(dG, oG, US)
   call pass_vector(oG%dxCu, oG%dyCv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(oG%dy_Cu, oG%dx_Cv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(oG%mask2dCu, oG%mask2dCv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
+  call pass_vector(oG%OBCmaskCu, oG%OBCmaskCv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(oG%IareaCu, oG%IareaCv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(oG%IareaCu, oG%IareaCv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(oG%geoLatCu, oG%geoLatCv, oG%Domain, To_All+Scalar_Pair, CGRID_NE)
@@ -230,6 +234,7 @@ subroutine copy_MOM_grid_to_dyngrid(oG, dG, US)
     dG%porous_DavgU(I,j) = oG%porous_DavgU(I+ido,j+jdo) + oG%Z_ref
 
     dG%mask2dCu(I,j) = oG%mask2dCu(I+ido,j+jdo)
+    dG%OBCmaskCu(I,j) = oG%OBCmaskCu(I+ido,j+jdo)
     dG%areaCu(I,j) = oG%areaCu(I+ido,j+jdo)
     dG%IareaCu(I,j) = oG%IareaCu(I+ido,j+jdo)
   enddo ; enddo
@@ -246,6 +251,7 @@ subroutine copy_MOM_grid_to_dyngrid(oG, dG, US)
     dG%porous_DavgV(i,J) = oG%porous_DavgU(i+ido,J+jdo) + oG%Z_ref
 
     dG%mask2dCv(i,J) = oG%mask2dCv(i+ido,J+jdo)
+    dG%OBCmaskCv(i,J) = oG%OBCmaskCv(i+ido,J+jdo)
     dG%areaCv(i,J) = oG%areaCv(i+ido,J+jdo)
     dG%IareaCv(i,J) = oG%IareaCv(i+ido,J+jdo)
   enddo ; enddo
@@ -286,6 +292,7 @@ subroutine copy_MOM_grid_to_dyngrid(oG, dG, US)
 
   ! Copy various scalar variables and strings.
   dG%x_axis_units = oG%x_axis_units ; dG%y_axis_units = oG%y_axis_units
+  dG%x_ax_unit_short = oG%x_ax_unit_short ; dG%y_ax_unit_short = oG%y_ax_unit_short
   dG%areaT_global = oG%areaT_global ; dG%IareaT_global = oG%IareaT_global
   dG%south_lat = oG%south_lat ; dG%west_lon  = oG%west_lon
   dG%len_lat = oG%len_lat ; dG%len_lon = oG%len_lon
@@ -307,6 +314,7 @@ subroutine copy_MOM_grid_to_dyngrid(oG, dG, US)
   call pass_vector(dG%dxCu, dG%dyCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%dy_Cu, dG%dx_Cv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%mask2dCu, dG%mask2dCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
+  call pass_vector(dG%OBCmaskCu, dG%OBCmaskCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%IareaCu, dG%IareaCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%IareaCu, dG%IareaCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%geoLatCu, dG%geoLatCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)

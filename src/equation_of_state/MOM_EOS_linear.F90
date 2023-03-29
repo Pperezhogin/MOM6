@@ -21,16 +21,16 @@ public int_density_dz_linear, int_spec_vol_dp_linear
 ! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
 ! vary with the Boussinesq approximation, the Boussinesq variant is given first.
 
-!> Compute the density of sea water (in kg/m^3), or its anomaly from a reference density,
-!! using a simple linear equation of state from salinity (in psu), potential temperature (in deg C)
-!! and pressure [Pa].
+!> Compute the density of sea water (in [kg m-3]), or its anomaly from a reference density,
+!! using a simple linear equation of state from salinity in practical salinity units ([PSU]),
+!! potential temperature in degrees Celsius ([degC]) and pressure [Pa].
 interface calculate_density_linear
   module procedure calculate_density_scalar_linear, calculate_density_array_linear
 end interface calculate_density_linear
 
-!> Compute the specific volume of sea water (in m^3/kg), or its anomaly from a reference value,
-!! using a simple linear equation of state from salinity (in psu), potential temperature (in deg C)
-!! and pressure [Pa].
+!> Compute the specific volume of sea water (in [m3 kg-1]), or its anomaly from a reference value,
+!! using a simple linear equation of state from salinity in practical salinity units ([PSU]),
+!! potential temperature in degrees Celsius ([degC]) and pressure [Pa].
 interface calculate_spec_vol_linear
   module procedure calculate_spec_vol_scalar_linear, calculate_spec_vol_array_linear
 end interface calculate_spec_vol_linear
@@ -75,7 +75,7 @@ subroutine calculate_density_scalar_linear(T, S, pressure, rho, &
 end subroutine calculate_density_scalar_linear
 
 !> This subroutine computes the density of sea water with a trivial
-!! linear equation of state (in kg/m^3) from salinity (sal in psu),
+!! linear equation of state (in [kg m-3]) from salinity (sal [PSU]),
 !! potential temperature (T [degC]), and pressure [Pa].
 subroutine calculate_density_array_linear(T, S, pressure, rho, start, npts, &
                                           Rho_T0_S0, dRho_dT, dRho_dS, rho_ref)
@@ -117,8 +117,6 @@ subroutine calculate_spec_vol_scalar_linear(T, S, pressure, specvol, &
   real,    intent(in)  :: dRho_dT  !< The derivatives of density with temperature [kg m-3 degC-1].
   real,    intent(in)  :: dRho_dS  !< The derivatives of density with salinity [kg m-3 ppt-1].
   real, optional, intent(in)  :: spv_ref  !< A reference specific volume [m3 kg-1].
-  ! Local variables
-  integer :: j
 
   if (present(spv_ref)) then
     specvol = ((1.0 - Rho_T0_S0*spv_ref) + spv_ref*(dRho_dT*T + dRho_dS*S)) / &
@@ -331,41 +329,41 @@ subroutine int_density_dz_linear(T, S, z_t, z_b, rho_ref, rho_0_pres, G_e, HI, &
   type(hor_index_type), intent(in)  :: HI        !< The horizontal index type for the arrays.
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
                         intent(in)  :: T         !< Potential temperature relative to the surface
-                                                 !! [degC].
+                                                 !! [C ~> degC].
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
-                        intent(in)  :: S         !< Salinity [PSU].
+                        intent(in)  :: S         !< Salinity [S ~> PSU].
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
                         intent(in)  :: z_t       !< Height at the top of the layer in depth units [Z ~> m].
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
                         intent(in)  :: z_b       !< Height at the top of the layer [Z ~> m].
-  real,                 intent(in)  :: rho_ref   !< A mean density [R ~> kg m-3] or [kg m-3], that
+  real,                 intent(in)  :: rho_ref   !< A mean density [R ~> kg m-3], that
                                                  !! is subtracted out to reduce the magnitude of
                                                  !! each of the integrals.
   real,                 intent(in)  :: rho_0_pres !< A density [R ~> kg m-3], used to calculate
                                                  !! the pressure (as p~=-z*rho_0_pres*G_e) used in
                                                  !! the equation of state. rho_0_pres is not used.
   real,                 intent(in)  :: G_e       !< The Earth's gravitational acceleration
-                                                 !! [L2 Z-1 T-2 ~> m s-2] or [m2 Z-1 s-2 ~> m s-2].
-  real,                 intent(in)  :: Rho_T0_S0 !< The density at T=0, S=0 [R ~> kg m-3] or [kg m-3].
+                                                 !! [L2 Z-1 T-2 ~> m s-2]
+  real,                 intent(in)  :: Rho_T0_S0 !< The density at T=0, S=0 [R ~> kg m-3]
   real,                 intent(in)  :: dRho_dT   !< The derivative of density with temperature,
-                                                 !! [R degC-1 ~> kg m-3 degC-1] or [kg m-3 degC-1].
+                                                 !! [R C-1 ~> kg m-3 degC-1]
   real,                 intent(in)  :: dRho_dS   !< The derivative of density with salinity,
-                                                 !! in [R ppt-1 ~> kg m-3 ppt-1] or [kg m-3 ppt-1].
+                                                 !! in [R S-1 ~> kg m-3 ppt-1]
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
                         intent(out) :: dpa       !< The change in the pressure anomaly across the
-                                                 !! layer [R L2 T-2 ~> Pa] or [Pa].
+                                                 !! layer [R L2 T-2 ~> Pa]
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
               optional, intent(out) :: intz_dpa  !< The integral through the thickness of the layer
                                                  !! of the pressure anomaly relative to the anomaly
-                                                 !! at the top of the layer [R L2 Z T-2 ~> Pa m] or [Pa m].
+                                                 !! at the top of the layer [R L2 Z T-2 ~> Pa m]
   real, dimension(HI%IsdB:HI%IedB,HI%jsd:HI%jed),  &
               optional, intent(out) :: intx_dpa  !< The integral in x of the difference between the
                                                  !! pressure anomaly at the top and bottom of the
-                                                 !! layer divided by the x grid spacing [R L2 T-2 ~> Pa] or [Pa].
+                                                 !! layer divided by the x grid spacing [R L2 T-2 ~> Pa]
   real, dimension(HI%isd:HI%ied,HI%JsdB:HI%JedB),  &
               optional, intent(out) :: inty_dpa  !< The integral in y of the difference between the
                                                  !! pressure anomaly at the top and bottom of the
-                                                 !! layer divided by the y grid spacing [R L2 T-2 ~> Pa] or [Pa].
+                                                 !! layer divided by the y grid spacing [R L2 T-2 ~> Pa]
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
               optional, intent(in)  :: bathyT    !< The depth of the bathymetry [Z ~> m].
   real,       optional, intent(in)  :: dz_neglect !< A miniscule thickness change [Z ~> m].
@@ -384,7 +382,7 @@ subroutine int_density_dz_linear(T, S, z_t, z_b, rho_ref, rho_0_pres, G_e, HI, &
   real :: wt_L, wt_R ! The linear weights of the left and right columns [nondim].
   real :: wtT_L, wtT_R ! The weights for tracers from the left and right columns [nondim].
   real :: intz(5)    ! The integrals of density with height at the
-                     ! 5 sub-column locations [R L2 T-2 ~> Pa] or [Pa].
+                     ! 5 sub-column locations [R L2 T-2 ~> Pa]
   logical :: do_massWeight ! Indicates whether to do mass weighting.
   real, parameter :: C1_6 = 1.0/6.0, C1_90 = 1.0/90.0  ! Rational constants.
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, i, j, m
@@ -502,60 +500,60 @@ subroutine int_spec_vol_dp_linear(T, S, p_t, p_b, alpha_ref, HI, Rho_T0_S0, &
   type(hor_index_type), intent(in)  :: HI        !< The ocean's horizontal index type.
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed),  &
                         intent(in)  :: T         !< Potential temperature relative to the surface
-                                                 !! [degC].
+                                                 !! [C ~> degC].
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed),  &
-                        intent(in)  :: S         !< Salinity [PSU].
+                        intent(in)  :: S         !< Salinity [S ~> PSU].
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed),  &
-                        intent(in)  :: p_t       !< Pressure at the top of the layer [R L2 T-2 ~> Pa] or [Pa].
+                        intent(in)  :: p_t       !< Pressure at the top of the layer [R L2 T-2 ~> Pa]
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed),  &
-                        intent(in)  :: p_b       !< Pressure at the top of the layer [R L2 T-2 ~> Pa] or [Pa].
+                        intent(in)  :: p_b       !< Pressure at the top of the layer [R L2 T-2 ~> Pa]
   real,                 intent(in)  :: alpha_ref   !< A mean specific volume that is subtracted out
                             !! to reduce the magnitude of each of the integrals [R-1 ~> m3 kg-1].
                             !! The calculation is mathematically identical with different values of
                             !! alpha_ref, but this reduces the effects of roundoff.
-  real,                 intent(in)  :: Rho_T0_S0 !< The density at T=0, S=0 [R ~> kg m-3] or [kg m-3].
+  real,                 intent(in)  :: Rho_T0_S0 !< The density at T=0, S=0 [R ~> kg m-3]
   real,                 intent(in)  :: dRho_dT   !< The derivative of density with temperature
-                                                 !! [R degC-1 ~> kg m-3 degC-1] or [kg m-3 degC-1].
+                                                 !! [R C-1 ~> kg m-3 degC-1]
   real,                 intent(in)  :: dRho_dS   !< The derivative of density with salinity,
-                                                 !! in [R ppt-1 ~> kg m-3 ppt-1] or [kg m-3 ppt-1].
+                                                 !! in [R S-1 ~> kg m-3 ppt-1]
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
                         intent(out) :: dza       !< The change in the geopotential anomaly across
-                                                 !! the layer [L2 T-2 ~> m2 s-2] or [m2 s-2].
+                                                 !! the layer [L2 T-2 ~> m2 s-2]
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
               optional, intent(out) :: intp_dza  !< The integral in pressure through the layer of the
                                                  !! geopotential anomaly relative to the anomaly at the
-                                                 !! bottom of the layer [R L4 T-4 ~> Pa m2 s-2] or [Pa m2 s-2].
+                                                 !! bottom of the layer [R L4 T-4 ~> Pa m2 s-2]
   real, dimension(HI%IsdB:HI%IedB,HI%jsd:HI%jed), &
               optional, intent(out) :: intx_dza  !< The integral in x of the difference between the
                                                  !! geopotential anomaly at the top and bottom of
                                                  !! the layer divided by the x grid spacing
-                                                 !! [L2 T-2 ~> m2 s-2] or [m2 s-2].
+                                                 !! [L2 T-2 ~> m2 s-2]
   real, dimension(HI%isd:HI%ied,HI%JsdB:HI%JedB), &
               optional, intent(out) :: inty_dza  !< The integral in y of the difference between the
                                                  !! geopotential anomaly at the top and bottom of
                                                  !! the layer divided by the y grid spacing
-                                                 !! [L2 T-2 ~> m2 s-2] or [m2 s-2].
+                                                 !! [L2 T-2 ~> m2 s-2]
   integer,    optional, intent(in)  :: halo_size !< The width of halo points on which to calculate dza.
   real, dimension(HI%isd:HI%ied,HI%jsd:HI%jed), &
-              optional, intent(in)  :: bathyP    !< The pressure at the bathymetry [R L2 T-2 ~> Pa] or [Pa]
+              optional, intent(in)  :: bathyP    !< The pressure at the bathymetry [R L2 T-2 ~> Pa]
   real,       optional, intent(in)  :: dP_neglect !< A miniscule pressure change with
-                                                 !! the same units as p_t [R L2 T-2 ~> Pa] or [Pa]
+                                                 !! the same units as p_t [R L2 T-2 ~> Pa]
   logical,    optional, intent(in)  :: useMassWghtInterp !< If true, uses mass weighting
                             !! to interpolate T/S for top and bottom integrals.
   ! Local variables
-  real :: dRho_TS       ! The density anomaly due to T and S [R ~> kg m-3] or [kg m-3].
-  real :: alpha_anom    ! The specific volume anomaly from 1/rho_ref [R-1 ~> m3 kg-1] or [m3 kg-1].
-  real :: aaL, aaR      ! The specific volume anomaly to the left and right [R-1 ~> m3 kg-1] or [m3 kg-1].
-  real :: dp, dpL, dpR  ! Layer pressure thicknesses [R L2 T-2 ~> Pa] or [Pa].
-  real :: hWght      ! A pressure-thickness below topography [R L2 T-2 ~> Pa] or [Pa].
-  real :: hL, hR     ! Pressure-thicknesses of the columns to the left and right [R L2 T-2 ~> Pa] or [Pa].
-  real :: iDenom     ! The inverse of the denominator in the weights [T4 R-2 L-4 ~> Pa-2] or [Pa-2].
+  real :: dRho_TS       ! The density anomaly due to T and S [R ~> kg m-3]
+  real :: alpha_anom    ! The specific volume anomaly from 1/rho_ref [R-1 ~> m3 kg-1]
+  real :: aaL, aaR      ! The specific volume anomaly to the left and right [R-1 ~> m3 kg-1]
+  real :: dp, dpL, dpR  ! Layer pressure thicknesses [R L2 T-2 ~> Pa]
+  real :: hWght      ! A pressure-thickness below topography [R L2 T-2 ~> Pa]
+  real :: hL, hR     ! Pressure-thicknesses of the columns to the left and right [R L2 T-2 ~> Pa]
+  real :: iDenom     ! The inverse of the denominator in the weights [T4 R-2 L-4 ~> Pa-2]
   real :: hWt_LL, hWt_LR ! hWt_LA is the weighted influence of A on the left column [nondim].
   real :: hWt_RL, hWt_RR ! hWt_RA is the weighted influence of A on the right column [nondim].
   real :: wt_L, wt_R ! The linear weights of the left and right columns [nondim].
   real :: wtT_L, wtT_R ! The weights for tracers from the left and right columns [nondim].
   real :: intp(5)    ! The integrals of specific volume with pressure at the
-                     ! 5 sub-column locations [L2 T-2 ~> m2 s-2] or [m2 s-2].
+                     ! 5 sub-column locations [L2 T-2 ~> m2 s-2]
   logical :: do_massWeight ! Indicates whether to do mass weighting.
   real, parameter :: C1_6 = 1.0/6.0, C1_90 = 1.0/90.0  ! Rational constants.
   integer :: Isq, Ieq, Jsq, Jeq, ish, ieh, jsh, jeh, i, j, m, halo
@@ -563,8 +561,8 @@ subroutine int_spec_vol_dp_linear(T, S, p_t, p_b, alpha_ref, HI, Rho_T0_S0, &
   Isq = HI%IscB ; Ieq = HI%IecB ; Jsq = HI%JscB ; Jeq = HI%JecB
   halo = 0 ; if (present(halo_size)) halo = MAX(halo_size,0)
   ish = HI%isc-halo ; ieh = HI%iec+halo ; jsh = HI%jsc-halo ; jeh = HI%jec+halo
-  if (present(intx_dza)) then ; ish = MIN(Isq,ish) ; ieh = MAX(Ieq+1,ieh); endif
-  if (present(inty_dza)) then ; jsh = MIN(Jsq,jsh) ; jeh = MAX(Jeq+1,jeh); endif
+  if (present(intx_dza)) then ; ish = MIN(Isq,ish) ; ieh = MAX(Ieq+1,ieh) ; endif
+  if (present(inty_dza)) then ; jsh = MIN(Jsq,jsh) ; jeh = MAX(Jeq+1,jeh) ; endif
 
   do_massWeight = .false.
   if (present(useMassWghtInterp)) then ; if (useMassWghtInterp) then
@@ -614,7 +612,7 @@ subroutine int_spec_vol_dp_linear(T, S, p_t, p_b, alpha_ref, HI, Rho_T0_S0, &
         wtT_L = wt_L*hWt_LL + wt_R*hWt_RL ; wtT_R = wt_L*hWt_LR + wt_R*hWt_RR
 
         ! T, S, and p are interpolated in the horizontal.  The p interpolation
-        ! is linear, but for T and S it may be thickness wekghted.
+        ! is linear, but for T and S it may be thickness weighted.
         dp = wt_L*(p_b(i,j) - p_t(i,j)) + wt_R*(p_b(i+1,j) - p_t(i+1,j))
 
         dRho_TS = dRho_dT*(wtT_L*T(i,j) + wtT_R*T(i+1,j)) + &
@@ -659,7 +657,7 @@ subroutine int_spec_vol_dp_linear(T, S, p_t, p_b, alpha_ref, HI, Rho_T0_S0, &
         wtT_L = wt_L*hWt_LL + wt_R*hWt_RL ; wtT_R = wt_L*hWt_LR + wt_R*hWt_RR
 
         ! T, S, and p are interpolated in the horizontal.  The p interpolation
-        ! is linear, but for T and S it may be thickness wekghted.
+        ! is linear, but for T and S it may be thickness weighted.
         dp = wt_L*(p_b(i,j) - p_t(i,j)) + wt_R*(p_b(i,j+1) - p_t(i,j+1))
 
         dRho_TS = dRho_dT*(wtT_L*T(i,j) + wtT_R*T(i,j+1)) + &

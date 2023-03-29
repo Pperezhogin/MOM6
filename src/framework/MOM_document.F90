@@ -389,7 +389,6 @@ subroutine doc_openBlock(doc, blockName, desc)
   character(len=*), optional, intent(in) :: desc !< A description of the parameter block being opened
 ! This subroutine handles documentation for opening a parameter block.
   character(len=mLen) :: mesg
-  character(len=doc%commentColumn) :: valstring
 
   if (.not. (is_root_pe() .and. associated(doc))) return
   call open_doc_file(doc)
@@ -413,7 +412,6 @@ subroutine doc_closeBlock(doc, blockName)
   character(len=*), intent(in) :: blockName !< The name of the parameter block being closed
 ! This subroutine handles documentation for closing a parameter block.
   character(len=mLen) :: mesg
-  character(len=doc%commentColumn) :: valstring
   integer :: i
 
   if (.not. (is_root_pe() .and. associated(doc))) return
@@ -639,19 +637,33 @@ function real_string(val)
   elseif (val == 0.) then
     real_string = "0.0"
   else
-    if ((abs(val) <= 1.0e-100) .or. (abs(val) >= 1.0e100)) then
-      write(real_string(1:32), '(ES24.14E3)') val
-      if (.not.testFormattedFloatIsReal(real_string,val)) &
-        write(real_string(1:32), '(ES24.15E3)') val
+    if ((abs(val) < 1.0e-99) .or. (abs(val) >= 1.0e100)) then
+      write(real_string(1:32), '(ES24.14E4)') val
+      if (scan(real_string, "eE") == 0) then  ! Fix a bug with a missing E in PGI formatting
+        ind = scan(real_string, "-+", back=.true.)
+        if (ind > index(real_string, ".") ) &  ! Avoid changing a leading sign.
+          real_string = real_string(1:ind-1)//"E"//real_string(ind:)
+      endif
+      if (.not.testFormattedFloatIsReal(real_string, val)) then
+        write(real_string(1:32), '(ES25.15E4)') val
+        if (scan(real_string, "eE") == 0) then  ! Fix a bug with a missing E in PGI formatting
+          ind = scan(real_string, "-+", back=.true.)
+          if (ind > index(real_string, ".") ) &  ! Avoid changing a leading sign.
+            real_string = real_string(1:ind-1)//"E"//real_string(ind:)
+        endif
+      endif
+      ! Remove a leading 0 from the exponent, if it is there.
+      ind = max(index(real_string, "E+0"), index(real_string, "E-0"))
+      if (ind > 0) real_string = real_string(1:ind+1)//real_string(ind+3:)
     else
       write(real_string(1:32), '(ES23.14)') val
-      if (.not.testFormattedFloatIsReal(real_string,val)) &
+      if (.not.testFormattedFloatIsReal(real_string, val)) &
         write(real_string(1:32), '(ES23.15)') val
     endif
-    do
-      ind = index(real_string,"0E")
+    do  ! Remove extra trailing 0s before the exponent.
+      ind = index(real_string, "0E")
       if (ind == 0) exit
-      if (real_string(ind-1:ind-1) == ".") exit
+      if (real_string(ind-1:ind-1) == ".") exit ! Leave at least one digit after the decimal point.
       real_string = real_string(1:ind-1)//real_string(ind+1:)
     enddo
   endif
@@ -672,22 +684,22 @@ function real_array_string(vals, sep)
   integer :: j, n, ns
   logical :: doWrite
   character(len=10) :: separator
-  n=1 ; doWrite=.true. ; real_array_string=''
+  n = 1 ; doWrite = .true. ; real_array_string = ''
   if (present(sep)) then
-    separator=sep ; ns=len(sep)
+    separator = sep ; ns = len(sep)
   else
-    separator=', ' ; ns=2
+    separator = ', ' ; ns = 2
   endif
   do j=1,size(vals)
-    doWrite=.true.
-    if (j<size(vals)) then
-      if (vals(j)==vals(j+1)) then
-        n=n+1
-        doWrite=.false.
+    doWrite = .true.
+    if (j < size(vals)) then
+      if (vals(j) == vals(j+1)) then
+        n = n+1
+        doWrite = .false.
       endif
     endif
     if (doWrite) then
-      if(len(real_array_string)>0) then ! Write separator if a number has already been written
+      if (len(real_array_string) > 0) then ! Write separator if a number has already been written
         real_array_string = real_array_string // separator(1:ns)
       endif
       if (n>1) then

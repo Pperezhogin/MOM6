@@ -23,6 +23,7 @@ use MOM_shared_initialization, only : initialize_topography_named, limit_topogra
 use MOM_shared_initialization, only : set_rotation_planetary, set_rotation_beta_plane, initialize_grid_rotation_angle
 use MOM_shared_initialization, only : reset_face_lengths_named, reset_face_lengths_file, reset_face_lengths_list
 use MOM_shared_initialization, only : read_face_length_list, set_velocity_depth_max, set_velocity_depth_min
+use MOM_shared_initialization, only : set_subgrid_topo_at_vel_from_file
 use MOM_shared_initialization, only : compute_global_grid_integrals, write_ocean_geometry_file
 use MOM_unit_scaling, only : unit_scale_type
 
@@ -62,6 +63,7 @@ subroutine MOM_initialize_fixed(G, US, OBC, PF, write_geom, output_dir)
   ! Local
   character(len=200) :: inputdir   ! The directory where NetCDF input files are.
   character(len=200) :: config
+  logical            :: read_porous_file
   character(len=40)  :: mdl = "MOM_fixed_initialization" ! This module's name.
   logical :: debug
 ! This include declares and sets the variable "version".
@@ -142,6 +144,13 @@ subroutine MOM_initialize_fixed(G, US, OBC, PF, write_geom, output_dir)
     end select
   endif
 
+  ! Read sub-grid scale topography parameters at velocity points used for porous barrier calculation
+  call get_param(PF, mdl, "SUBGRID_TOPO_AT_VEL", read_porous_file, &
+                 "If true, use variables from TOPO_AT_VEL_FILE as parameters for porous barrier.", &
+                 default=.False.)
+  if (read_porous_file) &
+    call set_subgrid_topo_at_vel_from_file(G, PF, US)
+
 !    Calculate the value of the Coriolis parameter at the latitude   !
 !  of the q grid points [T-1 ~> s-1].
   call MOM_initialize_rotation(G%CoriolisBu, G, PF, US=US)
@@ -165,14 +174,13 @@ subroutine MOM_initialize_fixed(G, US, OBC, PF, write_geom, output_dir)
 
 end subroutine MOM_initialize_fixed
 
-!> MOM_initialize_topography makes the appropriate call to set up the bathymetry.  At this
-!! point the topography is in units of [Z ~> m] or [m], depending on the presence of US.
+!> MOM_initialize_topography makes the appropriate call to set up the bathymetry in units of [Z ~> m].
 subroutine MOM_initialize_topography(D, max_depth, G, PF, US)
   type(dyn_horgrid_type),           intent(in)  :: G  !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                    intent(out) :: D  !< Ocean bottom depth [Z ~> m] or [m]
+                                    intent(out) :: D  !< Ocean bottom depth [Z ~> m]
   type(param_file_type),            intent(in)  :: PF !< Parameter file structure
-  real,                             intent(out) :: max_depth !< Maximum depth of model [Z ~> m] or [m]
+  real,                             intent(out) :: max_depth !< Maximum depth of model [Z ~> m]
   type(unit_scale_type),            intent(in)  :: US !< A dimensional unit scaling type
 
   ! This subroutine makes the appropriate call to set up the bottom depth.
@@ -211,7 +219,7 @@ subroutine MOM_initialize_topography(D, max_depth, G, PF, US)
                  " \t dense - Denmark Strait-like dense water formation and overflow.\n"//&
                  " \t USER - call a user modified routine.", &
                  fail_if_missing=.true.)
-  max_depth = -1.e9*US%m_to_Z ; call read_param(PF, "MAXIMUM_DEPTH", max_depth, scale=US%m_to_Z)
+  call get_param(PF, mdl, "MAXIMUM_DEPTH", max_depth, units="m", default=-1.e9, scale=US%m_to_Z, do_not_log=.true.)
   select case ( trim(config) )
     case ("file");      call initialize_topography_from_file(D, G, PF, US)
     case ("flat");      call initialize_topography_named(D, G, PF, config, max_depth, US)
@@ -236,12 +244,13 @@ subroutine MOM_initialize_topography(D, max_depth, G, PF, US)
       "Unrecognized topography setup '"//trim(config)//"'")
   end select
   if (max_depth>0.) then
-    call log_param(PF, mdl, "MAXIMUM_DEPTH", max_depth*US%Z_to_m, &
-                   "The maximum depth of the ocean.", units="m")
+    call log_param(PF, mdl, "MAXIMUM_DEPTH", max_depth, &
+                   "The maximum depth of the ocean.", units="m", unscale=US%Z_to_m)
   else
     max_depth = diagnoseMaximumDepth(D,G)
-    call log_param(PF, mdl, "!MAXIMUM_DEPTH", max_depth*US%Z_to_m, &
-                   "The (diagnosed) maximum depth of the ocean.", units="m", like_default=.true.)
+    call log_param(PF, mdl, "!MAXIMUM_DEPTH", max_depth, &
+                   "The (diagnosed) maximum depth of the ocean.", &
+                   units="m", unscale=US%Z_to_m, like_default=.true.)
   endif
   if (trim(config) /= "DOME") then
     call limit_topography(D, G, PF, max_depth, US)

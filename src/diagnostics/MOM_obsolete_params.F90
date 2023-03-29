@@ -23,8 +23,8 @@ subroutine find_obsolete_params(param_file)
   character(len=40)  :: mdl = "find_obsolete_params" ! This module's name.
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  integer :: test_int, l_seg, nseg
-  logical :: test_logic, test_logic2, test_logic3, split
+  integer :: l_seg, nseg
+  logical :: test_logic, split
   character(len=40)  :: temp_string
 
   if (.not.is_root_pe()) return
@@ -71,6 +71,7 @@ subroutine find_obsolete_params(param_file)
 
   call obsolete_real(param_file, "VSTAR_SCALE_COEF")
   call obsolete_real(param_file, "ZSTAR_RIGID_SURFACE_THRESHOLD")
+  call obsolete_logical(param_file, "HENYEY_IGW_BACKGROUND_NEW")
 
   ! Test for inconsistent parameter settings.
   split = .true. ; test_logic = .false.
@@ -82,16 +83,22 @@ subroutine find_obsolete_params(param_file)
 
   call obsolete_real(param_file, "ETA_TOLERANCE_AUX", only_warn=.true.)
   call obsolete_real(param_file, "BT_MASS_SOURCE_LIMIT", 0.0)
-
+  call obsolete_real(param_file, "FIRST_GUESS_SURFACE_LAYER_DEPTH")
+  call obsolete_logical(param_file, "CORRECT_SURFACE_LAYER_AVERAGE")
   call obsolete_int(param_file, "SEAMOUNT_LENGTH_SCALE", hint="Use SEAMOUNT_X_LENGTH_SCALE instead.")
 
   call obsolete_logical(param_file, "MSTAR_FIXED", hint="Instead use MSTAR_MODE.")
   call obsolete_logical(param_file, "USE_VISBECK_SLOPE_BUG", .false.)
+  call obsolete_logical(param_file, "Use_PP81", hint="get_param is case sensitive so use USE_PP81.")
 
   call obsolete_logical(param_file, "ALLOW_CLOCKS_IN_OMP_LOOPS", .true.)
   call obsolete_logical(param_file, "LARGE_FILE_SUPPORT", .true.)
   call obsolete_real(param_file, "MIN_Z_DIAG_INTERVAL")
   call obsolete_char(param_file, "Z_OUTPUT_GRID_FILE")
+
+  call read_param(param_file, "INTERPOLATE_SPONGE_TIME_SPACE", test_logic)
+  call obsolete_logical(param_file, "NEW_SPONGES", warning_val=test_logic, &
+                        hint="Use INTERPOLATE_SPONGE_TIME_SPACE instead.")
 
   ! Write the file version number to the model log.
   call log_version(param_file, mdl, version)
@@ -108,7 +115,7 @@ subroutine obsolete_logical(param_file, varname, warning_val, hint)
   logical :: test_logic, fatal_err
   character(len=128) :: hint_msg
 
-  test_logic = .false. ; call read_param(param_file, varname,test_logic)
+  test_logic = .false. ; call read_param(param_file, varname, test_logic)
   fatal_err = .true.
   if (present(warning_val)) fatal_err = (warning_val .neqv. .true.)
   hint_msg = " " ; if (present(hint)) hint_msg = hint

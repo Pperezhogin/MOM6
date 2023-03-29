@@ -33,10 +33,10 @@ type, public :: user_surface_forcing_CS ; private
   logical :: use_temperature !< If true, temperature and salinity are used as state variables.
   logical :: restorebuoy     !< If true, use restoring surface buoyancy forcing.
   real :: Rho0               !< The density used in the Boussinesq approximation [R ~> kg m-3].
-  real :: G_Earth            !< The gravitational acceleration [L2 Z-1 s-2 ~> m s-2].
+  real :: G_Earth            !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
   real :: Flux_const         !< The restoring rate at the surface [Z T-1 ~> m s-1].
   real :: gust_const         !< A constant unresolved background gustiness
-                             !! that contributes to ustar [R L Z T-1 ~> Pa].
+                             !! that contributes to ustar [R L Z T-2 ~> Pa].
 
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                              !! timing of diagnostic output.
@@ -71,7 +71,7 @@ subroutine USER_wind_forcing(sfc_state, forces, day, G, US, CS)
   ! Allocate the forcing arrays, if necessary.
   call allocate_mech_forcing(G, forces, stress=.true., ustar=.true.)
 
-  !  Set the surface wind stresses, in units of [R L Z T-1 ~> Pa].  A positive taux
+  !  Set the surface wind stresses, in units of [R L Z T-2 ~> Pa].  A positive taux
   !  accelerates the ocean to the (pseudo-)east.
 
   !  The i-loop extends to is-1 so that taux can be used later in the
@@ -125,13 +125,13 @@ subroutine USER_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
 !  fluxes are in [R Z T-1 ~> kg m-2 s-1] and positive for water moving into the ocean.
 
   ! Local variables
-  real :: Temp_restore   ! The temperature that is being restored toward [degC].
-  real :: Salin_restore  ! The salinity that is being restored toward [ppt]
+  real :: Temp_restore   ! The temperature that is being restored toward [C ~> degC].
+  real :: Salin_restore  ! The salinity that is being restored toward [S ~> ppt]
   real :: density_restore  ! The potential density that is being restored
                          ! toward [R ~> kg m-3].
-  real :: rhoXcp         ! The mean density times the heat capacity [Q R degC-1 ~> J m-3 degC-1].
+  real :: rhoXcp         ! The mean density times the heat capacity [Q R C-1 ~> J m-3 degC-1].
   real :: buoy_rest_const  ! A constant relating density anomalies to the
-                           ! restoring buoyancy flux [L2 m3 T-3 kg-1 ~> m5 s-3 kg-1].
+                           ! restoring buoyancy flux [L2 T-3 R-1 ~> m5 s-3 kg-1].
 
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
@@ -201,8 +201,8 @@ subroutine USER_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
 
       rhoXcp = CS%Rho0 * fluxes%C_p
       do j=js,je ; do i=is,ie
-        !   Set Temp_restore and Salin_restore to the temperature (in degC) and
-        ! salinity (in PSU or ppt) that are being restored toward.
+        !   Set Temp_restore and Salin_restore to the temperature (in [C ~> degC]) and
+        ! salinity (in [S ~> ppt]) that are being restored toward.
         Temp_restore = 0.0
         Salin_restore = 0.0
 
