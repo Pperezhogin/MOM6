@@ -82,31 +82,31 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
 
   call get_param(param_file, mdl, "LPF_iter", CS%LPF_iter, &
                  "Low-pass filter for Velocity gradient; number of iterations", &
-                 default=2)
+                 default=0)
   
   call get_param(param_file, mdl, "LPF_order", CS%LPF_order, &
                  "Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
-                 default=2)
+                 default=1)
 
   call get_param(param_file, mdl, "HPF_iter", CS%HPF_iter, &
                  "High-pass filter for Velocity gradient; number of iterations", &
-                 default=2)
+                 default=0)
   
   call get_param(param_file, mdl, "HPF_order", CS%HPF_order, &
                  "High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
-                 default=2)
+                 default=1)
 
   call get_param(param_file, mdl, "Stress_iter", CS%Stress_iter, &
                  "Low-pass filter for Stress (Momentum Flux); number of iterations", &
-                 default=2)
+                 default=0)
   
   call get_param(param_file, mdl, "Stress_order", CS%Stress_order, &
                  "Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian", &
-                 default=2)
+                 default=1)
 
   call get_param(param_file, mdl, "ssd_iter", CS%ssd_iter, &
                  "Small-scale dissipation in RHS of momentum eq; -1: off, 0:Laplacian, 10:Laplacian^11", &
-                 default=10)
+                 default=-1)
 
   call get_param(param_file, mdl, "ssd_bound_coef", CS%ssd_bound_coef, &
                  "The viscosity bounds to the theoretical maximum for stability", units="nondim", &
