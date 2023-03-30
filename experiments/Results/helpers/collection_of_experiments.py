@@ -1,6 +1,7 @@
 import xarray as xr
 import os
 from helpers.experiment import Experiment
+from helpers.computational_tools import remesh
 import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
@@ -204,16 +205,28 @@ class CollectionOfExperiments:
             plt.ylabel('Power spectrum [m$^3$/s$^4$]')
             plt.title('')
             
-    def plot_ssh(self, exps, labels=None):
+    def plot_ssh(self, exps, labels=None, target=None):
         if labels is None:
             labels=exps
         plt.figure(figsize=(4*len(exps),3))
         nfig = len(exps)
         for ifig, exp in enumerate(exps):
             plt.subplot(1,nfig,ifig+1)
-            self[exp].ssh_mean.plot.contourf(levels=np.arange(-4,4.5,0.5), cmap='bwr', linewidths=1, cbar_kwargs={'label': 'SSH [m]'})
-            Cplot = self[exp].ssh_mean.plot.contour(levels=np.arange(-4,4.5,0.5), colors='k', linewidths=1)
-            plt.gca().clabel(Cplot, Cplot.levels)
+            if target is None or target == exp:
+                ssh = self[exp].ssh_mean
+                levels = np.arange(-4,4.5,0.5)
+                label = 'SSH [m]'
+                lines = True
+            else:
+                ssh = self[exp].ssh_mean
+                ssh = ssh - remesh(self[target].ssh_mean,ssh)
+                levels = np.linspace(-2,2,21)
+                label = 'SSH error [m]'
+                lines = False
+            ssh.plot.contourf(levels=levels, cmap='bwr', linewidths=1, extend='both', cbar_kwargs={'label': label})
+            if lines:
+                Cplot = ssh.plot.contour(levels=levels, colors='k', linewidths=1)
+                plt.gca().clabel(Cplot, Cplot.levels)
             plt.xticks((0, 5, 10, 15, 20))
             plt.yticks((30, 35, 40, 45, 50))
             plt.xlabel('Longitude')

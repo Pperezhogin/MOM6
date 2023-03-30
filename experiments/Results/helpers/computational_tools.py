@@ -491,7 +491,7 @@ def compute_KE_time_spectrum(u_in, v_in, Lat=(35,45), Lon=(5,15), Time=slice(0,N
 def mass_average(KE, h, dx, dy):
     return (KE*h*dx*dy).mean(dim=('xh', 'yh')) / (h*dx*dy).mean(dim=('xh', 'yh'))
 
-def Lk_error(input, target, normalize=True, k=2):
+def Lk_error(input, target, normalize=False, k=2):
     '''
     Universal function for computation of NORMALIZED error.
     target - "good simulation", it is used for normalization
