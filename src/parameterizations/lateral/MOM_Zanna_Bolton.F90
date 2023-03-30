@@ -23,7 +23,6 @@ type, public :: ZB2020_CS
   ! Parameters
   logical   :: use_ZB2020     !< If true, parameterization works
   real      :: amplitude      !< k_bc = - amplitude * cell_area
-  real      :: amp_bottom     !< amplitude in the bottom layer; -1 = use same
   integer   :: ZB_type        !< 0 = Full model, 1 = trace-free part, 2 = only trace part
   integer   :: ZB_cons        !< 0: nonconservative; 1: conservative without interface;
   integer   :: LPF_iter       !< Low-pass filter for Velocity gradient; number of iterations
@@ -73,12 +72,6 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
                  "k_bc=-amplitude*cell_area, amplitude=0..1", &
                  units="nondim", default=0.3)
   
-  call get_param(param_file, mdl, "amp_bottom", CS%amp_bottom, &
-                 "-1=use same amplitude, or specify", &
-                 units="nondim", default=-1.)
-
-  if (CS%amp_bottom < -0.5) CS%amp_bottom = CS%amplitude
-  
   call get_param(param_file, mdl, "ZB_type", CS%ZB_type, &
                  "Type of parameterization: 0 = full, 1 = trace-free, 2 = trace-only", &
                  default=0)
@@ -89,31 +82,31 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
 
   call get_param(param_file, mdl, "LPF_iter", CS%LPF_iter, &
                  "Low-pass filter for Velocity gradient; number of iterations", &
-                 default=0)
+                 default=2)
   
   call get_param(param_file, mdl, "LPF_order", CS%LPF_order, &
                  "Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
-                 default=1)
+                 default=2)
 
   call get_param(param_file, mdl, "HPF_iter", CS%HPF_iter, &
                  "High-pass filter for Velocity gradient; number of iterations", &
-                 default=0)
+                 default=2)
   
   call get_param(param_file, mdl, "HPF_order", CS%HPF_order, &
                  "High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
-                 default=1)
+                 default=2)
 
   call get_param(param_file, mdl, "Stress_iter", CS%Stress_iter, &
                  "Low-pass filter for Stress (Momentum Flux); number of iterations", &
-                 default=0)
+                 default=2)
   
   call get_param(param_file, mdl, "Stress_order", CS%Stress_order, &
                  "Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian", &
-                 default=1)
+                 default=2)
 
   call get_param(param_file, mdl, "ssd_iter", CS%ssd_iter, &
                  "Small-scale dissipation in RHS of momentum eq; -1: off, 0:Laplacian, 10:Laplacian^11", &
-                 default=-1)
+                 default=10)
 
   call get_param(param_file, mdl, "ssd_bound_coef", CS%ssd_bound_coef, &
                  "The viscosity bounds to the theoretical maximum for stability", units="nondim", &
@@ -219,6 +212,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xy_center, &    ! sh_xy in the center
     S_11, S_22, &      ! flux tensor in the cell center, multiplied with interface height [m^2/s^2 * h]
     ssd_11, &          ! diagonal part of ssd in cell center
+    ssd_11_coef, &     ! coefficient for diagonal part of ssd [nondim]
     mask_T             ! mask of wet center points
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
@@ -232,6 +226,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xx_corner, &    ! sh_xx in the corner
     S_12, &            ! flux tensor in the corner, multiplied with interface height [m^2/s^2 * h]
     ssd_12, &          ! off-diagonal part of ssd in corner
+    ssd_12_coef, &     ! coefficient for off-diagonal part of ssd [nondim]
     hq, &              ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
     mask_q             ! mask of wet corner points
 
@@ -258,7 +253,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
   real :: sum_sq     ! squared sum, i.e. 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2)
   real :: vort_sh    ! multiplication of vort_xt and sh_xy
-  real :: amplitude  ! amplitude of ZB parameterization
 
   real :: k_bc ! free constant in parameterization, k_bc < 0, [k_bc] = m^2  
 
@@ -284,10 +278,12 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     DX_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; DY_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
   enddo ; enddo
 
-  do k=1,nz
+  if (CS%ssd_iter > -1) then
+    ssd_11_coef(:,:) = ((CS%ssd_bound_coef * 0.25) / CS%DT) * ((dx2h(:,:) * dy2h(:,:)) / (dx2h(:,:) + dy2h(:,:)))
+    ssd_12_coef(:,:) = ((CS%ssd_bound_coef * 0.25) / CS%DT) * ((dx2q(:,:) * dy2q(:,:)) / (dx2q(:,:) + dy2q(:,:)))
+  endif
 
-    if (k==1) amplitude = CS%amplitude
-    if (k==2) amplitude = CS%amp_bottom
+  do k=1,nz
 
     sh_xx(:,:) = 0.
     sh_xy(:,:) = 0.
@@ -295,9 +291,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     S_12(:,:) = 0.
     S_11(:,:) = 0.
     S_22(:,:) = 0.
-    ssd_11(:,:) = 0.
-    ssd_12(:,:) = 0.
-
 
     ! Calculate horizontal tension (line 590 of MOM_hor_visc.F90)
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
@@ -344,12 +337,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     vort_xy(:,:) = vort_xy(:,:) * mask_q(:,:)
 
     if (CS%ssd_iter > -1) then
-      ssd_11(:,:) = sh_xx(:,:) * &
-                  CS%ssd_bound_coef * 0.25 / CS%DT * &
-                  dx2h(:,:) * dy2h(:,:) / (dx2h(:,:) + dy2h(:,:))
-      ssd_12(:,:) = sh_xy(:,:) * &
-                  CS%ssd_bound_coef * 0.25 / CS%DT * &
-                  dx2q(:,:) * dy2q(:,:) / (dx2q(:,:) + dy2q(:,:))
+      ssd_11(:,:) = sh_xx(:,:) * ssd_11_coef(:,:)
+      ssd_12(:,:) = sh_xy(:,:) * ssd_12_coef(:,:)
      
       if (CS%ssd_iter > 0) then
         call filter(G, mask_T, mask_q, -1, CS%ssd_iter, T=ssd_11)
@@ -427,7 +416,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
           vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
         endif
       endif
-      k_bc = - amplitude * G%areaT(i,j)
+      k_bc = - CS%amplitude * G%areaT(i,j)
       S_11(i,j) = k_bc * (- vort_sh + sum_sq)
       S_22(i,j) = k_bc * (+ vort_sh + sum_sq)
     enddo ; enddo
@@ -440,7 +429,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       else 
         vort_sh = vort_xy(I,J) * sh_xx_corner(I,J)
       endif
-      k_bc = - amplitude * G%areaBu(i,j)
+      k_bc = - CS%amplitude * G%areaBu(i,j)
       S_12(I,J) = k_bc * vort_sh
     enddo ; enddo
 
@@ -623,15 +612,15 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
     qim(:,:) = q(:,:) * mask_q(:,:)
     do J = G%JscB, G%JecB
       do I = G%IscB, G%IecB
-        q(I,J) = wcenter * qim(I,J)     & 
-               + wcorner * qim(I-1,J-1) &
-               + wcorner * qim(I-1,J+1) &
-               + wcorner * qim(I+1,J-1) &
-               + wcorner * qim(I+1,J+1) &
-               + wside   * qim(I-1,J)   &
-               + wside   * qim(I+1,J)   &
-               + wside   * qim(I,J-1)   &
-               + wside   * qim(I,J+1)
+        q(I,J) = wcenter * qim(i,j)                &
+               + wcorner * (                       &
+                  (qim(I-1,J-1)+qim(I+1,J+1))      &
+                + (qim(I-1,J+1)+qim(I+1,J-1))      &
+               )                                   &
+               + wside * (                         &
+                  (qim(I-1,J)+qim(I+1,J))          &
+                + (qim(I,J-1)+qim(I,J+1))          &
+               )
         q(I,J) = q(I,J) * mask_q(I,J)
       enddo
     enddo
@@ -643,15 +632,15 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
     Tim(:,:) = T(:,:) * mask_T(:,:)
     do j = G%jsc, G%jec
       do i = G%isc, G%iec
-        T(i,j) = wcenter * Tim(i,j)     & 
-               + wcorner * Tim(i-1,j-1) &
-               + wcorner * Tim(i-1,j+1) &
-               + wcorner * Tim(i+1,j-1) &
-               + wcorner * Tim(i+1,j+1) &
-               + wside   * Tim(i-1,j)   &
-               + wside   * Tim(i+1,j)   &
-               + wside   * Tim(i,j-1)   &
-               + wside   * Tim(i,j+1)
+        T(i,j) = wcenter * Tim(i,j)                &
+               + wcorner * (                       &
+                  (Tim(i-1,j-1)+Tim(i+1,j+1))      &
+                + (Tim(i-1,j+1)+Tim(i+1,j-1))      &
+               )                                   &
+               + wside * (                         &
+                  (Tim(i-1,j)+Tim(i+1,j))          &
+                + (Tim(i,j-1)+Tim(i,j+1))          &
+               )
         T(i,j) = T(i,j) * mask_T(i,j)
       enddo
     enddo
