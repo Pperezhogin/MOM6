@@ -18,7 +18,7 @@ implicit none ; private
 
 public Zanna_Bolton_2020, ZB_2020_init
 
-!> Control structure that contains MEKE parameters and diagnostics handles
+!> Control structure for Zanna-Bolton-2020 parameterization.
 type, public :: ZB2020_CS
   ! Parameters
   logical   :: use_ZB2020     !< If true, parameterization works
@@ -34,7 +34,7 @@ type, public :: ZB2020_CS
   integer   :: ssd_iter       !< Small-scale dissipation in RHS of momentum eq; -1: off, 0:Laplacian, 4:Laplacian^5
   real      :: ssd_bound_coef !< the viscosity bounds to the theoretical maximum for stability
 
-  real      :: DT            !< The (baroclinic) dynamics time step.
+  real      :: DT             !< The (baroclinic) dynamics time step.
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -50,6 +50,8 @@ end type ZB2020_CS
 
 contains
 
+!> Read parameters and register output fields
+!! used in Zanna_Bolton_2020().
 subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
   type(time_type),         intent(in)    :: Time       !< The current model time.
   type(verticalGrid_type), intent(in)    :: GV         !< The ocean's vertical grid structure
@@ -148,40 +150,17 @@ end subroutine ZB_2020_init
 
 !> Baroclinic parameterization is as follows:
 !! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
-!! (du/dt, dv/dt) = k_BC *
-!!                  (div(S0) + 1/2 * grad(vort_xy^2 + sh_xy^2 + sh_xx^2))
+!! We collect all contributions to a tensor S, which is defined by (S_11, S_12; S_12, S_22)
+!! S = (-vort_xy * sh_xy + 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2), vort_xy * sh_xx;
+!!       vort_xy * sh_xx, vort_xy * sh_xy + 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2))
+!! Update of the governing equations:
+!! (du/dt, dv/dt) = k_BC * div(S)
+!! Where:
+!! k_BC = - amplitude * grid_cell_area
+!! amplitude = 0..1 (approx)
 !! vort_xy = dv/dx - du/dy - relative vorticity
 !! sh_xy   = dv/dx + du/dy - shearing deformation (or horizontal shear strain)
 !! sh_xx   = du/dx - dv/dy - stretching deformation (or horizontal tension)
-!! S0 - 2x2 tensor:
-!! S0 = vort_xy * (-sh_xy, sh_xx; sh_xx, sh_xy)
-!! Relating k_BC to velocity gradient model,
-!! k_BC = - amplitude * cell_area
-!! where amplitude = 0..1 (approx)
-!!
-!! S - is a tensor of full tendency
-!! S = (-vort_xy * sh_xy + 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2), vort_xy * sh_xx;
-!!       vort_xy * sh_xx, vort_xy * sh_xy + 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2))
-!! So the full parameterization:
-!! (du/dt, dv/dt) = k_BC * div(S)
-!! In generalized curvilinear orthogonal coordinates (see Griffies 2020,
-!! and MOM documentation
-!! https://mom6.readthedocs.io/en/dev-gfdl/api/generated/modules/mom_hor_visc.html#f/mom_hor_visc):
-!! du/dx -> dy/dx * delta_i (u / dy)
-!! dv/dy -> dx/dy * delta_j (v / dx)
-!! dv/dx -> dy/dx * delta_i (v / dy)
-!! du/dy -> dx/dy * delta_j (u / dx)
-!!
-!! vort_xy and sh_xy are in the corner of the cell
-!! sh_xx in the center of the cell
-!!
-!! In order to compute divergence of S, its components must be:
-!! S_11, S_22 in center of the cells
-!! S_12 (=S_21) in the corner
-!!
-!! The following interpolations are required:
-!! sh_xx center -> corner
-!! vort_xy, sh_xy corner -> center
 subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
@@ -210,7 +189,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     sh_xx, &           ! horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
     vort_xy_center, &  ! vort_xy in the center
     sh_xy_center, &    ! sh_xy in the center
-    S_11, S_22, &      ! flux tensor in the cell center, multiplied with interface height [m^2/s^2 * h]
+    S_11, S_22, &      ! Diagonal terms in the stress tensor, layer-integrated [H L2 T-2 ~> m3 s-2 or kg s-2]
     ssd_11, &          ! diagonal part of ssd in cell center
     ssd_11_coef, &     ! coefficient for diagonal part of ssd [nondim]
     mask_T             ! mask of wet center points
@@ -224,7 +203,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     vort_xy, &         ! Vertical vorticity (dv/dx - du/dy) including metric terms [T-1 ~> s-1]
     sh_xy, &           ! horizontal shearing strain (du/dy + dv/dx) including metric terms [T-1 ~> s-1]
     sh_xx_corner, &    ! sh_xx in the corner
-    S_12, &            ! flux tensor in the corner, multiplied with interface height [m^2/s^2 * h]
+    S_12, &            ! Off-diagonal term in the stress tensor, layer-integrated [H L2 T-2 ~> m3 s-2 or kg s-2]
     ssd_12, &          ! off-diagonal part of ssd in corner
     ssd_12_coef, &     ! coefficient for off-diagonal part of ssd [nondim]
     hq, &              ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
@@ -497,13 +476,13 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
 end subroutine Zanna_Bolton_2020
 
-! if n_lowpass and n_highpass are positive,
-! performs n_lowpass iterations of
-! filter of order 2*n_highpass
-! if n_lowpass is negative, returns residual instead
-! Input does not require halo
-! Output has full halo
-! filtering occurs in-place
+!> Filter which is used to smooth velocity gradient tensor
+!! or the stress tensor.
+!! If n_lowpass and n_highpass are positive,
+!! performs n_lowpass iterations of
+!! filter with order 2*n_highpass.
+!! If n_lowpass is negative, returns residual instead.
+!! Input does not require halo. Output has full halo.
 subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   type(ocean_grid_type),              intent(in)              :: G          !< Ocean grid
   real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T     !< mask of wet points in T points
@@ -586,8 +565,11 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   endif
 end subroutine filter
 
-! returns filtered fields in-place and
-! residuals as optional argument
+!> One iteration of 3x3 filter
+!! removing chess-harmonic.
+!! It is used as a buiding block in filter().
+!! Zero Dirichlet boundary conditions are applied
+!! with mask_T and mask_q.
 subroutine smooth_Tq(G, mask_T, mask_q, T, q)
   type(ocean_grid_type),              intent(in)              :: G      !< Ocean grid
   real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T !< mask of wet points in T points
@@ -649,9 +631,12 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
 
 end subroutine smooth_Tq
 
+!> Returns min and max values of array across all PEs.
+!! It is used in filter() to check monotonicity of filtered
+!! fields.
 subroutine min_max(array, min_val, max_val)
-  real, dimension(:,:), intent(in) :: array
-  real, intent(out)                :: min_val, max_val
+  real, dimension(:,:), intent(in) :: array             !< array of arbitrary size
+  real, intent(out)                :: min_val, max_val  !< min and max values of array accross PEs
 
   min_val = minval(array)
   max_val = maxval(array)
@@ -659,6 +644,10 @@ subroutine min_max(array, min_val, max_val)
   call max_across_PEs(max_val)
 end subroutine
 
+!> Computes mask of wet points in T and q points.
+!! Method: compare layer thicknesses with Angstrom_H.
+!! Mask is computed for every vertical layer and
+!! for every time step.
 subroutine compute_masks(G, GV, h, mask_T, mask_q, k)
   type(ocean_grid_type),              intent(in)    :: G      !< Ocean grid
   type(verticalGrid_type),            intent(in)    :: GV     !< The ocean's vertical grid structure
@@ -705,7 +694,8 @@ subroutine compute_masks(G, GV, h, mask_T, mask_q, k)
 
 end subroutine compute_masks
 
-! This is copy-paste from MOM_diagnostics.F90, specifically 1125 line
+!> Computes the energy source term for the ZB2020 scheme
+!! similarly to MOM_diagnostics.F90, specifically 1125 line.
 subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
@@ -719,11 +709,11 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
                                  intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2].
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(in) :: fx     !< Zonal acceleration due to convergence of
-                                                      !! along-coordinate stress tensor [L T-2 ~> m s-2]
+                                 intent(in) :: fx      !< Zonal acceleration due to convergence of
+                                                       !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(in) :: fy     !< Meridional acceleration due to convergence
-                                                      !! of along-coordinate stress tensor [L T-2 ~> m s-2]
+                                 intent(in) :: fy      !< Meridional acceleration due to convergence
+                                                       !! of along-coordinate stress tensor [L T-2 ~> m s-2]
 
   real :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) ! A term in the kinetic energy budget
                                  ! [H L2 T-3 ~> m3 s-3 or W m-2]
