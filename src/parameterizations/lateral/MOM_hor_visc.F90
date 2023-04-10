@@ -335,12 +335,12 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   ! Zanna-Bolton fields
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
-    ZB2020u           !< Zonal acceleration due to convergence of 
+    ZB2020u           !< Zonal acceleration due to convergence of
                       !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
     ZB2020v           !< Meridional acceleration due to convergence
                       !! of along-coordinate stress tensor [L T-2 ~> m s-2]
-    
+
   real :: AhSm       ! Smagorinsky biharmonic viscosity [L4 T-1 ~> m4 s-1]
   real :: AhLth      ! 2D Leith biharmonic viscosity [L4 T-1 ~> m4 s-1]
   real :: Shear_mag_bc  ! Shear_mag value in backscatter [T-1 ~> s-1]
