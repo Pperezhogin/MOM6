@@ -19,9 +19,8 @@ implicit none ; private
 public Zanna_Bolton_2020, ZB_2020_init
 
 !> Control structure for Zanna-Bolton-2020 parameterization.
-type, public :: ZB2020_CS
+type, public :: ZB2020_CS ; private
   ! Parameters
-  logical   :: use_ZB2020     !< If true, parameterization works
   real      :: amplitude      !< k_bc = - amplitude * cell_area
   integer   :: ZB_type        !< 0 = Full model, 1 = trace-free part, 2 = only trace part
   integer   :: ZB_cons        !< 0: nonconservative; 1: conservative without interface;
@@ -52,13 +51,14 @@ contains
 
 !> Read parameters and register output fields
 !! used in Zanna_Bolton_2020().
-subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
+subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
   type(time_type),         intent(in)    :: Time       !< The current model time.
   type(verticalGrid_type), intent(in)    :: GV         !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)    :: US         !< A dimensional unit scaling type
   type(param_file_type),   intent(in)    :: param_file !< Parameter file parser structure.
   type(diag_ctrl), target, intent(inout) :: diag       !< Diagnostics structure.
   type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
+  logical,                 intent(out)   :: use_ZB2020 !< If true, turns on Zanna-Bolton 2020 parameterization
 
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
@@ -66,7 +66,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS)
 
   call log_version(param_file, mdl, version, "")
 
-  call get_param(param_file, mdl, "USE_ZB2020", CS%use_ZB2020, &
+  call get_param(param_file, mdl, "USE_ZB2020", use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
                  default=.false.)
 

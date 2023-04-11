@@ -107,6 +107,7 @@ type, public :: hor_visc_CS ; private
                              !! limit grid Reynolds number [L4 T-1 ~> m4 s-1]
 
   type(ZB2020_CS) :: ZB2020  !< Zanna-Bolton 2020 control structure.
+  logical :: use_ZB2020      !< If true, use Zanna-Bolton 2020 parameterization.
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEM_) :: Kh_bg_xx
                       !< The background Laplacian viscosity at h points [L2 T-1 ~> m2 s-1].
@@ -1619,7 +1620,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   enddo ! end of k loop
 
-  if (CS%ZB2020%use_ZB2020) then
+  if (CS%use_ZB2020) then
     call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
 
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
@@ -1778,7 +1779,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   ! init control structure
-  call ZB_2020_init(Time, GV, US, param_file, diag, CS%ZB2020)
+  call ZB_2020_init(Time, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
 
   CS%initialized = .true.
 
