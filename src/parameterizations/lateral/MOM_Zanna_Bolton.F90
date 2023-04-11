@@ -258,8 +258,15 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   enddo ; enddo
 
   if (CS%ssd_iter > -1) then
-    ssd_11_coef(:,:) = ((CS%ssd_bound_coef * 0.25) / CS%DT) * ((dx2h(:,:) * dy2h(:,:)) / (dx2h(:,:) + dy2h(:,:)))
-    ssd_12_coef(:,:) = ((CS%ssd_bound_coef * 0.25) / CS%DT) * ((dx2q(:,:) * dy2q(:,:)) / (dx2q(:,:) + dy2q(:,:)))
+    ssd_11_coef(:,:) = 0.
+    ssd_12_coef(:,:) = 0.
+    do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      ssd_11_coef(i,j) = ((CS%ssd_bound_coef * 0.25) / CS%DT) * ((dx2h(i,j) * dy2h(i,j)) / (dx2h(i,j) + dy2h(i,j)))
+    enddo; enddo
+
+    do J=js-1,Jeq ; do I=is-1,Ieq
+      ssd_12_coef(I,J) = ((CS%ssd_bound_coef * 0.25) / CS%DT) * ((dx2q(I,J) * dy2q(I,J)) / (dx2q(I,J) + dy2q(I,J)))
+    enddo; enddo
   endif
 
   do k=1,nz
@@ -270,6 +277,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     S_12(:,:) = 0.
     S_11(:,:) = 0.
     S_22(:,:) = 0.
+    ssd_11(:,:) = 0.
+    ssd_12(:,:) = 0.
 
     ! Calculate horizontal tension (line 590 of MOM_hor_visc.F90)
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
@@ -301,23 +310,41 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     enddo ; enddo
 
     call compute_masks(G, GV, h, mask_T, mask_q, k)
-    if (CS%id_maskT>0) mask_T_3d(:,:,k) = mask_T(:,:)
-    if (CS%id_maskq>0) mask_q_3d(:,:,k) = mask_q(:,:)
+    if (CS%id_maskT>0) then
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+        mask_T_3d(i,j,k) = mask_T(i,j)
+      enddo; enddo
+    endif
+
+    if (CS%id_maskq>0) then
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+        mask_q_3d(i,j,k) = mask_q(i,j)
+      enddo; enddo
+    endif
 
     ! Numerical scheme for ZB2020 requires
     ! interpolation center <-> corner
     ! This interpolation requires B.C.,
     ! and that is why B.C. for Velocity Gradients should be
     ! well defined
-    ! The same B.C. will be used by all filtering operators,
-    ! So, it must be applied
-    sh_xx(:,:) = sh_xx(:,:) * mask_T(:,:)
-    sh_xy(:,:) = sh_xy(:,:) * mask_q(:,:)
-    vort_xy(:,:) = vort_xy(:,:) * mask_q(:,:)
+    ! The same B.C. will be used by all filtering operators
+    do J=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
+      sh_xx(i,j) = sh_xx(i,j) * mask_T(i,j)
+    enddo ; enddo
+
+    do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
+      sh_xy(i,j) = sh_xy(i,j) * mask_q(i,j)
+      vort_xy(i,j) = vort_xy(i,j) * mask_q(i,j)
+    enddo ; enddo
 
     if (CS%ssd_iter > -1) then
-      ssd_11(:,:) = sh_xx(:,:) * ssd_11_coef(:,:)
-      ssd_12(:,:) = sh_xy(:,:) * ssd_12_coef(:,:)
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        ssd_11(i,j) = sh_xx(i,j) * ssd_11_coef(i,j)
+      enddo; enddo
+
+      do J=js-1,Jeq ; do I=is-1,Ieq
+        ssd_12(I,J) = sh_xy(I,J) * ssd_12_coef(I,J)
+      enddo; enddo
 
       if (CS%ssd_iter > 0) then
         call filter(G, mask_T, mask_q, -1, CS%ssd_iter, T=ssd_11)
@@ -416,14 +443,32 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_22)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, q=S_12)
 
-    if (CS%id_S_11f>0) S_11_3df(:,:,k) = S_11(:,:)
-    if (CS%id_S_22f>0) S_22_3df(:,:,k) = S_22(:,:)
-    if (CS%id_S_12f>0) S_12_3df(:,:,k) = S_12(:,:)
-
     if (CS%ssd_iter>-1) then
-      S_11(:,:) = S_11(:,:) + ssd_11(:,:)
-      S_12(:,:) = S_12(:,:) + ssd_12(:,:)
-      S_22(:,:) = S_22(:,:) - ssd_11(:,:)
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        S_11(i,j) = S_11(i,j) + ssd_11(i,j)
+        S_22(i,j) = S_22(i,j) - ssd_11(i,j)
+      enddo ; enddo
+      do J=js-1,Jeq ; do I=is-1,Ieq
+        S_12(I,J) = S_12(I,J) + ssd_12(I,J)
+      enddo ; enddo
+    endif
+
+    if (CS%id_S_11f>0) then
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        S_11_3df(i,j,k) = S_11(i,j)
+      enddo; enddo
+    endif
+
+    if (CS%id_S_22f>0) then
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        S_22_3df(i,j,k) = S_22(i,j)
+      enddo; enddo
+    endif
+
+    if (CS%id_S_12f>0) then
+      do J=js-1,Jeq ; do I=is-1,Ieq
+        S_12_3df(I,J,k) = S_12(I,J)
+      enddo; enddo
     endif
 
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
@@ -479,9 +524,11 @@ end subroutine Zanna_Bolton_2020
 !> Filter which is used to smooth velocity gradient tensor
 !! or the stress tensor.
 !! If n_lowpass and n_highpass are positive,
-!! performs n_lowpass iterations of
-!! filter with order 2*n_highpass.
-!! If n_lowpass is negative, returns residual instead.
+!! implements filter of order 2*n_highpass,
+!! where n_lowpass is the number of iterations
+!! and proportional to the filter scale.
+!! If n_lowpass is negative, returns residual
+!! for the same filter.
 !! Input does not require halo. Output has full halo.
 subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   type(ocean_grid_type),              intent(in)              :: G          !< Ocean grid
@@ -493,6 +540,7 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   integer,                            intent(in)              :: n_highpass !< number of high-pass iterations
 
   integer :: i, j
+  integer :: i_highpass, i_lowpass
   real, dimension(SZIB_(G),SZJB_(G)) :: q1, q2 ! additional q fields
   real, dimension(SZI_(G),SZJ_(G))   :: T1, T2 ! additional T fields
   real :: max_before, min_before, max_after, min_after    ! for testing
@@ -504,31 +552,46 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
   ! Total operator is I - (I-G^n_lowpass)^n_highpass
   if (present(q)) then
     call pass_var(q, G%Domain, position=CORNER, complete=.true.)
-    q(:,:) = q(:,:) * mask_q(:,:)
-    call min_max(q, min_before, max_before)
+    do J=G%JscB-2,G%JecB+2 ; do I=G%IscB-2,G%IecB+2
+      q(I,J) = q(I,J) * mask_q(I,J)
+    enddo ; enddo
 
-    q1(:,:) = q(:,:)
+    if (n_highpass==1 .AND. n_lowpass>0) then
+      call min_max(G, min_before, max_before, q=q)
+    endif
 
-    do i=1,n_highpass
-      q2(:,:) = q1(:,:)
+    do J=G%JscB-2,G%JecB+2 ; do I=G%IscB-2,G%IecB+2
+      q1(I,J) = q(I,J)
+    enddo ; enddo
+
+    do i_highpass=1,n_highpass
+      do J=G%JscB-2,G%JecB+2 ; do I=G%IscB-2,G%IecB+2
+        q2(I,J) = q1(I,J)
+      enddo ; enddo
       ! q2 -> (G^n_lowpass)*q2
-      do j=1,ABS(n_lowpass)
+      do i_lowpass=1,ABS(n_lowpass)
         call smooth_Tq(G, mask_T, mask_q, q=q2)
       enddo
       ! q1 -> (I-G^n_lowpass)*q1
-      q1(:,:) = q1(:,:) - q2(:,:)
+      do J=G%JscB-2,G%JecB+2 ; do I=G%IscB-2,G%IecB+2
+        q1(I,J) = q1(I,J) - q2(I,J)
+      enddo ; enddo
     enddo
 
     if (n_lowpass>0) then
       ! q -> q - ((I-G^n_lowpass)^n_highpass)*q
-      q(:,:) = q(:,:) - q1(:,:)
+      do J=G%JscB-2,G%JecB+2 ; do I=G%IscB-2,G%IecB+2
+        q(I,J) = q(I,J) - q1(I,J)
+      enddo ; enddo
     else
       ! q -> ((I-G^n_lowpass)^n_highpass)*q
-      q(:,:) = q1(:,:)
+      do J=G%JscB-2,G%JecB+2 ; do I=G%IscB-2,G%IecB+2
+        q(I,J) = q1(I,J)
+      enddo ; enddo
     endif
 
     if (n_highpass==1 .AND. n_lowpass>0) then
-      call min_max(q, min_after, max_after)
+      call min_max(G, min_after, max_after, q=q)
       if (max_after > max_before .OR. min_after < min_before) then
         write(*,*) 'filter error: not monotone in q field:', min_before, min_after, max_before, max_after
       endif
@@ -537,27 +600,42 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
 
   if (present(T)) then
     call pass_var(T, G%Domain)
-    T(:,:) = T(:,:) * mask_T(:,:)
-    call min_max(T, min_before, max_before)
+    do J=G%JscB-1,G%JecB+2 ; do I=G%IscB-1,G%IecB+2
+      T(i,j) = T(i,j) * mask_T(i,j)
+    enddo ; enddo
 
-    T1(:,:) = T(:,:)
+    if (n_highpass==1 .AND. n_lowpass>0) then
+      call min_max(G, min_before, max_before, T=T)
+    endif
 
-    do i=1,n_highpass
-      T2(:,:) = T1(:,:)
-      do j=1,ABS(n_lowpass)
+    do J=G%JscB-1,G%JecB+2 ; do I=G%IscB-1,G%IecB+2
+      T1(i,j) = T(i,j)
+    enddo ; enddo
+
+    do i_highpass=1,n_highpass
+      do J=G%JscB-1,G%JecB+2 ; do I=G%IscB-1,G%IecB+2
+        T2(i,j) = T1(i,j)
+      enddo ; enddo
+      do i_lowpass=1,ABS(n_lowpass)
         call smooth_Tq(G, mask_T, mask_q, T=T2)
       enddo
-      T1(:,:) = T1(:,:) - T2(:,:)
+      do J=G%JscB-1,G%JecB+2 ; do I=G%IscB-1,G%IecB+2
+        T1(i,j) = T1(i,j) - T2(i,j)
+      enddo ; enddo
     enddo
 
     if (n_lowpass>0) then
-      T(:,:) = T(:,:) - T1(:,:)
+      do J=G%JscB-1,G%JecB+2 ; do I=G%IscB-1,G%IecB+2
+        T(i,j) = T(i,j) - T1(i,j)
+      enddo ; enddo
     else
-      T(:,:) = T1(:,:)
+      do J=G%JscB-1,G%JecB+2 ; do I=G%IscB-1,G%IecB+2
+        T(i,j) = T1(i,j)
+      enddo ; enddo
     endif
 
     if (n_highpass==1 .AND. n_lowpass>0) then
-      call min_max(T, min_after, max_after)
+      call min_max(G, min_after, max_after, T=T)
       if (max_after > max_before .OR. min_after < min_before) then
         write(*,*) 'filter error: not monotone in T field:', min_before, min_after, max_before, max_after
       endif
@@ -591,7 +669,9 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
 
   if (present(q)) then
     call pass_var(q, G%Domain, position=CORNER, complete=.true.)
-    qim(:,:) = q(:,:) * mask_q(:,:)
+    do J = G%JscB-1, G%JecB+1; do I = G%IscB-1, G%IecB+1
+      qim(I,J) = q(I,J) * mask_q(I,J)
+    enddo; enddo
     do J = G%JscB, G%JecB
       do I = G%IscB, G%IecB
         q(I,J) = wcenter * qim(i,j)                &
@@ -611,7 +691,9 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
 
   if (present(T)) then
     call pass_var(T, G%Domain)
-    Tim(:,:) = T(:,:) * mask_T(:,:)
+    do j = G%jsc-1, G%jec+1; do i = G%isc-1, G%iec+1
+      Tim(i,j) = T(i,j) * mask_T(i,j)
+    enddo; enddo
     do j = G%jsc, G%jec
       do i = G%isc, G%iec
         T(i,j) = wcenter * Tim(i,j)                &
@@ -632,16 +714,26 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
 end subroutine smooth_Tq
 
 !> Returns min and max values of array across all PEs.
-!! It is used in filter() to check monotonicity of filtered
-!! fields.
-subroutine min_max(array, min_val, max_val)
-  real, dimension(:,:), intent(in) :: array             !< array of arbitrary size
-  real, intent(out)                :: min_val, max_val  !< min and max values of array accross PEs
+!! It is used in filter() to check its monotonicity.
+subroutine min_max(G, min_val, max_val, T, q)
+  type(ocean_grid_type),              intent(in)              :: G   !< Ocean grid
+  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T   !< any field at T points
+  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q   !< any field at q points
+  real, intent(out) :: min_val, max_val                              !< min and max values of array accross PEs
 
-  min_val = minval(array)
-  max_val = maxval(array)
+  if (present(q)) then
+    min_val = minval(q(G%IscB:G%IecB, G%JscB:G%JecB))
+    max_val = maxval(q(G%IscB:G%IecB, G%JscB:G%JecB))
+  endif
+
+  if (present(T)) then
+    min_val = minval(T(G%isc:G%iec, G%jsc:G%jec))
+    max_val = maxval(T(G%isc:G%iec, G%jsc:G%jec))
+  endif
+
   call min_across_PEs(min_val)
   call max_across_PEs(max_val)
+
 end subroutine
 
 !> Computes mask of wet points in T and q points.
