@@ -69,6 +69,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
   call get_param(param_file, mdl, "USE_ZB2020", use_ZB2020, &
                  "If true, turns on Zanna-Bolton 2020 parameterization", &
                  default=.false.)
+  if (.not. use_ZB2020) return
 
   call get_param(param_file, mdl, "amplitude", CS%amplitude, &
                  "k_bc=-amplitude*cell_area, amplitude=0..1", &
