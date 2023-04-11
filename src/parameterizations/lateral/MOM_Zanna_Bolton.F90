@@ -11,6 +11,7 @@ use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_coms,          only : reproducing_sum, max_across_PEs, min_across_PEs
+use MOM_error_handler, only : MOM_error, WARNING
 
 implicit none ; private
 
@@ -594,7 +595,9 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
     if (n_highpass==1 .AND. n_lowpass>0) then
       call min_max(G, min_after, max_after, q=q)
       if (max_after > max_before .OR. min_after < min_before) then
-        write(*,*) 'filter error: not monotone in q field:', min_before, min_after, max_before, max_after
+        call MOM_error(WARNING, "MOM_Zanna_Bolton.F90, filter applied in CORNER points "//&
+                                "does not preserve [min,max] values. There may be issues with "//&
+                                "boundary conditions")
       endif
     endif
   endif
@@ -638,7 +641,9 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
     if (n_highpass==1 .AND. n_lowpass>0) then
       call min_max(G, min_after, max_after, T=T)
       if (max_after > max_before .OR. min_after < min_before) then
-        write(*,*) 'filter error: not monotone in T field:', min_before, min_after, max_before, max_after
+        call MOM_error(WARNING, "MOM_Zanna_Bolton.F90, filter applied in CENTER points "//&
+                                " does not preserve [min,max] values. There may be issues with "//&
+                                " boundary conditions")
       endif
     endif
   endif
@@ -859,8 +864,6 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
     enddo
 
     global_integral = reproducing_sum(tmp)
-
-    !write(*,*) 'Global energy rate of change [W] for ZB2020:', global_integral
 
     call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
   endif
