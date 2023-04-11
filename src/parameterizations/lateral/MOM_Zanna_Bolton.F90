@@ -68,53 +68,74 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
   call log_version(param_file, mdl, version, "")
 
   call get_param(param_file, mdl, "USE_ZB2020", use_ZB2020, &
-                 "If true, turns on Zanna-Bolton 2020 parameterization", &
-                 default=.false.)
+                 "If true, turns on Zanna-Bolton-2020 (ZB) " //&
+                 "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
   if (.not. use_ZB2020) return
 
-  call get_param(param_file, mdl, "amplitude", CS%amplitude, &
-                 "k_bc=-amplitude*cell_area, amplitude=0..1", &
-                 units="nondim", default=0.3)
+  call get_param(param_file, mdl, "ZB_SCALING", CS%amplitude, &
+                 "The nondimensional scaling factor in ZB model, " //&
+                 "typically 0.1 - 10.", units="nondim", default=0.3)
 
-  call get_param(param_file, mdl, "ZB_type", CS%ZB_type, &
-                 "Type of parameterization: 0 = full, 1 = trace-free, 2 = trace-only", &
+  call get_param(param_file, mdl, "ZB_TRACE_MODE", CS%ZB_type, &
+                 "Select how to compute the trace part of ZB model:\n" //&
+                 "\t 0 - both deviatoric and trace components are computed\n" //&
+                 "\t 1 - only deviatoric component is computed\n" //&
+                 "\t 2 - only trace component is computed", default=0)
+
+  call get_param(param_file, mdl, "ZB_SCHEME", CS%ZB_cons, &
+                 "Select a discretization scheme for ZB model:\n" //&
+                 "\t 0 - non-conservative scheme\n" //&
+                 "\t 1 - conservative scheme for deviatoric component", default=1)
+
+  call get_param(param_file, mdl, "VG_SMOOTH_PASS", CS%LPF_iter, &
+                 "Number of smoothing passes for the Velocity Gradient (VG) components " //&
+                 "in ZB model.", default=0)
+
+  call get_param(param_file, mdl, "VG_SMOOTH_SEL", CS%LPF_order, &
+                 "The scale selectivity of the smoothing filter " //&
+                 "for VG components:\n" //&
+                 "\t 1 - Laplacian filter\n" //&
+                 "\t 2 - Bilaplacian filter, ...", &
+                 default=1, do_not_log = CS%LPF_iter==0)
+
+  call get_param(param_file, mdl, "VG_SHARP_PASS", CS%HPF_iter, &
+                "Number of sharpening passes for the Velocity Gradient (VG) components " //&
+                "in ZB model.", default=0)
+
+  call get_param(param_file, mdl, "VG_SHARP_SEL", CS%HPF_order, &
+                "The scale selectivity of the sharpening filter " //&
+                "for VG components:\n" //&
+                "\t 1 - Laplacian filter\n" //&
+                "\t 2 - Bilaplacian filter,...", &
+                default=1, do_not_log = CS%HPF_iter==0)
+
+  call get_param(param_file, mdl, "STRESS_SMOOTH_PASS", CS%Stress_iter, &
+                 "Number of smoothing passes for the Stress tensor components " //&
+                 "in ZB model.", default=0)
+
+  call get_param(param_file, mdl, "STRESS_SMOOTH_SEL", CS%Stress_order, &
+                "The scale selectivity of the smoothing filter " //&
+                "for the Stress tensor components:\n" //&
+                "\t 1 - Laplacian filter\n" //&
+                "\t 2 - Bilaplacian filter,...", &
+                default=1, do_not_log = CS%Stress_iter==0)
+
+  call get_param(param_file, mdl, "ZB_HYPERVISC", CS%ssd_iter, &
+                 "Select an additional hyperviscosity to stabilize the ZB model:\n" //&
+                 "\t 0  - off\n" //&
+                 "\t 1  - Laplacian viscosity\n" //&
+                 "\t 10 - (Laplacian)**10 viscosity, ...", &
                  default=0)
+                 ! Convert to the selectivity of the sharpening filter
+                 ! applied to the Laplacian viscosity model
+                 CS%ssd_iter = CS%ssd_iter-1
 
-  call get_param(param_file, mdl, "ZB_cons", CS%ZB_cons, &
-                 "0: nonconservative; 1: conservative without interface", &
-                 default=1)
-
-  call get_param(param_file, mdl, "LPF_iter", CS%LPF_iter, &
-                 "Low-pass filter for Velocity gradient; number of iterations", &
-                 default=0)
-
-  call get_param(param_file, mdl, "LPF_order", CS%LPF_order, &
-                 "Low-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
-                 default=1)
-
-  call get_param(param_file, mdl, "HPF_iter", CS%HPF_iter, &
-                 "High-pass filter for Velocity gradient; number of iterations", &
-                 default=0)
-
-  call get_param(param_file, mdl, "HPF_order", CS%HPF_order, &
-                 "High-pass filter for Velocity gradient; 1: Laplacian, 2: Bilaplacian", &
-                 default=1)
-
-  call get_param(param_file, mdl, "Stress_iter", CS%Stress_iter, &
-                 "Low-pass filter for Stress (Momentum Flux); number of iterations", &
-                 default=0)
-
-  call get_param(param_file, mdl, "Stress_order", CS%Stress_order, &
-                 "Low-pass filter for Stress (Momentum Flux); 1: Laplacian, 2: Bilaplacian", &
-                 default=1)
-
-  call get_param(param_file, mdl, "ssd_iter", CS%ssd_iter, &
-                 "Small-scale dissipation in RHS of momentum eq; -1: off, 0:Laplacian, 10:Laplacian^11", &
-                 default=-1)
-
-  call get_param(param_file, mdl, "ssd_bound_coef", CS%ssd_bound_coef, &
-                 "The viscosity bounds to the theoretical maximum for stability", units="nondim", &
-                 default=0.2)
+  call get_param(param_file, mdl, "HYPVISC_GRID_DAMP", CS%ssd_bound_coef, &
+                 "The non-dimensional damping coefficient of the grid harmonic " //&
+                 "by hyperviscous dissipation:\n" //&
+                 "\t 0.0 - no damping\n" //&
+                 "\t 1.0 - grid harmonic is removed after a step in time", &
+                 units="nondim", default=0.2, do_not_log = CS%ssd_iter==-1)
 
   call get_param(param_file, mdl, "DT", CS%dt, &
                  "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
@@ -416,9 +437,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
         if (CS%ZB_cons == 1) then
           vort_sh = 0.25 * (                                          &
             (G%areaBu(I-1,J-1) * vort_xy(I-1,J-1) * sh_xy(I-1,J-1)  + &
-            G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  )) + &
+             G%areaBu(I  ,J  ) * vort_xy(I  ,J  ) * sh_xy(I  ,J  )) + &
             (G%areaBu(I-1,J  ) * vort_xy(I-1,J  ) * sh_xy(I-1,J  )  + &
-            G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1))   &
+             G%areaBu(I  ,J-1) * vort_xy(I  ,J-1) * sh_xy(I  ,J-1))   &
             ) * G%IareaT(i,j)
         else if (CS%ZB_cons == 0) then
           vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
