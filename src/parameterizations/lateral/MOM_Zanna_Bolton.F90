@@ -80,7 +80,7 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
   type(param_file_type),   intent(in)    :: param_file !< Parameter file parser structure.
   type(diag_ctrl), target, intent(inout) :: diag       !< Diagnostics structure.
   type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
-  logical,                 intent(out)   :: use_ZB2020 !< If true, turns on Zanna-Bolton 2020 parameterization
+  logical,                 intent(out)   :: use_ZB2020 !< If true, turns on ZB scheme.
 
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
@@ -220,7 +220,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
                                  intent(in)    :: u    !< The zonal velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                                  intent(in)    :: v    !< The meridional velocity [L T-1 ~> m s-1].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
                                  intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2].
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
@@ -598,13 +598,17 @@ end subroutine Zanna_Bolton_2020
 !! (I-G^|n_lowpass|)^n_highpass
 !! Input does not require halo. Output has full halo.
 subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
-  type(ocean_grid_type),              intent(in)              :: G          !< Ocean grid
-  real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T     !< mask of wet points in T (CENTER) points [nondim]
-  real, dimension(SZIB_(G),SZJB_(G)), intent(in)              :: mask_q     !< mask of wet points in q (CORNER) points [nondim]
-  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T          !< any field at T (CENTER) points [arbitrary]
-  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q          !< any field at q (CORNER) points [arbitrary]
-  integer,                            intent(in)              :: n_lowpass  !< number of low-pass iterations
-  integer,                            intent(in)              :: n_highpass !< number of high-pass iterations
+  type(ocean_grid_type), intent(in) :: G !< Ocean grid
+  integer, intent(in) :: n_lowpass  !< number of low-pass iterations
+  integer, intent(in) :: n_highpass !< number of high-pass iterations
+  real, dimension(SZI_(G),SZJ_(G)),   &
+                          intent(in) :: mask_T !< mask of wet points in T (CENTER) points [nondim]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+                          intent(in) :: mask_q !< mask of wet points in q (CORNER) points [nondim]
+  real, dimension(SZI_(G),SZJ_(G)),   &
+             optional, intent(inout) :: T      !< any field at T (CENTER) points [arbitrary]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+             optional, intent(inout) :: q      !< any field at q (CORNER) points [arbitrary]
 
   real, dimension(SZIB_(G),SZJB_(G)) :: q1, q2          ! intermediate q-fields [arbitrary]
   real, dimension(SZI_(G),SZJ_(G))   :: T1, T2          ! intermediate T-fields [arbitrary]
@@ -730,11 +734,15 @@ end subroutine filter
 !! Zero Dirichlet boundary conditions are applied
 !! with mask_T and mask_q.
 subroutine smooth_Tq(G, mask_T, mask_q, T, q)
-  type(ocean_grid_type),              intent(in)              :: G      !< Ocean grid
-  real, dimension(SZI_(G),SZJ_(G)),   intent(in)              :: mask_T !< mask of wet points in T (CENTER) points [nondim]
-  real, dimension(SZIB_(G),SZJB_(G)), intent(in)              :: mask_q !< mask of wet points in q (CORNER) points [nondim]
-  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T      !< any field at T (CENTER) points [arbitrary]
-  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q      !< any field at q (CORNER) points [arbitrary]
+  type(ocean_grid_type), intent(in) :: G !< Ocean grid
+  real, dimension(SZI_(G),SZJ_(G)),   &
+                          intent(in) :: mask_T !< mask of wet points in T (CENTER) points [nondim]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+                          intent(in) :: mask_q !< mask of wet points in q (CORNER) points [nondim]
+  real, dimension(SZI_(G),SZJ_(G)),   &
+             optional, intent(inout) :: T      !< any field at T (CENTER) points [arbitrary]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+             optional, intent(inout) :: q      !< any field at q (CORNER) points [arbitrary]
 
   real, dimension(SZI_(G),SZJ_(G))   :: Tim ! intermediate T-field [arbitrary]
   real, dimension(SZIB_(G),SZJB_(G)) :: qim ! intermediate q-field [arbitrary]
@@ -806,10 +814,12 @@ end subroutine smooth_Tq
 !> Returns min and max values of array across all PEs.
 !! It is used in filter() to check its monotonicity.
 subroutine min_max(G, min_val, max_val, T, q)
-  type(ocean_grid_type),              intent(in)              :: G   !< Ocean grid
-  real, dimension(SZI_(G),SZJ_(G)),   optional, intent(inout) :: T   !< any field at T (CENTER) points [arbitrary]
-  real, dimension(SZIB_(G),SZJB_(G)), optional, intent(inout) :: q   !< any field at q (CORNER) points [arbitrary]
-  real, intent(out) :: min_val, max_val                              !< min and max values of array accross PEs [arbitrary]
+  type(ocean_grid_type), intent(in) :: G   !< Ocean grid
+  real, dimension(SZI_(G),SZJ_(G)),   &
+             optional, intent(inout) :: T  !< any field at T (CENTER) points [arbitrary]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+             optional, intent(inout) :: q  !< any field at q (CORNER) points [arbitrary]
+  real, intent(out) :: min_val, max_val    !< min and max values of array accross PEs [arbitrary]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
 
@@ -836,13 +846,15 @@ end subroutine
 !! Mask is computed separately for every vertical layer and
 !! for every time step.
 subroutine compute_masks(G, GV, h, mask_T, mask_q, k)
-  type(ocean_grid_type),              intent(in)    :: G      !< Ocean grid
-  type(verticalGrid_type),            intent(in)    :: GV     !< The ocean's vertical grid structure
+  type(ocean_grid_type),        intent(in)    :: G      !< Ocean grid
+  type(verticalGrid_type),      intent(in)    :: GV     !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                                      intent(in)    :: h      !< Layer thicknesses [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G)),   intent(inout) :: mask_T !< mask of wet points in T (CENTER) points [nondim]
-  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: mask_q !< mask of wet points in q (CORNER) points [nondim]
-  integer,                            intent(in)    :: k      !< index of vertical layer
+                                intent(in)    :: h      !< Layer thicknesses [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G)),          &
+                                intent(inout) :: mask_T !< mask of wet points in T (CENTER) points [nondim]
+  real, dimension(SZIB_(G),SZJB_(G)),        &
+                                intent(inout) :: mask_q !< mask of wet points in q (CORNER) points [nondim]
+  integer,                      intent(in)    :: k      !< index of vertical layer
 
   real :: hmin       ! Minimum layer thickness
                      ! beyond which we have boundary [H ~> m or kg m-2]
@@ -885,23 +897,23 @@ end subroutine compute_masks
 !> Computes the 3D energy source term for the ZB2020 scheme
 !! similarly to MOM_diagnostics.F90, specifically 1125 line.
 subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
-  type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
-  type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
-  type(ZB2020_CS),               intent(in)  :: CS     !< ZB2020 control structure.
+  type(ocean_grid_type),         intent(in)  :: G    !< The ocean's grid structure.
+  type(verticalGrid_type),       intent(in)  :: GV   !< The ocean's vertical grid structure.
+  type(ZB2020_CS),               intent(in)  :: CS   !< ZB2020 control structure.
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(in)    :: u    !< The zonal velocity [L T-1 ~> m s-1].
+                                 intent(in)    :: u  !< The zonal velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(in)    :: v    !< The meridional velocity [L T-1 ~> m s-1].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2].
+                                 intent(in)    :: v  !< The meridional velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
+                                 intent(inout) :: h  !< Layer thicknesses [H ~> m or kg m-2].
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(in) :: fx      !< Zonal acceleration due to convergence of
-                                                       !! along-coordinate stress tensor [L T-2 ~> m s-2]
+                                 intent(in) :: fx    !< Zonal acceleration due to convergence of
+                                                     !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(in) :: fy      !< Meridional acceleration due to convergence
-                                                       !! of along-coordinate stress tensor [L T-2 ~> m s-2]
+                                 intent(in) :: fy    !< Meridional acceleration due to convergence
+                                                     !! of along-coordinate stress tensor [L T-2 ~> m s-2]
 
   real :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) ! A term in the kinetic energy budget
                                             ! [H L2 T-3 ~> m3 s-3 or W m-2]
