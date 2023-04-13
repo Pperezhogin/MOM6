@@ -3,6 +3,7 @@ module regional_dyes
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
+use MOM_coms,               only : EFP_type
 use MOM_coupler_types,      only : set_coupler_type_data, atmos_ocn_coupler_flux
 use MOM_diag_mediator,      only : diag_ctrl
 use MOM_error_handler,      only : MOM_error, FATAL, WARNING
@@ -13,6 +14,7 @@ use MOM_hor_index,          only : hor_index_type
 use MOM_io,                 only : vardesc, var_desc, query_vardesc
 use MOM_open_boundary,      only : ocean_OBC_type
 use MOM_restart,            only : query_initialized, MOM_restart_CS
+use MOM_spatial_means,      only : global_mass_int_EFP
 use MOM_sponge,             only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,       only : time_type
 use MOM_tracer_registry,    only : register_tracer, tracer_registry_type
@@ -39,14 +41,18 @@ public dye_stock, regional_dyes_end
 type, public :: dye_tracer_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
-  real, allocatable, dimension(:) :: dye_source_minlon !< Minimum longitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_maxlon !< Maximum longitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_minlat !< Minimum latitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_maxlat !< Maximum latitude of region dye will be injected.
+  real, allocatable, dimension(:) :: dye_source_minlon !< Minimum longitude of region dye will be
+                                                       !! injected, in [m] or [km] or [degrees_E]
+  real, allocatable, dimension(:) :: dye_source_maxlon !< Maximum longitude of region dye will be
+                                                       !! injected, in [m] or [km] or [degrees_E]
+  real, allocatable, dimension(:) :: dye_source_minlat !< Minimum latitude of region dye will be
+                                                       !! injected, in [m] or [km] or [degrees_N]
+  real, allocatable, dimension(:) :: dye_source_maxlat !< Maximum latitude of region dye will be
+                                                       !! injected, in [m] or [km] or [degrees_N]
   real, allocatable, dimension(:) :: dye_source_mindepth !< Minimum depth of region dye will be injected [Z ~> m].
   real, allocatable, dimension(:) :: dye_source_maxdepth !< Maximum depth of region dye will be injected [Z ~> m].
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
-  real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine, in g m-3?
+  real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine [CU ~> conc]
 
   integer, allocatable, dimension(:) :: ind_tr !< Indices returned by atmos_ocn_coupler_flux if it is used and the
                                                !! surface tracer concentrations are to be provided to the coupler.
@@ -72,24 +78,22 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                                                  !! structure for this module
   type(tracer_registry_type), pointer    :: tr_Reg !< A pointer that is set to point to the control
                                                  !! structure for the tracer advection and diffusion module.
-  type(MOM_restart_CS), target, intent(inout) :: restart_CS !< MOM restart control struct
+  type(MOM_restart_CS), target, intent(inout) :: restart_CS !< MOM restart control structure
 
-! Local variables
-! This include declares and sets the variable "version".
-#include "version_variable.h"
+  ! Local variables
   character(len=40)  :: mdl = "regional_dyes" ! This module's name.
-  character(len=200) :: inputdir ! The directory where the input files are.
   character(len=48)  :: var_name ! The variable's name.
   character(len=48)  :: desc_name ! The variable's descriptor.
-  real, pointer :: tr_ptr(:,:,:) => NULL()
+  ! This include declares and sets the variable "version".
+# include "version_variable.h"
+  real, pointer :: tr_ptr(:,:,:) => NULL() ! A pointer to one of the tracers [CU ~> conc]
   logical :: register_dye_tracer
   integer :: isd, ied, jsd, jed, nz, m
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
-    call MOM_error(WARNING, "register_dye_tracer called with an "// &
-                             "associated control structure.")
-    return
+    call MOM_error(FATAL, "register_dye_tracer called with an "// &
+                          "associated control structure.")
   endif
   allocate(CS)
 
@@ -110,28 +114,32 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   CS%dye_source_minlon(:) = -1.e30
   call get_param(param_file, mdl, "DYE_SOURCE_MINLON", CS%dye_source_minlon, &
                  "This is the starting longitude at which we start injecting dyes.", &
-                 fail_if_missing=.true.)
+                 units="degrees_E", fail_if_missing=.true.)
+               ! units=G%x_ax_unit_short, fail_if_missing=.true.)
   if (minval(CS%dye_source_minlon(:)) < -1.e29) &
     call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINLON ")
 
   CS%dye_source_maxlon(:) = -1.e30
   call get_param(param_file, mdl, "DYE_SOURCE_MAXLON", CS%dye_source_maxlon, &
                  "This is the ending longitude at which we finish injecting dyes.", &
-                 fail_if_missing=.true.)
+                 units="degrees_E", fail_if_missing=.true.)
+               ! units=G%x_ax_unit_short, fail_if_missing=.true.)
   if (minval(CS%dye_source_maxlon(:)) < -1.e29) &
     call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXLON ")
 
   CS%dye_source_minlat(:) = -1.e30
   call get_param(param_file, mdl, "DYE_SOURCE_MINLAT", CS%dye_source_minlat, &
                  "This is the starting latitude at which we start injecting dyes.", &
-                 fail_if_missing=.true.)
+                 units="degrees_N", fail_if_missing=.true.)
+               ! units=G%y_ax_unit_short, fail_if_missing=.true.)
   if (minval(CS%dye_source_minlat(:)) < -1.e29) &
     call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINLAT ")
 
   CS%dye_source_maxlat(:) = -1.e30
   call get_param(param_file, mdl, "DYE_SOURCE_MAXLAT", CS%dye_source_maxlat, &
                  "This is the ending latitude at which we finish injecting dyes.", &
-                 fail_if_missing=.true.)
+                 units="degrees_N", fail_if_missing=.true.)
+               ! units=G%y_ax_unit_short, fail_if_missing=.true.)
   if (minval(CS%dye_source_maxlat(:)) < -1.e29) &
     call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXLAT ")
 
@@ -198,14 +206,8 @@ subroutine initialize_dye_tracer(restart, day, G, GV, h, diag, OBC, CS, sponge_C
                                                                   !! for the sponges, if they are in use.
 
 ! Local variables
-  character(len=24) :: name     ! A variable's name in a NetCDF file.
-  character(len=72) :: longname ! The long name of that variable.
-  character(len=48) :: units    ! The dimensions of the variable.
-  character(len=48) :: flux_units ! The units for age tracer fluxes, either
-                                ! years m3 s-1 or years kg s-1.
   real    :: z_bot    ! Height of the bottom of the layer relative to the sea surface [Z ~> m]
   real    :: z_center ! Height of the center of the layer relative to the sea surface [Z ~> m]
-  logical :: OK
   integer :: i, j, k, m
 
   if (.not.associated(CS)) return
@@ -217,10 +219,10 @@ subroutine initialize_dye_tracer(restart, day, G, GV, h, diag, OBC, CS, sponge_C
   do m= 1, CS%ntr
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (CS%dye_source_minlon(m)<G%geoLonT(i,j) .and. &
-          CS%dye_source_maxlon(m)>=G%geoLonT(i,j) .and. &
-          CS%dye_source_minlat(m)<G%geoLatT(i,j) .and. &
-          CS%dye_source_maxlat(m)>=G%geoLatT(i,j) .and. &
+      if (CS%dye_source_minlon(m) < G%geoLonT(i,j) .and. &
+          CS%dye_source_maxlon(m) >= G%geoLonT(i,j) .and. &
+          CS%dye_source_minlat(m) < G%geoLatT(i,j) .and. &
+          CS%dye_source_maxlat(m) >= G%geoLatT(i,j) .and. &
           G%mask2dT(i,j) > 0.0 ) then
         z_bot = 0.0
         do k = 1, GV%ke
@@ -270,13 +272,9 @@ subroutine dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US
                                               !! fluxes can be applied [H ~> m or kg m-2]
 
 ! Local variables
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h_work ! Used so that h can be modified
-  real :: sfc_val  ! The surface value for the tracers.
-  real :: Isecs_per_year  ! The number of seconds in a year.
-  real :: year            ! The time in years.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h_work ! Used so that h can be modified [H ~> m or kg m-2]
   real    :: z_bot    ! Height of the bottom of the layer relative to the sea surface [Z ~> m]
   real    :: z_center ! Height of the center of the layer relative to the sea surface [Z ~> m]
-  integer :: secs, days   ! Integer components of the time type.
   integer :: i, j, k, is, ie, js, je, nz, m
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -302,10 +300,10 @@ subroutine dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US
   do m=1,CS%ntr
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (CS%dye_source_minlon(m)<G%geoLonT(i,j) .and. &
-          CS%dye_source_maxlon(m)>=G%geoLonT(i,j) .and. &
-          CS%dye_source_minlat(m)<G%geoLatT(i,j) .and. &
-          CS%dye_source_maxlat(m)>=G%geoLatT(i,j) .and. &
+      if (CS%dye_source_minlon(m) < G%geoLonT(i,j) .and. &
+          CS%dye_source_maxlon(m) >= G%geoLonT(i,j) .and. &
+          CS%dye_source_minlat(m) < G%geoLatT(i,j) .and. &
+          CS%dye_source_maxlat(m) >= G%geoLatT(i,j) .and. &
           G%mask2dT(i,j) > 0.0 ) then
         z_bot = 0.0
         do k=1,nz
@@ -325,13 +323,12 @@ end subroutine dye_tracer_column_physics
 !> This function calculates the mass-weighted integral of all tracer stocks,
 !! returning the number of stocks it has calculated.  If the stock_index
 !! is present, only the stock corresponding to that coded index is returned.
-function dye_stock(h, stocks, G, GV, US, CS, names, units, stock_index)
+function dye_stock(h, stocks, G, GV, CS, names, units, stock_index)
   type(ocean_grid_type),              intent(in)    :: G    !< The ocean's grid structure
   type(verticalGrid_type),            intent(in)    :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h  !< Layer thicknesses [H ~> m or kg m-2]
-  real, dimension(:),                 intent(out)   :: stocks !< the mass-weighted integrated amount of
-                                                            !! each tracer, in kg times concentration units [kg conc].
-  type(unit_scale_type),              intent(in)    :: US   !< A dimensional unit scaling type
+  type(EFP_type), dimension(:),       intent(out)   :: stocks !< The mass-weighted integrated amount of each
+                                                            !! tracer, in kg times concentration units [kg conc]
   type(dye_tracer_CS),                pointer       :: CS   !< The control structure returned by a
                                                             !! previous call to register_dye_tracer.
   character(len=*), dimension(:),     intent(out)   :: names !< the names of the stocks calculated.
@@ -342,9 +339,7 @@ function dye_stock(h, stocks, G, GV, US, CS, names, units, stock_index)
                                                                    !! calculated here.
 
   ! Local variables
-  real :: stock_scale ! The dimensional scaling factor to convert stocks to kg [kg H-1 L-2 ~> kg m-3 or 1]
-  integer :: i, j, k, is, ie, js, je, nz, m
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+  integer :: m
 
   dye_stock = 0
   if (.not.associated(CS)) return
@@ -357,15 +352,10 @@ function dye_stock(h, stocks, G, GV, US, CS, names, units, stock_index)
     return
   endif ; endif
 
-  stock_scale = US%L_to_m**2 * GV%H_to_kg_m2
   do m=1,CS%ntr
     call query_vardesc(CS%tr_desc(m), name=names(m), units=units(m), caller="dye_stock")
     units(m) = trim(units(m))//" kg"
-    stocks(m) = 0.0
-    do k=1,nz ; do j=js,je ; do i=is,ie
-      stocks(m) = stocks(m) + CS%tr(i,j,k,m) * (G%mask2dT(i,j) * G%areaT(i,j) * h(i,j,k))
-    enddo ; enddo ; enddo
-    stocks(m) = stock_scale * stocks(m)
+    stocks(m) = global_mass_int_EFP(h, G, GV, CS%tr(:,:,:,m), on_PE_only=.true.)
   enddo
   dye_stock = CS%ntr
 
@@ -408,7 +398,6 @@ end subroutine dye_tracer_surface_state
 subroutine regional_dyes_end(CS)
   type(dye_tracer_CS), pointer :: CS !< The control structure returned by a previous
                                      !! call to register_dye_tracer.
-  integer :: m
 
   if (associated(CS)) then
     if (associated(CS%tr)) deallocate(CS%tr)

@@ -7,11 +7,13 @@ use MOM_error_handler, only : MOM_error, FATAL
 use MOM_string_functions, only : uppercase
 
 use regrid_edge_values, only : edge_values_explicit_h2, edge_values_explicit_h4
+use regrid_edge_values, only : edge_values_explicit_h4cw
 use regrid_edge_values, only : edge_values_implicit_h4, edge_values_implicit_h6
 use regrid_edge_values, only : edge_slopes_implicit_h3, edge_slopes_implicit_h5
 
 use PLM_functions, only : PLM_reconstruction, PLM_boundary_extrapolation
 use PPM_functions, only : PPM_reconstruction, PPM_boundary_extrapolation
+use PPM_functions, only : PPM_monotonicity
 use PQM_functions, only : PQM_reconstruction, PQM_boundary_extrapolation_v1
 
 use P1M_functions, only : P1M_interpolation, P1M_boundary_extrapolation
@@ -31,12 +33,13 @@ type, public :: interp_CS_type ; private
   !! boundary cells
   logical :: boundary_extrapolation
 
-   !> If true use older, less acccurate expressions.
-  logical :: answers_2018 = .true.
+  !> The vintage of the expressions to use for remapping
+  integer :: answer_date = 20181231
+  !### Changing this to 99991231 changes answers in rho and Hycom1 configurations.
+  !### There is no point where the value of answer_date is reset.
 end type interp_CS_type
 
-public regridding_set_ppolys, interpolate_grid
-public build_and_interpolate_grid
+public regridding_set_ppolys, build_and_interpolate_grid
 public set_interp_scheme, set_interp_extrap
 
 ! List of interpolation schemes
@@ -44,6 +47,7 @@ integer, parameter :: INTERPOLATION_P1M_H2     = 0 !< O(h^2)
 integer, parameter :: INTERPOLATION_P1M_H4     = 1 !< O(h^2)
 integer, parameter :: INTERPOLATION_P1M_IH4    = 2 !< O(h^2)
 integer, parameter :: INTERPOLATION_PLM        = 3 !< O(h^2)
+integer, parameter :: INTERPOLATION_PPM_CW     =10 !< O(h^3)
 integer, parameter :: INTERPOLATION_PPM_H4     = 4 !< O(h^3)
 integer, parameter :: INTERPOLATION_PPM_IH4    = 5 !< O(h^3)
 integer, parameter :: INTERPOLATION_P3M_IH4IH3 = 6 !< O(h^4)
@@ -107,7 +111,7 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_P1M_H2 )
       degree = DEGREE_1
       call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-      call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+      call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
       if (extrapolate) then
         call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
       endif
@@ -115,11 +119,11 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_P1M_H4 )
       degree = DEGREE_1
       if ( n0 >= 4 ) then
-        call edge_values_explicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
+        call edge_values_explicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
       else
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
       endif
-      call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+      call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
       if (extrapolate) then
         call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
       endif
@@ -127,11 +131,11 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_P1M_IH4 )
       degree = DEGREE_1
       if ( n0 >= 4 ) then
-        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
+        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
       else
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
       endif
-      call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+      call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
       if (extrapolate) then
         call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
       endif
@@ -143,11 +147,12 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
         call PLM_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect )
       endif
 
-    case ( INTERPOLATION_PPM_H4 )
+    case ( INTERPOLATION_PPM_CW )
       if ( n0 >= 4 ) then
         degree = DEGREE_2
-        call edge_values_explicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
-        call PPM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call edge_values_explicit_h4cw( n0, h0, densities, ppoly0_E, h_neglect_edge )
+        call PPM_monotonicity(   n0,     densities, ppoly0_E )
+        call PPM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call PPM_boundary_extrapolation( n0, h0, densities, ppoly0_E, &
                                            ppoly0_coefs, h_neglect )
@@ -155,7 +160,25 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
       else
         degree = DEGREE_1
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
+        if (extrapolate) then
+          call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
+        endif
+      endif
+
+    case ( INTERPOLATION_PPM_H4 )
+      if ( n0 >= 4 ) then
+        degree = DEGREE_2
+        call edge_values_explicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
+        call PPM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
+        if (extrapolate) then
+          call PPM_boundary_extrapolation( n0, h0, densities, ppoly0_E, &
+                                           ppoly0_coefs, h_neglect )
+        endif
+      else
+        degree = DEGREE_1
+        call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
         endif
@@ -164,8 +187,8 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_PPM_IH4 )
       if ( n0 >= 4 ) then
         degree = DEGREE_2
-        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
-        call PPM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
+        call PPM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call PPM_boundary_extrapolation( n0, h0, densities, ppoly0_E, &
                                            ppoly0_coefs, h_neglect )
@@ -173,7 +196,7 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
       else
         degree = DEGREE_1
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
         endif
@@ -182,10 +205,10 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_P3M_IH4IH3 )
       if ( n0 >= 4 ) then
         degree = DEGREE_3
-        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
-        call edge_slopes_implicit_h3( n0, h0, densities, ppoly0_S, h_neglect, answers_2018=CS%answers_2018 )
+        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
+        call edge_slopes_implicit_h3( n0, h0, densities, ppoly0_S, h_neglect, answer_date=CS%answer_date )
         call P3M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_S, &
-                                ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+                                ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P3M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_S, &
                                            ppoly0_coefs, h_neglect, h_neglect_edge )
@@ -193,7 +216,7 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
       else
         degree = DEGREE_1
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
         endif
@@ -202,10 +225,10 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_P3M_IH6IH5 )
       if ( n0 >= 6 ) then
         degree = DEGREE_3
-        call edge_values_implicit_h6( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
-        call edge_slopes_implicit_h5( n0, h0, densities, ppoly0_S, h_neglect, answers_2018=CS%answers_2018 )
+        call edge_values_implicit_h6( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
+        call edge_slopes_implicit_h5( n0, h0, densities, ppoly0_S, h_neglect, answer_date=CS%answer_date )
         call P3M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_S, &
-                                ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+                                ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P3M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_S, &
                    ppoly0_coefs, h_neglect, h_neglect_edge )
@@ -213,7 +236,7 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
       else
         degree = DEGREE_1
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
         endif
@@ -222,10 +245,10 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_PQM_IH4IH3 )
       if ( n0 >= 4 ) then
         degree = DEGREE_4
-        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
-        call edge_slopes_implicit_h3( n0, h0, densities, ppoly0_S, h_neglect, answers_2018=CS%answers_2018 )
+        call edge_values_implicit_h4( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
+        call edge_slopes_implicit_h3( n0, h0, densities, ppoly0_S, h_neglect, answer_date=CS%answer_date )
         call PQM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_S, &
-                                 ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+                                 ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call PQM_boundary_extrapolation_v1( n0, h0, densities, ppoly0_E, ppoly0_S, &
                                  ppoly0_coefs, h_neglect )
@@ -233,7 +256,7 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
       else
         degree = DEGREE_1
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
         endif
@@ -242,10 +265,10 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
     case ( INTERPOLATION_PQM_IH6IH5 )
       if ( n0 >= 6 ) then
         degree = DEGREE_4
-        call edge_values_implicit_h6( n0, h0, densities, ppoly0_E, h_neglect_edge, answers_2018=CS%answers_2018 )
-        call edge_slopes_implicit_h5( n0, h0, densities, ppoly0_S, h_neglect, answers_2018=CS%answers_2018 )
+        call edge_values_implicit_h6( n0, h0, densities, ppoly0_E, h_neglect_edge, answer_date=CS%answer_date )
+        call edge_slopes_implicit_h5( n0, h0, densities, ppoly0_S, h_neglect, answer_date=CS%answer_date )
         call PQM_reconstruction( n0, h0, densities, ppoly0_E, ppoly0_S, &
-                                 ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+                                 ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call PQM_boundary_extrapolation_v1( n0, h0, densities, ppoly0_E, ppoly0_S, &
                                  ppoly0_coefs, h_neglect )
@@ -253,7 +276,7 @@ subroutine regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, &
       else
         degree = DEGREE_1
         call edge_values_explicit_h2( n0, h0, densities, ppoly0_E )
-        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answers_2018=CS%answers_2018 )
+        call P1M_interpolation( n0, h0, densities, ppoly0_E, ppoly0_coefs, h_neglect, answer_date=CS%answer_date )
         if (extrapolate) then
           call P1M_boundary_extrapolation( n0, h0, densities, ppoly0_E, ppoly0_coefs )
         endif
@@ -268,7 +291,7 @@ end subroutine regridding_set_ppolys
 !! 'ppoly0' (possibly discontinuous), the coordinates of the new grid 'grid1'
 !! are determined by finding the corresponding target interface densities.
 subroutine interpolate_grid( n0, h0, x0, ppoly0_E, ppoly0_coefs, &
-                             target_values, degree, n1, h1, x1, answers_2018 )
+                             target_values, degree, n1, h1, x1, answer_date )
   integer,               intent(in)     :: n0            !< Number of points on source grid
   integer,               intent(in)     :: n1            !< Number of points on target grid
   real, dimension(n0),   intent(in)     :: h0            !< Thicknesses of source grid cells [H]
@@ -280,10 +303,9 @@ subroutine interpolate_grid( n0, h0, x0, ppoly0_E, ppoly0_coefs, &
   integer,                intent(in)    :: degree        !< Degree of interpolating polynomials
   real, dimension(n1),    intent(inout) :: h1            !< Thicknesses of target grid cells [H]
   real, dimension(n1+1),  intent(inout) :: x1            !< Target interface positions [H]
-  logical,      optional, intent(in)    :: answers_2018  !< If true use older, less acccurate expressions.
+  integer,      optional, intent(in)    :: answer_date   !< The vintage of the expressions to use
 
   ! Local variables
-  logical   :: use_2018_answers  ! If true use older, less acccurate expressions.
   integer        :: k ! loop index
   real           :: t ! current interface target density
 
@@ -296,7 +318,7 @@ subroutine interpolate_grid( n0, h0, x0, ppoly0_E, ppoly0_coefs, &
   do k = 2,n1
     t = target_values(k)
     x1(k) = get_polynomial_coordinate ( n0, h0, x0, ppoly0_E, ppoly0_coefs, t, degree, &
-                                        answers_2018=answers_2018 )
+                                        answer_date=answer_date )
     h1(k-1) = x1(k) - x1(k-1)
   enddo
   h1(n1) = x1(n1+1) - x1(n1)
@@ -330,7 +352,7 @@ subroutine build_and_interpolate_grid(CS, densities, n0, h0, x0, target_values, 
   call regridding_set_ppolys(CS, densities, n0, h0, ppoly0_E, ppoly0_S, ppoly0_C, &
        degree, h_neglect, h_neglect_edge)
   call interpolate_grid(n0, h0, x0, ppoly0_E, ppoly0_C, target_values, degree, &
-       n1, h1, x1, answers_2018=CS%answers_2018)
+       n1, h1, x1, answer_date=CS%answer_date)
 end subroutine build_and_interpolate_grid
 
 !> Given a target value, find corresponding coordinate for given polynomial
@@ -350,7 +372,7 @@ end subroutine build_and_interpolate_grid
 !! It is assumed that the number of cells defining 'grid' and 'ppoly' are the
 !! same.
 function get_polynomial_coordinate( N, h, x_g, edge_values, ppoly_coefs, &
-                                    target_value, degree, answers_2018 ) result ( x_tgt )
+                                    target_value, degree, answer_date ) result ( x_tgt )
   ! Arguments
   integer,              intent(in) :: N            !< Number of grid cells
   real, dimension(N),   intent(in) :: h            !< Grid cell thicknesses [H]
@@ -359,7 +381,7 @@ function get_polynomial_coordinate( N, h, x_g, edge_values, ppoly_coefs, &
   real, dimension(N,DEGREE_MAX+1), intent(in) :: ppoly_coefs  !< Coefficients of interpolating polynomials [A]
   real,                 intent(in) :: target_value !< Target value to find position for [A]
   integer,              intent(in) :: degree       !< Degree of the interpolating polynomials
-  logical,    optional, intent(in) :: answers_2018 !< If true use older, less acccurate expressions.
+  integer,              intent(in) :: answer_date  !< The vintage of the expressions to use
   real                             :: x_tgt        !< The position of x_g at which target_value is found [H]
 
   ! Local variables
@@ -374,11 +396,11 @@ function get_polynomial_coordinate( N, h, x_g, edge_values, ppoly_coefs, &
   integer :: i, k, iter  ! loop indices
   integer :: k_found     ! index of target cell
   character(len=320) :: mesg
-  logical :: use_2018_answers  ! If true use older, less acccurate expressions.
+  logical :: use_2018_answers  ! If true use older, less accurate expressions.
 
   eps = NR_OFFSET
   k_found = -1
-  use_2018_answers = .true. ; if (present(answers_2018)) use_2018_answers = answers_2018
+  use_2018_answers = (answer_date < 20190101)
 
   ! If the target value is outside the range of all values, we
   ! force the target coordinate to be equal to the lowest or
@@ -486,7 +508,7 @@ end function get_polynomial_coordinate
 !> Numeric value of interpolation_scheme corresponding to scheme name
 integer function interpolation_scheme(interp_scheme)
   character(len=*), intent(in) :: interp_scheme !< Name of the interpolation scheme
-        !! Valid values include "P1M_H2", "P1M_H4", "P1M_IH2", "PLM", "PPM_H4",
+        !! Valid values include "P1M_H2", "P1M_H4", "P1M_IH2", "PLM", "PPM_CW", "PPM_H4",
         !!   "PPM_IH4", "P3M_IH4IH3", "P3M_IH6IH5", "PQM_IH4IH3", and "PQM_IH6IH5"
 
   select case ( uppercase(trim(interp_scheme)) )
@@ -494,6 +516,7 @@ integer function interpolation_scheme(interp_scheme)
     case ("P1M_H4");     interpolation_scheme = INTERPOLATION_P1M_H4
     case ("P1M_IH2");    interpolation_scheme = INTERPOLATION_P1M_IH4
     case ("PLM");        interpolation_scheme = INTERPOLATION_PLM
+    case ("PPM_CW");     interpolation_scheme = INTERPOLATION_PPM_CW
     case ("PPM_H4");     interpolation_scheme = INTERPOLATION_PPM_H4
     case ("PPM_IH4");    interpolation_scheme = INTERPOLATION_PPM_IH4
     case ("P3M_IH4IH3"); interpolation_scheme = INTERPOLATION_P3M_IH4IH3
@@ -509,7 +532,7 @@ end function interpolation_scheme
 subroutine set_interp_scheme(CS, interp_scheme)
   type(interp_CS_type), intent(inout) :: CS  !< A control structure for regrid_interp
   character(len=*),     intent(in) :: interp_scheme !< Name of the interpolation scheme
-        !! Valid values include "P1M_H2", "P1M_H4", "P1M_IH2", "PLM", "PPM_H4",
+        !! Valid values include "P1M_H2", "P1M_H4", "P1M_IH2", "PLM", "PPM_CW", "PPM_H4",
         !!   "PPM_IH4", "P3M_IH4IH3", "P3M_IH6IH5", "PQM_IH4IH3", and "PQM_IH6IH5"
 
   CS%interpolation_scheme = interpolation_scheme(interp_scheme)

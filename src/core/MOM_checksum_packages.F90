@@ -29,9 +29,9 @@ end interface
 
 !> A type for storing statistica about a variable
 type :: stats ; private
-  real :: minimum = 1.E34  !< The minimum value
-  real :: maximum = -1.E34 !< The maximum value
-  real :: average = 0.     !< The average value
+  real :: minimum = 1.E34  !< The minimum value [degC] or [ppt] or other units
+  real :: maximum = -1.E34 !< The maximum value [degC] or [ppt] or other units
+  real :: average = 0.     !< The average value [degC] or [ppt] or other units
 end type stats
 
 contains
@@ -39,7 +39,7 @@ contains
 ! =============================================================================
 
 !> Write out chksums for the model's basic state variables, including transports.
-subroutine MOM_state_chksum_5arg(mesg, u, v, h, uh, vh, G, GV, US, haloshift, symmetric, vel_scale)
+subroutine MOM_state_chksum_5arg(mesg, u, v, h, uh, vh, G, GV, US, haloshift, symmetric, omit_corners, vel_scale)
   character(len=*),                          &
                            intent(in) :: mesg !< A message that appears on the chksum lines.
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
@@ -60,6 +60,7 @@ subroutine MOM_state_chksum_5arg(mesg, u, v, h, uh, vh, G, GV, US, haloshift, sy
   integer,       optional, intent(in) :: haloshift !< The width of halos to check (default 0).
   logical,       optional, intent(in) :: symmetric !< If true, do checksums on the fully symmetric
                                                    !! computational domain.
+  logical,       optional, intent(in) :: omit_corners !< If true, avoid checking diagonal shifts
   real,          optional, intent(in) :: vel_scale !< The scaling factor to convert velocities to [m s-1]
 
   real :: scale_vel ! The scaling factor to convert velocities to [m s-1]
@@ -73,16 +74,17 @@ subroutine MOM_state_chksum_5arg(mesg, u, v, h, uh, vh, G, GV, US, haloshift, sy
   sym = .false. ; if (present(symmetric)) sym=symmetric
   scale_vel = US%L_T_to_m_s ; if (present(vel_scale)) scale_vel = vel_scale
 
-  call uvchksum(mesg//" [uv]", u, v, G%HI, haloshift=hs, symmetric=sym, scale=scale_vel)
-  call hchksum(h, mesg//" h", G%HI, haloshift=hs, scale=GV%H_to_m)
-  call uvchksum(mesg//" [uv]h", uh, vh, G%HI, haloshift=hs, &
-                symmetric=sym, scale=GV%H_to_m*US%L_to_m**2*US%s_to_T)
+  call uvchksum(mesg//" [uv]", u, v, G%HI, haloshift=hs, symmetric=sym, &
+                omit_corners=omit_corners, scale=scale_vel)
+  call hchksum(h, mesg//" h", G%HI, haloshift=hs, omit_corners=omit_corners, scale=GV%H_to_m)
+  call uvchksum(mesg//" [uv]h", uh, vh, G%HI, haloshift=hs, symmetric=sym, &
+                omit_corners=omit_corners, scale=GV%H_to_m*US%L_to_m**2*US%s_to_T)
 end subroutine MOM_state_chksum_5arg
 
 ! =============================================================================
 
 !> Write out chksums for the model's basic state variables.
-subroutine MOM_state_chksum_3arg(mesg, u, v, h, G, GV, US, haloshift, symmetric)
+subroutine MOM_state_chksum_3arg(mesg, u, v, h, G, GV, US, haloshift, symmetric, omit_corners)
   character(len=*),                intent(in) :: mesg !< A message that appears on the chksum lines.
   type(ocean_grid_type),           intent(in) :: G  !< The ocean's grid structure.
   type(verticalGrid_type),         intent(in) :: GV !< The ocean's vertical grid structure.
@@ -92,11 +94,12 @@ subroutine MOM_state_chksum_3arg(mesg, u, v, h, G, GV, US, haloshift, symmetric)
                                    intent(in) :: v  !< Meridional velocity [L T-1 ~> m s-1] or [m s-1]..
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
                                    intent(in) :: h  !< Layer thicknesses [H ~> m or kg m-2].
-  type(unit_scale_type),            intent(in) :: US !< A dimensional unit scaling type, which is
+  type(unit_scale_type),           intent(in) :: US !< A dimensional unit scaling type, which is
                                                     !! used to rescale u and v if present.
   integer,               optional, intent(in) :: haloshift !< The width of halos to check (default 0).
   logical,               optional, intent(in) :: symmetric !< If true, do checksums on the fully
                                                     !! symmetric computational domain.
+  logical,               optional, intent(in) :: omit_corners !< If true, avoid checking diagonal shifts
 
   integer :: hs
   logical :: sym
@@ -106,30 +109,43 @@ subroutine MOM_state_chksum_3arg(mesg, u, v, h, G, GV, US, haloshift, symmetric)
   ! and js...je as their extent.
   hs = 1 ; if (present(haloshift)) hs = haloshift
   sym = .false. ; if (present(symmetric)) sym = symmetric
-  call uvchksum(mesg//" u", u, v, G%HI, haloshift=hs, symmetric=sym, scale=US%L_T_to_m_s)
-  call hchksum(h, mesg//" h",G%HI, haloshift=hs, scale=GV%H_to_m)
+  call uvchksum(mesg//" u", u, v, G%HI, haloshift=hs, symmetric=sym, &
+                omit_corners=omit_corners, scale=US%L_T_to_m_s)
+  call hchksum(h, mesg//" h",G%HI, haloshift=hs, omit_corners=omit_corners, scale=GV%H_to_m)
 end subroutine MOM_state_chksum_3arg
 
 ! =============================================================================
 
 !> Write out chksums for the model's thermodynamic state variables.
-subroutine MOM_thermo_chksum(mesg, tv, G, US, haloshift)
+subroutine MOM_thermo_chksum(mesg, tv, G, US, haloshift, omit_corners)
   character(len=*),         intent(in) :: mesg !< A message that appears on the chksum lines.
   type(thermo_var_ptrs),    intent(in) :: tv   !< A structure pointing to various
                                                !! thermodynamic variables.
   type(ocean_grid_type),    intent(in) :: G    !< The ocean's grid structure.
   type(unit_scale_type),    intent(in) :: US   !< A dimensional unit scaling type
   integer,        optional, intent(in) :: haloshift !< The width of halos to check (default 0).
+  logical,        optional, intent(in) :: omit_corners !< If true, avoid checking diagonal shifts
 
   integer :: hs
   hs=1 ; if (present(haloshift)) hs=haloshift
 
-  if (associated(tv%T)) call hchksum(tv%T, mesg//" T", G%HI, haloshift=hs)
-  if (associated(tv%S)) call hchksum(tv%S, mesg//" S", G%HI, haloshift=hs)
-  if (associated(tv%frazil)) call hchksum(tv%frazil, mesg//" frazil", G%HI, haloshift=hs, &
-                                          scale=US%Q_to_J_kg*US%R_to_kg_m3*US%Z_to_m)
+  if (associated(tv%T)) &
+    call hchksum(tv%T, mesg//" T", G%HI, haloshift=hs, omit_corners=omit_corners, scale=US%C_to_degC)
+  if (associated(tv%S)) &
+    call hchksum(tv%S, mesg//" S", G%HI, haloshift=hs, omit_corners=omit_corners, scale=US%S_to_ppt)
+  if (associated(tv%frazil)) &
+    call hchksum(tv%frazil, mesg//" frazil", G%HI, haloshift=hs, omit_corners=omit_corners, &
+                 scale=US%Q_to_J_kg*US%R_to_kg_m3*US%Z_to_m)
   if (associated(tv%salt_deficit)) &
-    call hchksum(tv%salt_deficit, mesg//" salt deficit", G%HI, haloshift=hs, scale=US%RZ_to_kg_m2)
+    call hchksum(tv%salt_deficit, mesg//" salt deficit", G%HI, haloshift=hs, omit_corners=omit_corners, &
+                 scale=US%S_to_ppt*US%RZ_to_kg_m2)
+  if (associated(tv%varT)) &
+    call hchksum(tv%varT, mesg//" varT", G%HI, haloshift=hs, omit_corners=omit_corners, scale=US%C_to_degC**2)
+  if (associated(tv%varS)) &
+    call hchksum(tv%varS, mesg//" varS", G%HI, haloshift=hs, omit_corners=omit_corners, scale=US%S_to_ppt**2)
+  if (associated(tv%covarTS)) &
+    call hchksum(tv%covarTS, mesg//" covarTS", G%HI, haloshift=hs, omit_corners=omit_corners, &
+                 scale=US%S_to_ppt*US%C_to_degC)
 
 end subroutine MOM_thermo_chksum
 
@@ -153,8 +169,10 @@ subroutine MOM_surface_chksum(mesg, sfc_state, G, US, haloshift, symmetric)
   sym = .false. ; if (present(symmetric)) sym = symmetric
   hs = 1 ; if (present(haloshift)) hs = haloshift
 
-  if (allocated(sfc_state%SST)) call hchksum(sfc_state%SST, mesg//" SST", G%HI, haloshift=hs)
-  if (allocated(sfc_state%SSS)) call hchksum(sfc_state%SSS, mesg//" SSS", G%HI, haloshift=hs)
+  if (allocated(sfc_state%SST)) call hchksum(sfc_state%SST, mesg//" SST", G%HI, haloshift=hs, &
+                                             scale=US%C_to_degC)
+  if (allocated(sfc_state%SSS)) call hchksum(sfc_state%SSS, mesg//" SSS", G%HI, haloshift=hs, &
+                                             scale=US%S_to_ppt)
   if (allocated(sfc_state%sea_lev)) call hchksum(sfc_state%sea_lev, mesg//" sea_lev", G%HI, &
                                                  haloshift=hs, scale=US%Z_to_m)
   if (allocated(sfc_state%Hml)) call hchksum(sfc_state%Hml, mesg//" Hml", G%HI, haloshift=hs, &
@@ -162,8 +180,6 @@ subroutine MOM_surface_chksum(mesg, sfc_state, G, US, haloshift, symmetric)
   if (allocated(sfc_state%u) .and. allocated(sfc_state%v)) &
     call uvchksum(mesg//" SSU", sfc_state%u, sfc_state%v, G%HI, haloshift=hs, symmetric=sym, &
                   scale=US%L_T_to_m_s)
-!  if (allocated(sfc_state%salt_deficit)) &
-!    call hchksum(sfc_state%salt_deficit, mesg//" salt deficit", G%HI, haloshift=hs, scale=US%RZ_to_kg_m2)
   if (allocated(sfc_state%frazil)) call hchksum(sfc_state%frazil, mesg//" frazil", G%HI, &
                                                 haloshift=hs, scale=US%Q_to_J_kg*US%RZ_to_kg_m2)
 
@@ -240,9 +256,9 @@ subroutine MOM_state_stats(mesg, u, v, h, Temp, Salt, G, GV, US, allowChange, pe
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
                            intent(in) :: h    !< Layer thicknesses [H ~> m or kg m-2].
   real, pointer, dimension(:,:,:),           &
-                           intent(in) :: Temp !< Temperature [degC].
+                           intent(in) :: Temp !< Temperature [C ~> degC].
   real, pointer, dimension(:,:,:),           &
-                           intent(in) :: Salt !< Salinity [ppt].
+                           intent(in) :: Salt !< Salinity [S ~> ppt].
   type(unit_scale_type),   intent(in) :: US    !< A dimensional unit scaling type
   logical,       optional, intent(in) :: allowChange !< do not flag an error
                                                      !! if the statistics change.
@@ -253,13 +269,16 @@ subroutine MOM_state_stats(mesg, u, v, h, Temp, Salt, G, GV, US, allowChange, pe
   real, dimension(G%isc:G%iec, G%jsc:G%jec) :: &
     tmp_A, &  ! The area per cell [m2] (unscaled to permit reproducing sum).
     tmp_V, &  ! The column-integrated volume [m3] (unscaled to permit reproducing sum)
-    tmp_T, &  ! The column-integrated temperature [degC m3]
-    tmp_S     ! The column-integrated salinity [ppt m3]
+    tmp_T, &  ! The column-integrated temperature [degC m3] (unscaled to permit reproducing sum)
+    tmp_S     ! The column-integrated salinity [ppt m3] (unscaled to permit reproducing sum)
   real :: Vol, dV    ! The total ocean volume and its change [m3] (unscaled to permit reproducing sum).
   real :: Area       ! The total ocean surface area [m2] (unscaled to permit reproducing sum).
   real :: h_minimum  ! The minimum layer thicknesses [H ~> m or kg m-2]
+  real :: T_scale    ! The scaling conversion factor for temperatures [degC C-1 ~> 1]
+  real :: S_scale    ! The scaling conversion factor for salinities [ppt S-1 ~> 1]
   logical :: do_TS   ! If true, evaluate statistics for temperature and salinity
-  type(stats) :: T, S, delT, delS
+  type(stats) :: T, delT ! Temperature statistics in unscaled units [degC]
+  type(stats) :: S, delS ! Salinity statistics in unscaled units [ppt]
 
   ! NOTE: save data is not normally allowed but we use it for debugging purposes here on the
   !       assumption we will not turn this on with threads
@@ -278,6 +297,8 @@ subroutine MOM_state_stats(mesg, u, v, h, Temp, Salt, G, GV, US, allowChange, pe
   tmp_T(:,:) = 0.0
   tmp_S(:,:) = 0.0
 
+  T_scale = US%C_to_degC ; S_scale = US%S_to_ppt
+
   ! First collect local stats
   do j=js,je ; do i=is,ie
     tmp_A(i,j) = tmp_A(i,j) + US%L_to_m**2*G%areaT(i,j)
@@ -290,10 +311,12 @@ subroutine MOM_state_stats(mesg, u, v, h, Temp, Salt, G, GV, US, allowChange, pe
       dV = US%L_to_m**2*G%areaT(i,j)*GV%H_to_m*h(i,j,k)
       tmp_V(i,j) = tmp_V(i,j) + dV
       if (do_TS .and. h(i,j,k)>0.) then
-        T%minimum = min( T%minimum, Temp(i,j,k) ) ; T%maximum = max( T%maximum, Temp(i,j,k) )
-        T%average = T%average + dV*Temp(i,j,k)
-        S%minimum = min( S%minimum, Salt(i,j,k) ) ; S%maximum = max( S%maximum, Salt(i,j,k) )
-        S%average = S%average + dV*Salt(i,j,k)
+        T%minimum = min( T%minimum, T_scale*Temp(i,j,k) ) ; T%maximum = max( T%maximum, T_scale*Temp(i,j,k) )
+        T%average = T%average + dV*T_scale*Temp(i,j,k)
+        S%minimum = min( S%minimum, S_scale*Salt(i,j,k) ) ; S%maximum = max( S%maximum, S_scale*Salt(i,j,k) )
+        S%average = S%average + dV*S_scale*Salt(i,j,k)
+        tmp_T(i,j) = tmp_T(i,j) + dV*T_scale*Temp(i,j,k)
+        tmp_S(i,j) = tmp_S(i,j) + dV*S_scale*Salt(i,j,k)
       endif
       if (h_minimum > h(i,j,k)) h_minimum = h(i,j,k)
     endif
@@ -341,11 +364,11 @@ subroutine MOM_state_stats(mesg, u, v, h, Temp, Salt, G, GV, US, allowChange, pe
 
   if (do_TS .and. T%minimum<-5.0) then
     do j=js,je ; do i=is,ie
-      if (minval(Temp(i,j,:)) == T%minimum) then
+      if (minval(T_scale*Temp(i,j,:)) == T%minimum) then
         write(0,'(a,2f12.5)') 'x,y=', G%geoLonT(i,j), G%geoLatT(i,j)
         write(0,'(a3,3a12)') 'k','h','Temp','Salt'
         do k = 1, nz
-          write(0,'(i3,3es12.4)') k, h(i,j,k), Temp(i,j,k), Salt(i,j,k)
+          write(0,'(i3,3es12.4)') k, h(i,j,k), T_scale*Temp(i,j,k), S_scale*Salt(i,j,k)
         enddo
         stop 'Extremum detected'
       endif
@@ -358,7 +381,7 @@ subroutine MOM_state_stats(mesg, u, v, h, Temp, Salt, G, GV, US, allowChange, pe
         write(0,'(a,2f12.5)') 'x,y=',G%geoLonT(i,j),G%geoLatT(i,j)
         write(0,'(a3,3a12)') 'k','h','Temp','Salt'
         do k = 1, nz
-          write(0,'(i3,3es12.4)') k, h(i,j,k), Temp(i,j,k), Salt(i,j,k)
+          write(0,'(i3,3es12.4)') k, h(i,j,k), T_scale*Temp(i,j,k), S_scale*Salt(i,j,k)
         enddo
         stop 'Negative thickness detected'
       endif

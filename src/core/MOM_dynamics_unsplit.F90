@@ -50,7 +50,7 @@ module MOM_dynamics_unsplit
 !*                                                                     *
 !********+*********+*********+*********+*********+*********+*********+**
 
-use MOM_variables, only : vertvisc_type, thermo_var_ptrs, porous_barrier_ptrs
+use MOM_variables, only : vertvisc_type, thermo_var_ptrs, porous_barrier_type
 use MOM_variables, only : accel_diag_ptrs, ocean_internal_state, cont_diag_ptrs
 use MOM_forcing_type, only : mech_forcing
 use MOM_checksum_packages, only : MOM_thermo_chksum, MOM_state_chksum, MOM_accel_chksum
@@ -154,7 +154,7 @@ type, public :: MOM_dyn_unsplit_CS ; private
   !> A pointer to the set_visc control structure
   type(set_visc_CS), pointer :: set_visc_CSp => NULL()
   !> A pointer to the tidal forcing control structure
-  type(tidal_forcing_CS), pointer :: tides_CSp => NULL()
+  type(tidal_forcing_CS) :: tides_CSp
   !> A pointer to the ALE control structure.
   type(ALE_CS), pointer :: ALE_CSp => NULL()
 
@@ -217,7 +217,7 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
                                                    !! initialize_dyn_unsplit.
   type(VarMix_CS),         intent(inout) :: VarMix !< Variable mixing control structure
   type(MEKE_type),         intent(inout) :: MEKE   !< MEKE fields
-  type(porous_barrier_ptrs), intent(in) :: pbv     !< porous barrier fractional cell metrics
+  type(porous_barrier_type), intent(in) :: pbv     !< porous barrier fractional cell metrics
   type(wave_parameters_CS), optional, pointer :: Waves !< A pointer to a structure containing
                                  !! fields related to the surface wave conditions
 
@@ -239,8 +239,6 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
   h_av(:,:,:) = 0; hp(:,:,:) = 0
   up(:,:,:) = 0; upp(:,:,:) = 0
   vp(:,:,:) = 0; vpp(:,:,:) = 0
-  if (CS%id_ueffA > 0) ueffA(:,:,:) = 0
-  if (CS%id_veffA > 0) veffA(:,:,:) = 0
 
   dyn_p_surf = associated(p_surf_begin) .and. associated(p_surf_end)
   if (dyn_p_surf) then
@@ -347,7 +345,7 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
   call disable_averaging(CS%diag)
 
   dt_visc = 0.5*dt ; if (CS%use_correct_dt_visc) dt_visc = dt_pred
-  call vertvisc_coef(up, vp, h_av, forces, visc, dt_visc, G, GV, US, CS%vertvisc_CSp, CS%OBC)
+  call vertvisc_coef(up, vp, h_av, forces, visc, dt_visc, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
   call vertvisc(up, vp, h_av, forces, visc, dt_visc, CS%OBC, CS%ADp, CS%CDp, &
                 G, GV, US, CS%vertvisc_CSp, Waves=Waves)
   call cpu_clock_end(id_clock_vertvisc)
@@ -407,7 +405,7 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
 
 ! upp <- upp + dt/2 d/dz visc d/dz upp
   call cpu_clock_begin(id_clock_vertvisc)
-  call vertvisc_coef(upp, vpp, hp, forces, visc, dt*0.5, G, GV, US, CS%vertvisc_CSp, CS%OBC)
+  call vertvisc_coef(upp, vpp, hp, forces, visc, dt*0.5, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
   call vertvisc(upp, vpp, hp, forces, visc, dt*0.5, CS%OBC, CS%ADp, CS%CDp, &
                 G, GV, US, CS%vertvisc_CSp, Waves=Waves)
   call cpu_clock_end(id_clock_vertvisc)
@@ -431,21 +429,22 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
   call disable_averaging(CS%diag)
   call enable_averages(dt, Time_local, CS%diag)
 
-! Calculate effective areas and post data
+  ! Calculate effective areas and post data
   if (CS%id_ueffA > 0) then
-     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-        if (abs(up(I,j,k)) > 0.) ueffA(I,j,k) = uh(I,j,k)/up(I,j,k)
-     enddo ; enddo ; enddo
-     call post_data(CS%id_ueffA, ueffA, CS%diag)
+    ueffA(:,:,:) = 0
+    do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      if (abs(up(I,j,k)) > 0.) ueffA(I,j,k) = uh(I,j,k)/up(I,j,k)
+    enddo ; enddo ; enddo
+    call post_data(CS%id_ueffA, ueffA, CS%diag)
   endif
 
   if (CS%id_veffA > 0) then
-     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-        if (abs(vp(i,J,k)) > 0.) veffA(i,J,k) = vh(i,J,k)/vp(i,J,k)
-     enddo ; enddo ; enddo
-     call post_data(CS%id_veffA, veffA, CS%diag)
+    veffA(:,:,:) = 0
+    do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      if (abs(vp(i,J,k)) > 0.) veffA(i,J,k) = vh(i,J,k)/vp(i,J,k)
+    enddo ; enddo ; enddo
+    call post_data(CS%id_veffA, veffA, CS%diag)
   endif
-
 
 ! h_av = (h + hp)/2
   do k=1,nz
@@ -490,7 +489,7 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
 
 ! u <- u + dt d/dz visc d/dz u
   call cpu_clock_begin(id_clock_vertvisc)
-  call vertvisc_coef(u, v, h_av, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC)
+  call vertvisc_coef(u, v, h_av, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
   call vertvisc(u, v, h_av, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, &
                 G, GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, Waves=Waves)
   call cpu_clock_end(id_clock_vertvisc)
@@ -537,7 +536,6 @@ subroutine register_restarts_dyn_unsplit(HI, GV, param_file, CS)
   type(MOM_dyn_unsplit_CS),  pointer    :: CS         !< The control structure set up by
                                                       !! initialize_dyn_unsplit.
 
-  character(len=40)  :: mdl = "MOM_dynamics_unsplit" ! This module's name.
   character(len=48) :: thickness_units, flux_units
   integer :: isd, ied, jsd, jed, nz, IsdB, IedB, JsdB, JedB
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
@@ -620,7 +618,7 @@ subroutine initialize_dyn_unsplit(u, v, h, Time, G, GV, US, param_file, diag, CS
 
   ! Local variables
   character(len=40) :: mdl = "MOM_dynamics_unsplit" ! This module's name.
-  character(len=48) :: thickness_units, flux_units
+  character(len=48) :: flux_units
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   logical :: use_tides
@@ -694,11 +692,11 @@ subroutine initialize_dyn_unsplit(u, v, h, Time, G, GV, US, param_file, diag, CS
   CS%id_PFv = register_diag_field('ocean_model', 'PFv', diag%axesCvL, Time, &
       'Meridional Pressure Force Acceleration', 'm s-2', conversion=US%L_T2_to_m_s2)
   CS%id_ueffA = register_diag_field('ocean_model', 'ueffA', diag%axesCuL, Time, &
-       'Effective U Face Area', 'm^2', conversion = GV%H_to_m*US%L_to_m, &
-       y_cell_method='sum', v_extensive = .true.)
+       'Effective U Face Area', 'm^2', conversion=GV%H_to_m*US%L_to_m, &
+       y_cell_method='sum', v_extensive=.true.)
   CS%id_veffA = register_diag_field('ocean_model', 'veffA', diag%axesCvL, Time, &
-       'Effective V Face Area', 'm^2', conversion = GV%H_to_m*US%L_to_m, &
-       x_cell_method='sum', v_extensive = .true.)
+       'Effective V Face Area', 'm^2', conversion=GV%H_to_m*US%L_to_m, &
+       x_cell_method='sum', v_extensive=.true.)
 
   id_clock_Cor = cpu_clock_id('(Ocean Coriolis & mom advection)', grain=CLOCK_MODULE)
   id_clock_continuity = cpu_clock_id('(Ocean continuity equation)', grain=CLOCK_MODULE)

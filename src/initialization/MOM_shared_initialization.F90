@@ -11,7 +11,8 @@ use MOM_dyn_horgrid, only : dyn_horgrid_type
 use MOM_error_handler, only : MOM_mesg, MOM_error, FATAL, WARNING, is_root_pe
 use MOM_error_handler, only : callTree_enter, callTree_leave, callTree_waypoint
 use MOM_file_parser, only : get_param, log_param, param_file_type, log_version
-use MOM_io, only : close_file, create_file, file_type, fieldtype, file_exists, field_size
+use MOM_io, only : create_MOM_file, file_exists, field_size
+use MOM_io, only : MOM_infra_file, MOM_field
 use MOM_io, only : MOM_read_data, MOM_read_vector, read_variable, stdout
 use MOM_io, only : open_file_to_read, close_file_to_read, SINGLE_FILE, MULTIPLE
 use MOM_io, only : slasher, vardesc, MOM_write_field, var_desc
@@ -27,6 +28,7 @@ public initialize_topography_named, limit_topography, diagnoseMaximumDepth
 public set_rotation_planetary, set_rotation_beta_plane, initialize_grid_rotation_angle
 public reset_face_lengths_named, reset_face_lengths_file, reset_face_lengths_list
 public read_face_length_list, set_velocity_depth_max, set_velocity_depth_min
+public set_subgrid_topo_at_vel_from_file
 public compute_global_grid_integrals, write_ocean_geometry_file
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
@@ -94,11 +96,13 @@ subroutine MOM_calculate_grad_Coriolis(dF_dx, dF_dy, G, US)
                                       intent(out)   :: dF_dy !< y-component of grad f [T-1 L-1 ~> s-1 m-1]
   type(unit_scale_type),    optional, intent(in)    :: US !< A dimensional unit scaling type
   ! Local variables
+  character(len=40)  :: mdl = "MOM_calculate_grad_Coriolis" ! This subroutine's name.
   integer :: i,j
-  real :: f1, f2
+  real :: f1, f2 ! Average of adjacent Coriolis parameters [T-1 ~> s-1]
 
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
   if ((LBOUND(G%CoriolisBu,1) > G%isc-1) .or. &
-      (LBOUND(G%CoriolisBu,2) > G%isc-1)) then
+      (LBOUND(G%CoriolisBu,2) > G%jsc-1)) then
     ! The gradient of the Coriolis parameter can not be calculated with this grid.
     dF_dx(:,:) = 0.0 ; dF_dy(:,:) = 0.0
     return
@@ -113,6 +117,7 @@ subroutine MOM_calculate_grad_Coriolis(dF_dx, dF_dy, G, US)
     dF_dy(i,j) = G%IdyT(i,j) * ( f1 - f2 )
   enddo ; enddo
   call pass_vector(dF_dx, dF_dy, G%Domain, stagger=AGRID)
+  call callTree_leave(trim(mdl)//'()')
 
 end subroutine MOM_calculate_grad_Coriolis
 
@@ -120,8 +125,8 @@ end subroutine MOM_calculate_grad_Coriolis
 function diagnoseMaximumDepth(D, G)
   type(dyn_horgrid_type),  intent(in) :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                           intent(in) :: D !< Ocean bottom depth in m or Z
-  real :: diagnoseMaximumDepth             !< The global maximum ocean bottom depth in m or Z
+                           intent(in) :: D !< Ocean bottom depth in [m] or [Z ~> m]
+  real :: diagnoseMaximumDepth             !< The global maximum ocean bottom depth in [m] or [Z ~> m]
   ! Local variables
   integer :: i,j
   diagnoseMaximumDepth = D(G%isc,G%jsc)
@@ -184,7 +189,7 @@ subroutine apply_topography_edits_from_file(D, G, param_file, US)
   type(unit_scale_type),            intent(in)    :: US !< A dimensional unit scaling type
 
   ! Local variables
-  real, dimension(:), allocatable :: new_depth ! The new values of the depths [m]
+  real, dimension(:), allocatable :: new_depth ! The new values of the depths [Z ~> m]
   integer, dimension(:), allocatable :: ig, jg ! The global indicies of the points to modify
   character(len=200) :: topo_edits_file, inputdir ! Strings for file/path
   character(len=40)  :: mdl = "apply_topography_edits_from_file" ! This subroutine's name.
@@ -247,22 +252,22 @@ subroutine apply_topography_edits_from_file(D, G, param_file, US)
   ! Read iEdit, jEdit and zEdit
   call read_variable(topo_edits_file, 'iEdit', ig, ncid_in=ncid)
   call read_variable(topo_edits_file, 'jEdit', jg, ncid_in=ncid)
-  call read_variable(topo_edits_file, 'zEdit', new_depth, ncid_in=ncid)
+  call read_variable(topo_edits_file, 'zEdit', new_depth, ncid_in=ncid, scale=US%m_to_Z)
   call close_file_to_read(ncid, topo_edits_file)
 
   do n = 1, n_edits
     i = ig(n) - G%isd_global + 2 ! +1 for python indexing and +1 for ig-isd_global+1
     j = jg(n) - G%jsd_global + 2
     if (i>=G%isc .and. i<=G%iec .and. j>=G%jsc .and. j<=G%jec) then
-      if (new_depth(n)*US%m_to_Z /= mask_depth) then
+      if (new_depth(n) /= mask_depth) then
         write(stdout,'(a,3i5,f8.2,a,f8.2,2i4)') &
-          'Ocean topography edit: ', n, ig(n), jg(n), D(i,j)*US%Z_to_m, '->', abs(new_depth(n)), i, j
-        D(i,j) = abs(US%m_to_Z*new_depth(n)) ! Allows for height-file edits (i.e. converts negatives)
+          'Ocean topography edit: ', n, ig(n), jg(n), D(i,j)*US%Z_to_m, '->', abs(US%Z_to_m*new_depth(n)), i, j
+        D(i,j) = abs(new_depth(n)) ! Allows for height-file edits (i.e. converts negatives)
       else
         if (topo_edits_change_mask) then
           write(stdout,'(a,3i5,f8.2,a,f8.2,2i4)') &
-            'Ocean topography edit: ',n,ig(n),jg(n),D(i,j)*US%Z_to_m,'->',abs(new_depth(n)),i,j
-            D(i,j) = abs(US%m_to_Z*new_depth(n)) ! Allows for height-file edits (i.e. converts negatives)
+            'Ocean topography edit: ',n,ig(n),jg(n),D(i,j)*US%Z_to_m,'->',abs(US%Z_to_m*new_depth(n)),i,j
+            D(i,j) = abs(new_depth(n)) ! Allows for height-file edits (i.e. converts negatives)
         else
           call MOM_error(FATAL, ' apply_topography_edits_from_file: '//&
             "A zero depth edit would change the land mask and is not allowed in"//trim(topo_edits_file))
@@ -291,7 +296,7 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
 
   ! Local variables
   real :: min_depth            ! The minimum depth [Z ~> m].
-  real :: PI                   ! 3.1415926... calculated as 4*atan(1)
+  real :: PI                   ! 3.1415926... calculated as 4*atan(1) [nondim]
   real :: D0                   ! A constant to make the maximum basin depth MAXIMUM_DEPTH [Z ~> m]
   real :: expdecay             ! A decay scale of associated with the sloping boundaries [L ~> m]
   real :: Dedge                ! The depth at the basin edge [Z ~> m]
@@ -322,12 +327,12 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
   PI = 4.0*atan(1.0)
 
   if (trim(topog_config) == "flat") then
-    do i=is,ie ; do j=js,je ; D(i,j) = max_depth ; enddo ; enddo
+    do j=js,je ; do i=is,ie ; D(i,j) = max_depth ; enddo ; enddo
   elseif (trim(topog_config) == "spoon") then
     D0 = (max_depth - Dedge) / &
              ((1.0 - exp(-0.5*G%len_lat*G%Rad_Earth_L*PI/(180.0 *expdecay))) * &
               (1.0 - exp(-0.5*G%len_lat*G%Rad_Earth_L*PI/(180.0 *expdecay))))
-    do i=is,ie ; do j=js,je
+    do j=js,je ; do i=is,ie
   !  This sets a bowl shaped (sort of) bottom topography, with a       !
   !  maximum depth of max_depth.                                   !
       D(i,j) =  Dedge + D0 * &
@@ -342,7 +347,7 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
 
   !  This sets a bowl shaped (sort of) bottom topography, with a
   !  maximum depth of max_depth.
-    do i=is,ie ; do j=js,je
+    do j=js,je ; do i=is,ie
       D(i,j) =  Dedge + D0 * &
              (sin(PI * (G%geoLonT(i,j) - G%west_lon) / G%len_lon) * &
              ((1.0 - exp(-(G%geoLatT(i,j) - G%south_lat)*G%Rad_Earth_L*PI/ &
@@ -352,7 +357,7 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
     enddo ; enddo
   elseif (trim(topog_config) == "halfpipe") then
     D0 = max_depth - Dedge
-    do i=is,ie ; do j=js,je
+    do j=js,je ; do i=is,ie
       D(i,j) =  Dedge + D0 * ABS(sin(PI*(G%geoLatT(i,j) - G%south_lat)/G%len_lat))
     enddo ; enddo
   else
@@ -361,7 +366,7 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
   endif
 
   ! This is here just for safety.  Hopefully it doesn't do anything.
-  do i=is,ie ; do j=js,je
+  do j=js,je ; do i=is,ie
     if (D(i,j) > max_depth) D(i,j) = max_depth
     if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
   enddo ; enddo
@@ -448,14 +453,14 @@ subroutine set_rotation_planetary(f, G, param_file, US)
 ! This subroutine sets up the Coriolis parameter for a sphere
   character(len=30) :: mdl = "set_rotation_planetary" ! This subroutine's name.
   integer :: I, J
-  real    :: PI
+  real    :: PI     ! The ratio of the circumference of a circle to its diameter [nondim]
   real    :: omega  ! The planetary rotation rate [T-1 ~> s-1]
 
   call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
   call get_param(param_file, "set_rotation_planetary", "OMEGA", omega, &
-                 "The rotation rate of the earth.", units="s-1", &
-                 default=7.2921e-5, scale=US%T_to_s)
+                 "The rotation rate of the earth.", &
+                 units="s-1", default=7.2921e-5, scale=US%T_to_s)
   PI = 4.0*atan(1.0)
 
   do I=G%IsdB,G%IedB ; do J=G%JsdB,G%JedB
@@ -479,10 +484,10 @@ subroutine set_rotation_beta_plane(f, G, param_file, US)
   integer :: I, J
   real    :: f_0    ! The reference value of the Coriolis parameter [T-1 ~> s-1]
   real    :: beta   ! The meridional gradient of the Coriolis parameter [T-1 L-1 ~> s-1 m-1]
-  real    :: beta_lat_ref ! The reference latitude for the beta plane [degrees/km/m/cm]
+  real    :: beta_lat_ref ! The reference latitude for the beta plane [degrees_N] or [km] or [m]
   real    :: Rad_Earth_L  ! The radius of the planet in rescaled units [L ~> m]
   real    :: y_scl  ! A scaling factor from the units of latitude [L lat-1 ~> m lat-1]
-  real    :: PI
+  real    :: PI     ! The ratio of the circumference of a circle to its diameter [nondim]
   character(len=40)  :: mdl = "set_rotation_beta_plane" ! This subroutine's name.
   character(len=200) :: axis_units
   character(len=40) :: beta_lat_ref_units
@@ -532,10 +537,12 @@ subroutine initialize_grid_rotation_angle(G, PF)
   type(param_file_type),  intent(in)    :: PF  !< A structure indicating the open file
                                                !! to parse for model parameter values.
 
-  real    :: angle, lon_scale
-  real    :: len_lon    ! The periodic range of longitudes, usually 360 degrees.
-  real    :: pi_720deg  ! One quarter the conversion factor from degrees to radians.
-  real    :: lonB(2,2)  ! The longitude of a point, shifted to have about the same value.
+  real    :: angle      ! The clockwise angle of the grid relative to true north [degrees]
+  real    :: lon_scale  ! The trigonometric scaling factor converting changes in longitude
+                        ! to equivalent distances in latitudes [nondim]
+  real    :: len_lon    ! The periodic range of longitudes, usually 360 degrees [degrees_E].
+  real    :: pi_720deg  ! One quarter the conversion factor from degrees to radians [radian degree-1]
+  real    :: lonB(2,2)  ! The longitude of a point, shifted to have about the same value [degrees_E].
   character(len=40)  :: mdl = "initialize_grid_rotation_angle" ! This subroutine's name.
   logical :: use_bugs
   integer :: i, j, m, n
@@ -586,10 +593,10 @@ end subroutine initialize_grid_rotation_angle
 !> Return the modulo value of x in an interval [xc-(Lx/2) xc+(Lx/2)]
 !! If Lx<=0, then it returns x without applying modulo arithmetic.
 function modulo_around_point(x, xc, Lx) result(x_mod)
-  real, intent(in) :: x  !< Value to which to apply modulo arithmetic
-  real, intent(in) :: xc !< Center of modulo range
-  real, intent(in) :: Lx !< Modulo range width
-  real :: x_mod          !< x shifted by an integer multiple of Lx to be close to xc.
+  real, intent(in) :: x  !< Value to which to apply modulo arithmetic [A]
+  real, intent(in) :: xc !< Center of modulo range [A]
+  real, intent(in) :: Lx !< Modulo range width [A]
+  real :: x_mod          !< x shifted by an integer multiple of Lx to be close to xc [A].
 
   if (Lx > 0.0) then
     x_mod = modulo(x - (xc - 0.5*Lx), Lx) + (xc - 0.5*Lx)
@@ -610,9 +617,9 @@ subroutine reset_face_lengths_named(G, param_file, name, US)
 
   ! Local variables
   character(len=256) :: mesg    ! Message for error messages.
-  real    :: dx_2     ! Half the local zonal grid spacing [degreesE]
-  real    :: dy_2     ! Half the local meridional grid spacing [degreesN]
-  real    :: pi_180
+  real    :: dx_2     ! Half the local zonal grid spacing [degrees_E]
+  real    :: dy_2     ! Half the local meridional grid spacing [degrees_N]
+  real    :: pi_180   ! Conversion factor from degrees to radians [nondim]
   integer :: option
   integer :: i, j, isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
@@ -737,7 +744,9 @@ subroutine reset_face_lengths_file(G, param_file, US)
   character(len=40)  :: mdl = "reset_face_lengths_file" ! This subroutine's name.
   character(len=256) :: mesg    ! Message for error messages.
   character(len=200) :: filename, chan_file, inputdir ! Strings for file/path
+  character(len=64)  :: dxCv_open_var, dyCu_open_var ! Open face length names in files
   integer :: i, j, isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
+
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   ! These checks apply regardless of the chosen option.
@@ -757,7 +766,14 @@ subroutine reset_face_lengths_file(G, param_file, US)
                            trim(filename))
   endif
 
-  call MOM_read_vector(filename, "dyCuo", "dxCvo", G%dy_Cu, G%dx_Cv, G%Domain, scale=US%m_to_L)
+  call get_param(param_file, mdl, "OPEN_DY_CU_VAR", dyCu_open_var, &
+                 "The u-face open face length variable in CHANNEL_WIDTH_FILE.", &
+                 default="dyCuo")
+  call get_param(param_file, mdl, "OPEN_DX_CV_VAR", dxCv_open_var, &
+                 "The v-face open face length variable in CHANNEL_WIDTH_FILE.", &
+                 default="dxCvo")
+
+  call MOM_read_vector(filename, dyCu_open_var, dxCv_open_var, G%dy_Cu, G%dx_Cv, G%Domain, scale=US%m_to_L)
   call pass_vector(G%dy_Cu, G%dx_Cv, G%Domain, To_All+SCALAR_PAIR, CGRID_NE)
 
   do j=jsd,jed ; do I=IsdB,IedB
@@ -802,23 +818,23 @@ subroutine reset_face_lengths_list(G, param_file, US)
   ! Local variables
   character(len=120), pointer, dimension(:) :: lines => NULL()
   character(len=120) :: line
-  character(len=200) :: filename, chan_file, inputdir, mesg ! Strings for file/path
+  character(len=200) :: filename, chan_file, inputdir   ! Strings for file/path
   character(len=40)  :: mdl = "reset_face_lengths_list" ! This subroutine's name.
   real, allocatable, dimension(:,:) :: &
-    u_lat, u_lon, v_lat, v_lon ! The latitude and longitude ranges of faces [degrees]
+    u_lat, u_lon, v_lat, v_lon ! The latitude and longitude ranges of faces [degrees_N] or [degrees_E]
   real, allocatable, dimension(:) :: &
-    u_width, v_width      ! The open width of faces [m]
+    u_width, v_width      ! The open width of faces [L ~> m]
   integer, allocatable, dimension(:) :: &
     u_line_no, v_line_no, &  ! The line numbers in lines of u- and v-face lines
     u_line_used, v_line_used ! The number of times each u- and v-line is used.
   real, allocatable, dimension(:) :: &
-    Dmin_u, Dmax_u, Davg_u   ! Porous barrier monomial fit params [m]
+    Dmin_u, Dmax_u, Davg_u   ! Porous barrier monomial fit params [Z ~> m]
   real, allocatable, dimension(:) :: &
-    Dmin_v, Dmax_v, Davg_v   ! Porous barrier monomial fit params [m]
-  real    :: lat, lon     ! The latitude and longitude of a point.
-  real    :: len_lon      ! The periodic range of longitudes, usually 360 degrees.
-  real    :: len_lat      ! The range of latitudes, usually 180 degrees.
-  real    :: lon_p, lon_m ! The longitude of a point shifted by 360 degrees.
+    Dmin_v, Dmax_v, Davg_v   ! Porous barrier monomial fit params [Z ~> m]
+  real    :: lat, lon     ! The latitude and longitude of a point [degrees_N] and [degrees_E].
+  real    :: len_lon      ! The periodic range of longitudes, usually 360 degrees [degrees_E].
+  real    :: len_lat      ! The range of latitudes, usually 180 degrees [degrees_N].
+  real    :: lon_p, lon_m ! The longitude of a point shifted by 360 degrees [degrees_E].
   logical :: check_360    ! If true, check for longitudes that are shifted by
                           ! +/- 360 degrees from the specified range of values.
   logical :: found_u, found_v
@@ -826,7 +842,7 @@ subroutine reset_face_lengths_list(G, param_file, US)
   logical :: fatal_unused_lengths
   integer :: unused
   integer :: ios, iounit, isu, isv
-  integer :: last, num_lines, nl_read, ln, npt, u_pt, v_pt
+  integer :: num_lines, nl_read, ln, npt, u_pt, v_pt
   integer :: i, j, isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   integer :: isu_por, isv_por
   logical :: found_u_por, found_v_por
@@ -893,13 +909,13 @@ subroutine reset_face_lengths_list(G, param_file, US)
     allocate(v_line_used(num_lines), source=0)
     allocate(v_line_no(num_lines), source=0)
 
-    allocate(Dmin_u(num_lines))    ; Dmin_u(:) = 0.0
-    allocate(Dmax_u(num_lines))    ; Dmax_u(:) = 0.0
-    allocate(Davg_u(num_lines))    ; Davg_u(:) = 0.0
+    allocate(Dmin_u(num_lines), source=0.0)
+    allocate(Dmax_u(num_lines), source=0.0)
+    allocate(Davg_u(num_lines), source=0.0)
 
-    allocate(Dmin_v(num_lines))    ; Dmin_v(:) = 0.0
-    allocate(Dmax_v(num_lines))    ; Dmax_v(:) = 0.0
-    allocate(Davg_v(num_lines))    ; Davg_v(:) = 0.0
+    allocate(Dmin_v(num_lines), source=0.0)
+    allocate(Dmax_v(num_lines), source=0.0)
+    allocate(Davg_v(num_lines), source=0.0)
 
     ! Actually read the lines.
     if (is_root_pe()) then
@@ -933,6 +949,10 @@ subroutine reset_face_lengths_list(G, param_file, US)
           read(line(isu_por+12:),*) u_lon(1:2,u_pt), u_lat(1:2,u_pt), u_width(u_pt), &
                 Dmin_u(u_pt), Dmax_u(u_pt), Davg_u(u_pt)
         endif
+        u_width(u_pt) = US%m_to_L*u_width(u_pt) ! Rescale units equivalently to scale=US%m_to_L during read.
+        Dmin_u(u_pt) = US%m_to_Z*Dmin_u(u_pt)   ! Rescale units equivalently to scale=US%m_to_Z during read.
+        Dmax_u(u_pt) = US%m_to_Z*Dmax_u(u_pt)   ! Rescale units equivalently to scale=US%m_to_Z during read.
+        Davg_u(u_pt) = US%m_to_Z*Davg_u(u_pt)   ! Rescale units equivalently to scale=US%m_to_Z during read.
         u_line_no(u_pt) = ln
         if (is_root_PE()) then
           if (check_360) then
@@ -970,6 +990,10 @@ subroutine reset_face_lengths_list(G, param_file, US)
           read(line(isv+12:),*) v_lon(1:2,v_pt), v_lat(1:2,v_pt), v_width(v_pt), &
                 Dmin_v(v_pt), Dmax_v(v_pt), Davg_v(v_pt)
         endif
+        v_width(v_pt) = US%m_to_L*v_width(v_pt) ! Rescale units equivalently to scale=US%m_to_L during read.
+        Dmin_v(v_pt) = US%m_to_Z*Dmin_v(v_pt)   ! Rescale units equivalently to scale=US%m_to_Z during read.
+        Dmax_v(v_pt) = US%m_to_Z*Dmax_v(v_pt)   ! Rescale units equivalently to scale=US%m_to_Z during read.
+        Davg_v(v_pt) = US%m_to_Z*Davg_v(v_pt)   ! Rescale units equivalently to scale=US%m_to_Z during read.
         v_line_no(v_pt) = ln
         if (is_root_PE()) then
           if (check_360) then
@@ -1015,10 +1039,10 @@ subroutine reset_face_lengths_list(G, param_file, US)
            ((lon_p >= u_lon(1,npt)) .and. (lon_p <= u_lon(2,npt))) .or. &
            ((lon_m >= u_lon(1,npt)) .and. (lon_m <= u_lon(2,npt)))) ) then
 
-        G%dy_Cu(I,j) = G%mask2dCu(I,j) * min(G%dyCu(I,j), max(US%m_to_L*u_width(npt), 0.0))
-        G%porous_DminU(I,j) = US%m_to_Z*Dmin_u(npt)
-        G%porous_DmaxU(I,j) = US%m_to_Z*Dmax_u(npt)
-        G%porous_DavgU(I,j) = US%m_to_Z*Davg_u(npt)
+        G%dy_Cu(I,j) = G%mask2dCu(I,j) * min(G%dyCu(I,j), max(u_width(npt), 0.0))
+        G%porous_DminU(I,j) = Dmin_u(npt)
+        G%porous_DmaxU(I,j) = Dmax_u(npt)
+        G%porous_DavgU(I,j) = Davg_u(npt)
 
         if (j>=G%jsc .and. j<=G%jec .and. I>=G%isc .and. I<=G%iec) then ! Limit messages/checking to compute domain
           if ( G%mask2dCu(I,j) == 0.0 )  then
@@ -1052,10 +1076,10 @@ subroutine reset_face_lengths_list(G, param_file, US)
           (((lon >= v_lon(1,npt)) .and. (lon <= v_lon(2,npt))) .or. &
            ((lon_p >= v_lon(1,npt)) .and. (lon_p <= v_lon(2,npt))) .or. &
            ((lon_m >= v_lon(1,npt)) .and. (lon_m <= v_lon(2,npt)))) ) then
-        G%dx_Cv(i,J) = G%mask2dCv(i,J) * min(G%dxCv(i,J), max(US%m_to_L*v_width(npt), 0.0))
-        G%porous_DminV(i,J) = US%m_to_Z*Dmin_v(npt)
-        G%porous_DmaxV(i,J) = US%m_to_Z*Dmax_v(npt)
-        G%porous_DavgV(i,J) = US%m_to_Z*Davg_v(npt)
+        G%dx_Cv(i,J) = G%mask2dCv(i,J) * min(G%dxCv(i,J), max(v_width(npt), 0.0))
+        G%porous_DminV(i,J) = Dmin_v(npt)
+        G%porous_DmaxV(i,J) = Dmax_v(npt)
+        G%porous_DavgV(i,J) = Davg_v(npt)
 
         if (i>=G%isc .and. i<=G%iec .and. J>=G%jsc .and. J<=G%jec) then ! Limit messages/checking to compute domain
           if ( G%mask2dCv(i,J) == 0.0 )  then
@@ -1124,7 +1148,7 @@ subroutine read_face_length_list(iounit, filename, num_lines, lines)
   ! list file, after removing comments.
   character(len=120) :: line, line_up
   logical :: found_u, found_v
-  integer :: isu, isv, icom, verbose
+  integer :: isu, isv, icom
   integer :: last
 
   num_lines = 0
@@ -1163,6 +1187,82 @@ subroutine read_face_length_list(iounit, filename, num_lines, lines)
                   "Error while reading file "//trim(filename))
 
 end subroutine read_face_length_list
+! -----------------------------------------------------------------------------
+
+! -----------------------------------------------------------------------------
+!> Read from a file the maximum, minimum and average bathymetry at velocity points,
+!! for the use of porous barrier.
+!! Note that we assume the depth values in the sub-grid bathymetry file of the same
+!! convention as in-cell bathymetry file, i.e. positive below the sea surface and
+!! increasing downward; while in subroutine reset_face_lengths_list, it is implied
+!! that read-in fields min_bathy, max_bathy and avg_bathy from the input file
+!! CHANNEL_LIST_FILE all have negative values below the surface. Therefore, to ensure
+!! backward compatibility, all signs of the variable are inverted here.
+!! And porous_Dmax[UV] = shallowest point, porous_Dmin[UV] = deepest point
+subroutine set_subgrid_topo_at_vel_from_file(G, param_file, US)
+  type(dyn_horgrid_type), intent(inout) :: G          !< The dynamic horizontal grid type
+  type(param_file_type),  intent(in)    :: param_file !< Parameter file structure
+  type(unit_scale_type),  intent(in)    :: US         !< A dimensional unit scaling type
+
+  ! Local variables
+  character(len=200) :: filename, topo_file, inputdir ! Strings for file/path
+  character(len=200) :: varname_uhi, varname_ulo, varname_uav, &
+                        varname_vhi, varname_vlo, varname_vav     ! Variable names in file
+  character(len=40)  :: mdl = "set_subgrid_topo_at_vel_from_file" ! This subroutine's name.
+  integer :: i, j
+
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
+
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
+  inputdir = slasher(inputdir)
+  call get_param(param_file, mdl, "TOPO_AT_VEL_FILE", topo_file, &
+                 "The file from which the bathymetry parameters at the velocity points are read.  "//&
+                 "While the names of the parameters reflect their physical locations, i.e. HIGH is above LOW, "//&
+                 "their signs follow the model's convention, which is positive below the sea surface", &
+                 default="topog_edge.nc")
+  call get_param(param_file, mdl, "TOPO_AT_VEL_VARNAME_U_HIGH", varname_uhi, &
+                 "The variable name of the highest bathymetry at the u-cells in TOPO_AT_VEL_FILE.", &
+                 default="depthu_hi")
+  call get_param(param_file, mdl, "TOPO_AT_VEL_VARNAME_U_LOW",  varname_ulo, &
+                 "The variable name of the lowest bathymetry at the u-cells in TOPO_AT_VEL_FILE.", &
+                 default="depthu_lo")
+  call get_param(param_file, mdl, "TOPO_AT_VEL_VARNAME_U_AVE",  varname_uav, &
+                 "The variable name of the average bathymetry at the u-cells in TOPO_AT_VEL_FILE.", &
+                 default="depthu_av")
+  call get_param(param_file, mdl, "TOPO_AT_VEL_VARNAME_V_HIGH", varname_vhi, &
+                 "The variable name of the highest bathymetry at the v-cells in TOPO_AT_VEL_FILE.", &
+                 default="depthv_hi")
+  call get_param(param_file, mdl, "TOPO_AT_VEL_VARNAME_V_LOW",  varname_vlo, &
+                 "The variable name of the lowest bathymetry at the v-cells in TOPO_AT_VEL_FILE.", &
+                 default="depthv_lo")
+  call get_param(param_file, mdl, "TOPO_AT_VEL_VARNAME_V_AVE",  varname_vav, &
+                 "The variable name of the average bathymetry at the v-cells in TOPO_AT_VEL_FILE.", &
+                 default="depthv_av")
+
+  filename = trim(inputdir)//trim(topo_file)
+  call log_param(param_file, mdl, "INPUTDIR/TOPO_AT_VEL_FILE", filename)
+
+  if (.not.file_exists(filename, G%Domain)) call MOM_error(FATAL, &
+       " set_subgrid_topo_at_vel_from_file: Unable to open "//trim(filename))
+
+  call MOM_read_vector(filename, trim(varname_uhi), trim(varname_vhi), &
+                       G%porous_DmaxU, G%porous_DmaxV, G%Domain, stagger=CGRID_NE, scale=US%m_to_Z)
+  call MOM_read_vector(filename, trim(varname_ulo), trim(varname_vlo), &
+                       G%porous_DminU, G%porous_DminV, G%Domain, stagger=CGRID_NE, scale=US%m_to_Z)
+  call MOM_read_vector(filename, trim(varname_uav), trim(varname_vav), &
+                       G%porous_DavgU, G%porous_DavgV, G%Domain, stagger=CGRID_NE, scale=US%m_to_Z)
+
+  ! The signs of the depth parameters need to be inverted to be backward compatible with input files
+  ! used by subroutine reset_face_lengths_list, which assumes depth is negative below the sea surface.
+  G%porous_DmaxU = -G%porous_DmaxU; G%porous_DminU = -G%porous_DminU; G%porous_DavgU = -G%porous_DavgU
+  G%porous_DmaxV = -G%porous_DmaxV; G%porous_DminV = -G%porous_DminV; G%porous_DavgV = -G%porous_DavgV
+
+  call pass_vector(G%porous_DmaxU, G%porous_DmaxV, G%Domain, To_All+SCALAR_PAIR, CGRID_NE)
+  call pass_vector(G%porous_DminU, G%porous_DminV, G%Domain, To_All+SCALAR_PAIR, CGRID_NE)
+  call pass_vector(G%porous_DavgU, G%porous_DavgV, G%Domain, To_All+SCALAR_PAIR, CGRID_NE)
+
+  call callTree_leave(trim(mdl)//'()')
+end subroutine set_subgrid_topo_at_vel_from_file
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
@@ -1213,7 +1313,7 @@ subroutine compute_global_grid_integrals(G, US)
   type(unit_scale_type),  intent(in)    :: US !< A dimensional unit scaling type
 
   ! Local variables
-  real, dimension(G%isc:G%iec, G%jsc:G%jec) :: tmpForSumming
+  real, dimension(G%isc:G%iec, G%jsc:G%jec) :: tmpForSumming ! Masked and unscaled cell areas [m2]
   real :: area_scale  ! A scaling factor for area into MKS units [m2 L-2 ~> 1]
   integer :: i,j
 
@@ -1250,9 +1350,9 @@ subroutine write_ocean_geometry_file(G, param_file, directory, US, geom_file)
   character(len=40)  :: mdl = "write_ocean_geometry_file"
   type(vardesc),   dimension(:), allocatable :: &
     vars     ! Types with metadata about the variables and their staggering
-  type(fieldtype), dimension(:), allocatable :: &
+  type(MOM_field), dimension(:), allocatable :: &
     fields   ! Opaque types used by MOM_io to store variable metadata information
-  type(file_type) :: IO_handle ! The I/O handle of the fileset
+  type(MOM_infra_file) :: IO_handle ! The I/O handle of the fileset
   integer :: nFlds ! The number of variables in this file
   integer :: file_threading
   logical :: multiple_files
@@ -1316,7 +1416,8 @@ subroutine write_ocean_geometry_file(G, param_file, directory, US, geom_file)
   file_threading = SINGLE_FILE
   if (multiple_files) file_threading = MULTIPLE
 
-  call create_file(IO_handle, trim(filepath), vars, nFlds, fields, file_threading, dG=G)
+  call create_MOM_file(IO_handle, trim(filepath), vars, nFlds, fields, &
+      file_threading, dG=G)
 
   call MOM_write_field(IO_handle, fields(1), G%Domain, G%geoLatBu)
   call MOM_write_field(IO_handle, fields(2), G%Domain, G%geoLonBu)
@@ -1349,7 +1450,7 @@ subroutine write_ocean_geometry_file(G, param_file, directory, US, geom_file)
     call MOM_write_field(IO_handle, fields(23), G%Domain, G%Dopen_v, scale=US%Z_to_m)
   endif
 
-  call close_file(IO_handle)
+  call IO_handle%close()
 
   deallocate(vars, fields)
 

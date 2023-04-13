@@ -4,13 +4,13 @@ module MOM_restart
 ! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_checksums, only : chksum => rotated_field_chksum
-use MOM_domains, only : PE_here, num_PEs
+use MOM_domains, only : PE_here, num_PEs, AGRID, BGRID_NE, CGRID_NE
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, NOTE, is_root_pe
 use MOM_file_parser, only : get_param, log_param, log_version, param_file_type
 use MOM_grid, only : ocean_grid_type
-use MOM_io, only : create_file, file_type, fieldtype, file_exists, open_file, close_file
-use MOM_io, only : MOM_read_data, read_data, MOM_write_field, read_field_chksum
-use MOM_io, only : get_file_info, get_file_fields, get_field_atts, get_file_times
+use MOM_io, only : create_MOM_file, file_exists
+use MOM_io, only : MOM_infra_file, MOM_field
+use MOM_io, only : MOM_read_data, read_data, MOM_write_field, field_exists
 use MOM_io, only : vardesc, var_desc, query_vardesc, modify_vardesc, get_filename_appendix
 use MOM_io, only : MULTIPLE, READONLY_FILE, SINGLE_FILE
 use MOM_io, only : CENTER, CORNER, NORTH_FACE, EAST_FACE
@@ -22,33 +22,41 @@ use MOM_verticalGrid,  only : verticalGrid_type
 implicit none ; private
 
 public restart_init, restart_end, restore_state, register_restart_field
-public save_restart, query_initialized, restart_registry_lock, restart_init_end, vardesc
+public save_restart, query_initialized, set_initialized, only_read_from_restarts
+public restart_registry_lock, restart_init_end, vardesc
 public restart_files_exist, determine_is_new_run, is_new_run
 public register_restart_field_as_obsolete, register_restart_pair
 
+! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
+! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
+! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
+! vary with the Boussinesq approximation, the Boussinesq variant is given first.
+! The functions in this module work with variables with arbitrary units, in which case the
+! arbitrary rescaled units are indicated with [A ~> a], while the unscaled units are just [a].
+
 !> A type for making arrays of pointers to 4-d arrays
 type p4d
-  real, dimension(:,:,:,:), pointer :: p => NULL() !< A pointer to a 4d array
+  real, dimension(:,:,:,:), pointer :: p => NULL() !< A pointer to a 4d array in arbitrary rescaled units [A ~> a]
 end type p4d
 
 !> A type for making arrays of pointers to 3-d arrays
 type p3d
-  real, dimension(:,:,:), pointer :: p => NULL() !< A pointer to a 3d array
+  real, dimension(:,:,:), pointer :: p => NULL() !< A pointer to a 3d array in arbitrary rescaled units [A ~> a]
 end type p3d
 
 !> A type for making arrays of pointers to 2-d arrays
 type p2d
-  real, dimension(:,:), pointer :: p => NULL() !< A pointer to a 2d array
+  real, dimension(:,:), pointer :: p => NULL() !< A pointer to a 2d array in arbitrary rescaled units [A ~> a]
 end type p2d
 
 !> A type for making arrays of pointers to 1-d arrays
 type p1d
-  real, dimension(:), pointer :: p => NULL() !< A pointer to a 1d array
+  real, dimension(:), pointer :: p => NULL() !< A pointer to a 1d array in arbitrary rescaled units [A ~> a]
 end type p1d
 
 !> A type for making arrays of pointers to scalars
 type p0d
-  real, pointer :: p => NULL() !< A pointer to a scalar
+  real, pointer :: p => NULL() !< A pointer to a scalar in arbitrary rescaled units [A ~> a]
 end type p0d
 
 !> A structure with information about a single restart field
@@ -59,6 +67,10 @@ type field_restart
                                 !! read from the restart file.
   logical :: initialized        !< .true. if this field has been read from the restart file.
   character(len=32) :: var_name !< A name by which a variable may be queried.
+  real    :: conv = 1.0         !< A factor by which a restart field should be multiplied before it
+                                !! is written to a restart file, usually to convert it to MKS or
+                                !! other standard units [a A-1 ~> 1].  When read, the restart field
+                                !! is multiplied by the Adcroft reciprocal of this factor.
 end type field_restart
 
 !> A structure to store information about restart fields that are no longer used
@@ -132,6 +144,23 @@ interface query_initialized
   module procedure query_initialized_4d, query_initialized_4d_name
 end interface
 
+!> Specify that a field has been initialized, even if it was not read from a restart file
+interface set_initialized
+  module procedure set_initialized_name, set_initialized_0d_name
+  module procedure set_initialized_1d_name, set_initialized_2d_name
+  module procedure set_initialized_3d_name, set_initialized_4d_name
+end interface
+
+!> Read optional variables from restart files.
+interface only_read_from_restarts
+  module procedure only_read_restart_field_4d
+  module procedure only_read_restart_field_3d
+  module procedure only_read_restart_field_2d
+!  module procedure only_read_restart_field_1d
+!  module procedure only_read_restart_field_0d
+  module procedure only_read_restart_pair_3d
+end interface
+
 contains
 
 !> Register a restart field as obsolete
@@ -146,13 +175,16 @@ subroutine register_restart_field_as_obsolete(field_name, replacement_name, CS)
 end subroutine register_restart_field_as_obsolete
 
 !> Register a 3-d field for restarts, providing the metadata in a structure
-subroutine register_restart_field_ptr3d(f_ptr, var_desc, mandatory, CS)
+subroutine register_restart_field_ptr3d(f_ptr, var_desc, mandatory, CS, conversion)
   real, dimension(:,:,:), &
                       target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   type(vardesc),              intent(in) :: var_desc  !< A structure with metadata about this variable
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
       "register_restart_field: Module must be initialized before it is used.")
@@ -166,6 +198,8 @@ subroutine register_restart_field_ptr3d(f_ptr, var_desc, mandatory, CS)
   CS%restart_field(CS%novars)%vars = var_desc
   CS%restart_field(CS%novars)%mand_var = mandatory
   CS%restart_field(CS%novars)%initialized = .false.
+  CS%restart_field(CS%novars)%conv = 1.0
+  if (present(conversion)) CS%restart_field(CS%novars)%conv = conversion
   call query_vardesc(CS%restart_field(CS%novars)%vars, &
                      name=CS%restart_field(CS%novars)%var_name, &
                      caller="register_restart_field_ptr3d")
@@ -179,13 +213,16 @@ subroutine register_restart_field_ptr3d(f_ptr, var_desc, mandatory, CS)
 end subroutine register_restart_field_ptr3d
 
 !> Register a 4-d field for restarts, providing the metadata in a structure
-subroutine register_restart_field_ptr4d(f_ptr, var_desc, mandatory, CS)
+subroutine register_restart_field_ptr4d(f_ptr, var_desc, mandatory, CS, conversion)
   real, dimension(:,:,:,:), &
                       target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   type(vardesc),              intent(in) :: var_desc  !< A structure with metadata about this variable
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
       "register_restart_field: Module must be initialized before it is used.")
@@ -199,6 +236,8 @@ subroutine register_restart_field_ptr4d(f_ptr, var_desc, mandatory, CS)
   CS%restart_field(CS%novars)%vars = var_desc
   CS%restart_field(CS%novars)%mand_var = mandatory
   CS%restart_field(CS%novars)%initialized = .false.
+  CS%restart_field(CS%novars)%conv = 1.0
+  if (present(conversion)) CS%restart_field(CS%novars)%conv = conversion
   call query_vardesc(CS%restart_field(CS%novars)%vars, &
                      name=CS%restart_field(CS%novars)%var_name, &
                      caller="register_restart_field_ptr4d")
@@ -212,13 +251,16 @@ subroutine register_restart_field_ptr4d(f_ptr, var_desc, mandatory, CS)
 end subroutine register_restart_field_ptr4d
 
 !> Register a 2-d field for restarts, providing the metadata in a structure
-subroutine register_restart_field_ptr2d(f_ptr, var_desc, mandatory, CS)
+subroutine register_restart_field_ptr2d(f_ptr, var_desc, mandatory, CS, conversion)
   real, dimension(:,:), &
                       target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   type(vardesc),              intent(in) :: var_desc  !< A structure with metadata about this variable
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
       "register_restart_field: Module must be initialized before it is used.")
@@ -232,6 +274,8 @@ subroutine register_restart_field_ptr2d(f_ptr, var_desc, mandatory, CS)
   CS%restart_field(CS%novars)%vars = var_desc
   CS%restart_field(CS%novars)%mand_var = mandatory
   CS%restart_field(CS%novars)%initialized = .false.
+  CS%restart_field(CS%novars)%conv = 1.0
+  if (present(conversion)) CS%restart_field(CS%novars)%conv = conversion
   call query_vardesc(CS%restart_field(CS%novars)%vars, &
                      name=CS%restart_field(CS%novars)%var_name, &
                      caller="register_restart_field_ptr2d")
@@ -245,12 +289,15 @@ subroutine register_restart_field_ptr2d(f_ptr, var_desc, mandatory, CS)
 end subroutine register_restart_field_ptr2d
 
 !> Register a 1-d field for restarts, providing the metadata in a structure
-subroutine register_restart_field_ptr1d(f_ptr, var_desc, mandatory, CS)
+subroutine register_restart_field_ptr1d(f_ptr, var_desc, mandatory, CS, conversion)
   real, dimension(:), target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   type(vardesc),              intent(in) :: var_desc  !< A structure with metadata about this variable
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
       "register_restart_field: Module must be initialized before it is used.")
@@ -264,6 +311,8 @@ subroutine register_restart_field_ptr1d(f_ptr, var_desc, mandatory, CS)
   CS%restart_field(CS%novars)%vars = var_desc
   CS%restart_field(CS%novars)%mand_var = mandatory
   CS%restart_field(CS%novars)%initialized = .false.
+  CS%restart_field(CS%novars)%conv = 1.0
+  if (present(conversion)) CS%restart_field(CS%novars)%conv = conversion
   call query_vardesc(CS%restart_field(CS%novars)%vars, &
                      name=CS%restart_field(CS%novars)%var_name, &
                      caller="register_restart_field_ptr1d")
@@ -277,12 +326,15 @@ subroutine register_restart_field_ptr1d(f_ptr, var_desc, mandatory, CS)
 end subroutine register_restart_field_ptr1d
 
 !> Register a 0-d field for restarts, providing the metadata in a structure
-subroutine register_restart_field_ptr0d(f_ptr, var_desc, mandatory, CS)
+subroutine register_restart_field_ptr0d(f_ptr, var_desc, mandatory, CS, conversion)
   real,               target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   type(vardesc),              intent(in) :: var_desc  !< A structure with metadata about this variable
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
       "register_restart_field: Module must be initialized before it is used.")
@@ -296,6 +348,8 @@ subroutine register_restart_field_ptr0d(f_ptr, var_desc, mandatory, CS)
   CS%restart_field(CS%novars)%vars = var_desc
   CS%restart_field(CS%novars)%mand_var = mandatory
   CS%restart_field(CS%novars)%initialized = .false.
+  CS%restart_field(CS%novars)%conv = 1.0
+  if (present(conversion)) CS%restart_field(CS%novars)%conv = conversion
   call query_vardesc(CS%restart_field(CS%novars)%vars, &
                      name=CS%restart_field(CS%novars)%var_name, &
                      caller="register_restart_field_ptr0d")
@@ -311,66 +365,78 @@ end subroutine register_restart_field_ptr0d
 
 !> Register a pair of rotationally equivalent 2d restart fields
 subroutine register_restart_pair_ptr2d(a_ptr, b_ptr, a_desc, b_desc, &
-    mandatory, CS)
+                mandatory, CS, conversion)
   real, dimension(:,:), target, intent(in) :: a_ptr   !< First field pointer
+                                                      !! in arbitrary rescaled units [A ~> a]
   real, dimension(:,:), target, intent(in) :: b_ptr   !< Second field pointer
-  type(vardesc), intent(in) :: a_desc   !< First field descriptor
-  type(vardesc), intent(in) :: b_desc   !< Second field descriptor
-  logical, intent(in) :: mandatory      !< If true, abort if field is missing
-  type(MOM_restart_CS), intent(inout) :: CS   !< MOM restart control structure
+                                                      !! in arbitrary rescaled units [A ~> a]
+  type(vardesc),                intent(in) :: a_desc  !< First field descriptor
+  type(vardesc),                intent(in) :: b_desc  !< Second field descriptor
+  logical,                      intent(in) :: mandatory !< If true, abort if field is missing
+  type(MOM_restart_CS),      intent(inout) :: CS      !< MOM restart control structure
+  real,               optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   call lock_check(CS, a_desc)
 
   if (modulo(CS%turns, 2) /= 0) then
-    call register_restart_field(b_ptr, a_desc, mandatory, CS)
-    call register_restart_field(a_ptr, b_desc, mandatory, CS)
+    call register_restart_field(b_ptr, a_desc, mandatory, CS, conversion)
+    call register_restart_field(a_ptr, b_desc, mandatory, CS, conversion)
   else
-    call register_restart_field(a_ptr, a_desc, mandatory, CS)
-    call register_restart_field(b_ptr, b_desc, mandatory, CS)
+    call register_restart_field(a_ptr, a_desc, mandatory, CS, conversion)
+    call register_restart_field(b_ptr, b_desc, mandatory, CS, conversion)
   endif
 end subroutine register_restart_pair_ptr2d
 
 
 !> Register a pair of rotationally equivalent 3d restart fields
 subroutine register_restart_pair_ptr3d(a_ptr, b_ptr, a_desc, b_desc, &
-    mandatory, CS)
-  real, dimension(:,:,:), target, intent(in) :: a_ptr   !< First field pointer
-  real, dimension(:,:,:), target, intent(in) :: b_ptr   !< Second field pointer
-  type(vardesc), intent(in) :: a_desc   !< First field descriptor
-  type(vardesc), intent(in) :: b_desc   !< Second field descriptor
-  logical, intent(in) :: mandatory      !< If true, abort if field is missing
-  type(MOM_restart_CS), intent(inout) :: CS   !< MOM restart control structure
+                mandatory, CS, conversion)
+  real, dimension(:,:,:), target, intent(in) :: a_ptr !< First field pointer
+                                                      !! in arbitrary rescaled units [A ~> a]
+  real, dimension(:,:,:), target, intent(in) :: b_ptr !< Second field pointer
+                                                      !! in arbitrary rescaled units [A ~> a]
+  type(vardesc),                intent(in) :: a_desc  !< First field descriptor
+  type(vardesc),                intent(in) :: b_desc  !< Second field descriptor
+  logical,                      intent(in) :: mandatory !< If true, abort if field is missing
+  type(MOM_restart_CS),      intent(inout) :: CS      !< MOM restart control structure
+  real,               optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   call lock_check(CS, a_desc)
 
   if (modulo(CS%turns, 2) /= 0) then
-    call register_restart_field(b_ptr, a_desc, mandatory, CS)
-    call register_restart_field(a_ptr, b_desc, mandatory, CS)
+    call register_restart_field(b_ptr, a_desc, mandatory, CS, conversion)
+    call register_restart_field(a_ptr, b_desc, mandatory, CS, conversion)
   else
-    call register_restart_field(a_ptr, a_desc, mandatory, CS)
-    call register_restart_field(b_ptr, b_desc, mandatory, CS)
+    call register_restart_field(a_ptr, a_desc, mandatory, CS, conversion)
+    call register_restart_field(b_ptr, b_desc, mandatory, CS, conversion)
   endif
 end subroutine register_restart_pair_ptr3d
 
 
 !> Register a pair of rotationally equivalent 2d restart fields
 subroutine register_restart_pair_ptr4d(a_ptr, b_ptr, a_desc, b_desc, &
-    mandatory, CS)
+                mandatory, CS, conversion)
   real, dimension(:,:,:,:), target, intent(in) :: a_ptr !< First field pointer
+                                                      !! in arbitrary rescaled units [A ~> a]
   real, dimension(:,:,:,:), target, intent(in) :: b_ptr !< Second field pointer
-  type(vardesc), intent(in) :: a_desc   !< First field descriptor
-  type(vardesc), intent(in) :: b_desc   !< Second field descriptor
-  logical, intent(in) :: mandatory      !< If true, abort if field is missing
-  type(MOM_restart_CS), intent(inout) :: CS   !< MOM restart control structure
+                                                      !! in arbitrary rescaled units [A ~> a]
+  type(vardesc),                intent(in) :: a_desc  !< First field descriptor
+  type(vardesc),                intent(in) :: b_desc  !< Second field descriptor
+  logical,                      intent(in) :: mandatory !< If true, abort if field is missing
+  type(MOM_restart_CS),      intent(inout) :: CS      !< MOM restart control structure
+  real,               optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
 
   call lock_check(CS, a_desc)
 
   if (modulo(CS%turns, 2) /= 0) then
-    call register_restart_field(b_ptr, a_desc, mandatory, CS)
-    call register_restart_field(a_ptr, b_desc, mandatory, CS)
+    call register_restart_field(b_ptr, a_desc, mandatory, CS, conversion)
+    call register_restart_field(a_ptr, b_desc, mandatory, CS, conversion)
   else
-    call register_restart_field(a_ptr, a_desc, mandatory, CS)
-    call register_restart_field(b_ptr, b_desc, mandatory, CS)
+    call register_restart_field(a_ptr, a_desc, mandatory, CS, conversion)
+    call register_restart_field(b_ptr, b_desc, mandatory, CS, conversion)
   endif
 end subroutine register_restart_pair_ptr4d
 
@@ -378,16 +444,19 @@ end subroutine register_restart_pair_ptr4d
 ! The following provide alternate interfaces to register restarts.
 
 !> Register a 4-d field for restarts, providing the metadata as individual arguments
-subroutine register_restart_field_4d(f_ptr, name, mandatory, CS, longname, units, &
+subroutine register_restart_field_4d(f_ptr, name, mandatory, CS, longname, units, conversion, &
                                      hor_grid, z_grid, t_grid)
   real, dimension(:,:,:,:), &
                       target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   character(len=*),           intent(in) :: name      !< variable name to be used in the restart file
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
   character(len=*), optional, intent(in) :: longname  !< variable long name
   character(len=*), optional, intent(in) :: units     !< variable units
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
   character(len=*), optional, intent(in) :: hor_grid  !< variable horizontal staggering, 'h' if absent
   character(len=*), optional, intent(in) :: z_grid    !< variable vertical staggering, 'L' if absent
   character(len=*), optional, intent(in) :: t_grid    !< time description: s, p, or 1, 's' if absent
@@ -403,21 +472,24 @@ subroutine register_restart_field_4d(f_ptr, name, mandatory, CS, longname, units
   vd = var_desc(name, units=units, longname=longname, hor_grid=hor_grid, &
                 z_grid=z_grid, t_grid=t_grid)
 
-  call register_restart_field_ptr4d(f_ptr, vd, mandatory, CS)
+  call register_restart_field_ptr4d(f_ptr, vd, mandatory, CS, conversion)
 
 end subroutine register_restart_field_4d
 
 !> Register a 3-d field for restarts, providing the metadata as individual arguments
-subroutine register_restart_field_3d(f_ptr, name, mandatory, CS, longname, units, &
+subroutine register_restart_field_3d(f_ptr, name, mandatory, CS, longname, units, conversion, &
                                      hor_grid, z_grid, t_grid)
   real, dimension(:,:,:), &
                       target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   character(len=*),           intent(in) :: name      !< variable name to be used in the restart file
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
   character(len=*), optional, intent(in) :: longname  !< variable long name
   character(len=*), optional, intent(in) :: units     !< variable units
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
   character(len=*), optional, intent(in) :: hor_grid  !< variable horizontal staggering, 'h' if absent
   character(len=*), optional, intent(in) :: z_grid    !< variable vertical staggering, 'L' if absent
   character(len=*), optional, intent(in) :: t_grid    !< time description: s, p, or 1, 's' if absent
@@ -433,21 +505,24 @@ subroutine register_restart_field_3d(f_ptr, name, mandatory, CS, longname, units
   vd = var_desc(name, units=units, longname=longname, hor_grid=hor_grid, &
                 z_grid=z_grid, t_grid=t_grid)
 
-  call register_restart_field_ptr3d(f_ptr, vd, mandatory, CS)
+  call register_restart_field_ptr3d(f_ptr, vd, mandatory, CS, conversion)
 
 end subroutine register_restart_field_3d
 
 !> Register a 2-d field for restarts, providing the metadata as individual arguments
-subroutine register_restart_field_2d(f_ptr, name, mandatory, CS, longname, units, &
+subroutine register_restart_field_2d(f_ptr, name, mandatory, CS, longname, units, conversion, &
                                      hor_grid, z_grid, t_grid)
   real, dimension(:,:), &
                       target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   character(len=*),           intent(in) :: name      !< variable name to be used in the restart file
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
   character(len=*), optional, intent(in) :: longname  !< variable long name
   character(len=*), optional, intent(in) :: units     !< variable units
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
   character(len=*), optional, intent(in) :: hor_grid  !< variable horizontal staggering, 'h' if absent
   character(len=*), optional, intent(in) :: z_grid    !< variable vertical staggering, '1' if absent
   character(len=*), optional, intent(in) :: t_grid    !< time description: s, p, or 1, 's' if absent
@@ -466,20 +541,23 @@ subroutine register_restart_field_2d(f_ptr, name, mandatory, CS, longname, units
   vd = var_desc(name, units=units, longname=longname, hor_grid=hor_grid, &
                 z_grid=zgrid, t_grid=t_grid)
 
-  call register_restart_field_ptr2d(f_ptr, vd, mandatory, CS)
+  call register_restart_field_ptr2d(f_ptr, vd, mandatory, CS, conversion)
 
 end subroutine register_restart_field_2d
 
 !> Register a 1-d field for restarts, providing the metadata as individual arguments
-subroutine register_restart_field_1d(f_ptr, name, mandatory, CS, longname, units, &
+subroutine register_restart_field_1d(f_ptr, name, mandatory, CS, longname, units, conversion, &
                                      hor_grid, z_grid, t_grid)
   real, dimension(:), target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   character(len=*),           intent(in) :: name      !< variable name to be used in the restart file
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
   character(len=*), optional, intent(in) :: longname  !< variable long name
   character(len=*), optional, intent(in) :: units     !< variable units
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
   character(len=*), optional, intent(in) :: hor_grid  !< variable horizontal staggering, '1' if absent
   character(len=*), optional, intent(in) :: z_grid    !< variable vertical staggering, 'L' if absent
   character(len=*), optional, intent(in) :: t_grid    !< time description: s, p, or 1, 's' if absent
@@ -498,20 +576,23 @@ subroutine register_restart_field_1d(f_ptr, name, mandatory, CS, longname, units
   vd = var_desc(name, units=units, longname=longname, hor_grid=hgrid, &
                 z_grid=z_grid, t_grid=t_grid)
 
-  call register_restart_field_ptr1d(f_ptr, vd, mandatory, CS)
+  call register_restart_field_ptr1d(f_ptr, vd, mandatory, CS, conversion)
 
 end subroutine register_restart_field_1d
 
 !> Register a 0-d field for restarts, providing the metadata as individual arguments
-subroutine register_restart_field_0d(f_ptr, name, mandatory, CS, longname, units, &
+subroutine register_restart_field_0d(f_ptr, name, mandatory, CS, longname, units, conversion, &
                                      t_grid)
   real,               target, intent(in) :: f_ptr     !< A pointer to the field to be read or written
+                                                      !! in arbitrary rescaled units [A ~> a]
   character(len=*),           intent(in) :: name      !< variable name to be used in the restart file
   logical,                    intent(in) :: mandatory !< If true, the run will abort if this field is not
                                                       !! successfully read from the restart file.
   type(MOM_restart_CS),       intent(inout) :: CS     !< MOM restart control struct
   character(len=*), optional, intent(in) :: longname  !< variable long name
   character(len=*), optional, intent(in) :: units     !< variable units
+  real,             optional, intent(in) :: conversion !< A factor to multiply a restart field by
+                                                      !! before it is written [a A-1 ~> 1], 1 by default.
   character(len=*), optional, intent(in) :: t_grid    !< time description: s, p, or 1, 's' if absent
 
   type(vardesc) :: vd
@@ -525,13 +606,13 @@ subroutine register_restart_field_0d(f_ptr, name, mandatory, CS, longname, units
   vd = var_desc(name, units=units, longname=longname, hor_grid='1', &
                 z_grid='1', t_grid=t_grid)
 
-  call register_restart_field_ptr0d(f_ptr, vd, mandatory, CS)
+  call register_restart_field_ptr0d(f_ptr, vd, mandatory, CS, conversion)
 
 end subroutine register_restart_field_0d
 
 
 !> query_initialized_name determines whether a named field has been successfully
-!! read from a restart file yet.
+!! read from a restart file or has otherwise been recored as being initialzed.
 function query_initialized_name(name, CS) result(query_initialized)
   character(len=*),     intent(in) :: name  !< The name of the field that is being queried
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
@@ -552,8 +633,6 @@ function query_initialized_name(name, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
   if ((n==CS%novars+1) .and. (is_root_pe())) &
     call MOM_error(NOTE,"MOM_restart: Unknown restart variable "//name// &
                         " queried for initialization.")
@@ -566,7 +645,7 @@ end function query_initialized_name
 
 !> Indicate whether the field pointed to by f_ptr has been initialized from a restart file.
 function query_initialized_0d(f_ptr, CS) result(query_initialized)
-  real,         target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+  real,         target, intent(in) :: f_ptr !< A pointer to the field that is being queried [arbitrary]
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
 
@@ -585,14 +664,12 @@ function query_initialized_0d(f_ptr, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
 
 end function query_initialized_0d
 
 !> Indicate whether the field pointed to by f_ptr has been initialized from a restart file.
 function query_initialized_1d(f_ptr, CS) result(query_initialized)
-  real, dimension(:), target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+  real, dimension(:), target, intent(in) :: f_ptr !< A pointer to the field that is being queried [arbitrary]
   type(MOM_restart_CS),       intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
 
@@ -611,15 +688,13 @@ function query_initialized_1d(f_ptr, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
 
 end function query_initialized_1d
 
 !> Indicate whether the field pointed to by f_ptr has been initialized from a restart file.
 function query_initialized_2d(f_ptr, CS) result(query_initialized)
   real, dimension(:,:), &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< A pointer to the field that is being queried [arbitrary]
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
 
@@ -638,15 +713,13 @@ function query_initialized_2d(f_ptr, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
 
 end function query_initialized_2d
 
 !> Indicate whether the field pointed to by f_ptr has been initialized from a restart file.
 function query_initialized_3d(f_ptr, CS) result(query_initialized)
   real, dimension(:,:,:), &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< A pointer to the field that is being queried [arbitrary]
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
 
@@ -665,15 +738,13 @@ function query_initialized_3d(f_ptr, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
 
 end function query_initialized_3d
 
 !> Indicate whether the field pointed to by f_ptr has been initialized from a restart file.
 function query_initialized_4d(f_ptr, CS) result(query_initialized)
   real, dimension(:,:,:,:),  &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< A pointer to the field that is being queried [arbitrary]
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
 
@@ -692,15 +763,13 @@ function query_initialized_4d(f_ptr, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
 
 end function query_initialized_4d
 
-!> Indicate whether the field pointed to by f_ptr or with the specified variable
+!> Indicate whether the field stored in f_ptr or with the specified variable
 !! name has been initialized from a restart file.
 function query_initialized_0d_name(f_ptr, name, CS) result(query_initialized)
-  real,         target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+  real,         target, intent(in) :: f_ptr !< The field that is being queried [arbitrary]
   character(len=*),     intent(in) :: name  !< The name of the field that is being queried
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
@@ -720,8 +789,6 @@ function query_initialized_0d_name(f_ptr, name, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
   if (n==CS%novars+1) then
     if (is_root_pe()) &
       call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
@@ -731,11 +798,11 @@ function query_initialized_0d_name(f_ptr, name, CS) result(query_initialized)
 
 end function query_initialized_0d_name
 
-!> Indicate whether the field pointed to by f_ptr or with the specified variable
+!> Indicate whether the field stored in f_ptr or with the specified variable
 !! name has been initialized from a restart file.
 function query_initialized_1d_name(f_ptr, name, CS) result(query_initialized)
   real, dimension(:),  &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< The field that is being queried [arbitrary]
   character(len=*),     intent(in) :: name  !< The name of the field that is being queried
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
@@ -755,8 +822,6 @@ function query_initialized_1d_name(f_ptr, name, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
   if (n==CS%novars+1) then
     if (is_root_pe()) &
       call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
@@ -766,11 +831,11 @@ function query_initialized_1d_name(f_ptr, name, CS) result(query_initialized)
 
 end function query_initialized_1d_name
 
-!> Indicate whether the field pointed to by f_ptr or with the specified variable
+!> Indicate whether the field stored in f_ptr or with the specified variable
 !! name has been initialized from a restart file.
 function query_initialized_2d_name(f_ptr, name, CS) result(query_initialized)
   real, dimension(:,:),  &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< The field that is being queried [arbitrary]
   character(len=*),     intent(in) :: name  !< The name of the field that is being queried
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
@@ -790,8 +855,6 @@ function query_initialized_2d_name(f_ptr, name, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
   if (n==CS%novars+1) then
     if (is_root_pe()) &
       call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
@@ -801,11 +864,11 @@ function query_initialized_2d_name(f_ptr, name, CS) result(query_initialized)
 
 end function query_initialized_2d_name
 
-!> Indicate whether the field pointed to by f_ptr or with the specified variable
+!> Indicate whether the field stored in f_ptr or with the specified variable
 !! name has been initialized from a restart file.
 function query_initialized_3d_name(f_ptr, name, CS) result(query_initialized)
   real, dimension(:,:,:),  &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< The field that is being queried [arbitrary]
   character(len=*),     intent(in) :: name  !< The name of the field that is being queried
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
@@ -825,8 +888,6 @@ function query_initialized_3d_name(f_ptr, name, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
   if (n==CS%novars+1) then
     if (is_root_pe()) &
       call MOM_error(NOTE, "MOM_restart: Unable to find "//name//" queried by pointer, "//&
@@ -836,11 +897,11 @@ function query_initialized_3d_name(f_ptr, name, CS) result(query_initialized)
 
 end function query_initialized_3d_name
 
-!> Indicate whether the field pointed to by f_ptr or with the specified variable
+!> Indicate whether the field stored in f_ptr or with the specified variable
 !! name has been initialized from a restart file.
 function query_initialized_4d_name(f_ptr, name, CS) result(query_initialized)
   real, dimension(:,:,:,:),  &
-                target, intent(in) :: f_ptr !< A pointer to the field that is being queried
+                target, intent(in) :: f_ptr !< The field that is being queried [arbitrary]
   character(len=*),     intent(in) :: name  !< The name of the field that is being queried
   type(MOM_restart_CS), intent(in) :: CS    !< MOM restart control struct
   logical :: query_initialized
@@ -860,8 +921,6 @@ function query_initialized_4d_name(f_ptr, name, CS) result(query_initialized)
       n = m ; exit
     endif
   enddo
-  ! Assume that you are going to initialize it now, so set flag to initialized if queried again.
-  if (n<=CS%novars) CS%restart_field(n)%initialized = .true.
   if (n==CS%novars+1) then
     if (is_root_pe()) &
       call MOM_error(NOTE, "MOM_restart: Unable to find "//name//" queried by pointer, "//&
@@ -870,6 +929,351 @@ function query_initialized_4d_name(f_ptr, name, CS) result(query_initialized)
   endif
 
 end function query_initialized_4d_name
+
+!> set_initialized_name records that a named field has been initialized.
+subroutine set_initialized_name(name, CS)
+  character(len=*),     intent(in)    :: name  !< The name of the field that is being set
+  type(MOM_restart_CS), intent(inout) :: CS    !< MOM restart control struct
+
+  integer :: m
+
+  if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
+      "set_initialized: Module must be initialized before it is used.")
+
+  do m=1,CS%novars ; if (trim(name) == trim(CS%restart_field(m)%var_name)) then
+    CS%restart_field(m)%initialized = .true. ; exit
+  endif ; enddo
+
+  if ((m==CS%novars+1) .and. (is_root_pe())) &
+    call MOM_error(NOTE,"MOM_restart: Unknown restart variable "//name// &
+                        " used in set_initialized call.")
+
+end subroutine set_initialized_name
+
+!> Record that the array in f_ptr with the given name has been initialized.
+subroutine set_initialized_0d_name(f_ptr, name, CS)
+  real,         target, intent(in)    :: f_ptr !< The variable that has been initialized [arbitrary]
+  character(len=*),     intent(in)    :: name  !< The name of the field that has been initialized
+  type(MOM_restart_CS), intent(inout) :: CS    !< MOM restart control struct
+
+  integer :: m
+
+  if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
+      "set_initialized: Module must be initialized before it is used.")
+
+  do m=1,CS%novars ; if (associated(CS%var_ptr0d(m)%p,f_ptr)) then
+    CS%restart_field(m)%initialized = .true. ; exit
+  endif ; enddo
+
+  if (m==CS%novars+1) then
+    if (is_root_pe()) &
+      call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
+        "probably because of the suspect comparison of pointers by ASSOCIATED.")
+    call set_initialized_name(name, CS)
+  endif
+
+end subroutine set_initialized_0d_name
+
+!> Record that the array in f_ptr with the given name has been initialized.
+subroutine set_initialized_1d_name(f_ptr, name, CS)
+  real, dimension(:),  &
+                target, intent(in)    :: f_ptr !< The array that has been initialized [arbitrary]
+  character(len=*),     intent(in)    :: name  !< The name of the field that has been initialized
+  type(MOM_restart_CS), intent(inout) :: CS    !< MOM restart control struct
+
+  integer :: m
+
+  if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
+      "set_initialized: Module must be initialized before it is used.")
+
+  do m=1,CS%novars ; if (associated(CS%var_ptr1d(m)%p,f_ptr)) then
+    CS%restart_field(m)%initialized = .true. ; exit
+  endif ; enddo
+
+  if (m==CS%novars+1) then
+    if (is_root_pe()) &
+      call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
+        "probably because of the suspect comparison of pointers by ASSOCIATED.")
+    call set_initialized_name(name, CS)
+  endif
+
+end subroutine set_initialized_1d_name
+
+!> Record that the array in f_ptr with the given name has been initialized.
+subroutine set_initialized_2d_name(f_ptr, name, CS)
+  real, dimension(:,:),  &
+                target, intent(in)    :: f_ptr !< The array that has been initialized [arbitrary]
+  character(len=*),     intent(in)    :: name  !< The name of the field that has been initialized
+  type(MOM_restart_CS), intent(inout) :: CS    !< MOM restart control struct
+
+  integer :: m
+
+  if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
+      "set_initialized: Module must be initialized before it is used.")
+
+  do m=1,CS%novars ; if (associated(CS%var_ptr2d(m)%p,f_ptr)) then
+    CS%restart_field(m)%initialized = .true. ; exit
+  endif ; enddo
+
+  if (m==CS%novars+1) then
+    if (is_root_pe()) &
+      call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
+        "probably because of the suspect comparison of pointers by ASSOCIATED.")
+    call set_initialized_name(name, CS)
+  endif
+
+end subroutine set_initialized_2d_name
+
+!> Record that the array in f_ptr with the given name has been initialized.
+subroutine set_initialized_3d_name(f_ptr, name, CS)
+  real, dimension(:,:,:),  &
+                target, intent(in)    :: f_ptr !< The array that has been initialized [arbitrary]
+  character(len=*),     intent(in)    :: name  !< The name of the field that has been initialized
+  type(MOM_restart_CS), intent(inout) :: CS    !< MOM restart control struct
+
+  integer :: m
+
+  if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
+      "set_initialized: Module must be initialized before it is used.")
+
+  do m=1,CS%novars ; if (associated(CS%var_ptr3d(m)%p,f_ptr)) then
+    CS%restart_field(m)%initialized = .true. ; exit
+  endif ; enddo
+
+  if (m==CS%novars+1) then
+    if (is_root_pe()) &
+      call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
+        "probably because of the suspect comparison of pointers by ASSOCIATED.")
+    call set_initialized_name(name, CS)
+  endif
+
+end subroutine set_initialized_3d_name
+
+!> Record that the array in f_ptr with the given name has been initialized.
+subroutine set_initialized_4d_name(f_ptr, name, CS)
+  real, dimension(:,:,:,:),  &
+                target, intent(in)    :: f_ptr !< The array that has been initialized [arbitrary]
+  character(len=*),     intent(in)    :: name  !< The name of the field that has been initialized
+  type(MOM_restart_CS), intent(inout) :: CS    !< MOM restart control struct
+
+  integer :: m
+
+  if (.not.CS%initialized) call MOM_error(FATAL, "MOM_restart " // &
+      "set_initialized: Module must be initialized before it is used.")
+
+  do m=1,CS%novars ; if (associated(CS%var_ptr4d(m)%p,f_ptr)) then
+    CS%restart_field(m)%initialized = .true. ; exit
+  endif ; enddo
+
+  if (m==CS%novars+1) then
+    if (is_root_pe()) &
+      call MOM_error(NOTE,"MOM_restart: Unable to find "//name//" queried by pointer, "//&
+        "probably because of the suspect comparison of pointers by ASSOCIATED.")
+    call set_initialized_name(name, CS)
+  endif
+
+end subroutine set_initialized_4d_name
+
+
+!====================== only_read_from_restarts variants =======================
+
+!> Try to read a named 4-d field from the restart files
+subroutine only_read_restart_field_4d(varname, f_ptr, G, CS, position, filename, directory, success, scale)
+  character(len=*),                intent(in)    :: varname   !< The variable name to be used in the restart file
+  real, dimension(:,:,:,:),        intent(inout) :: f_ptr     !< The array for the field to be read
+                                                              !! in arbitrary rescaled units [A ~> a]
+  type(ocean_grid_type),           intent(in)    :: G         !< The ocean's grid structure
+  type(MOM_restart_CS),            intent(in)    :: CS        !< MOM restart control struct
+  integer,               optional, intent(in)    :: position  !< A coded integer indicating the horizontal
+                                                              !! position of this variable
+  character(len=*),      optional, intent(in)    :: filename  !< The list of restart file names or a single
+                                                              !! character 'r' to read automatically named files
+  character(len=*),      optional, intent(in)    :: directory !< The directory in which to seek restart files.
+  logical,               optional, intent(out)   :: success   !< True if the field was read successfully
+  real,                  optional, intent(in)    :: scale     !< A factor by which the field will be scaled
+                                                              !! [A a-1 ~> 1] to convert from the units in
+                                                              !! the file to the internal units of this field
+
+  ! Local variables
+  character(len=:), allocatable :: file_path ! The full path to the file with the variable
+  logical :: found     ! True if the variable was found.
+  logical :: is_global ! True if the variable is in a global file.
+
+  found = find_var_in_restart_files(varname, G, CS, file_path, filename, directory, is_global)
+
+  if (found) then
+    call MOM_read_data(file_path, varname, f_ptr, G%domain, timelevel=1, position=position, &
+                       scale=scale, global_file=is_global)
+  endif
+  if (present(success)) success = found
+
+end subroutine only_read_restart_field_4d
+
+!> Try to read a named 3-d field from the restart files
+subroutine only_read_restart_field_3d(varname, f_ptr, G, CS, position, filename, directory, success, scale)
+  character(len=*),                intent(in)    :: varname   !< The variable name to be used in the restart file
+  real, dimension(:,:,:),          intent(inout) :: f_ptr     !< The array for the field to be read
+                                                              !! in arbitrary rescaled units [A ~> a]
+  type(ocean_grid_type),           intent(in)    :: G         !< The ocean's grid structure
+  type(MOM_restart_CS),            intent(in)    :: CS        !< MOM restart control struct
+  integer,               optional, intent(in)    :: position  !< A coded integer indicating the horizontal
+                                                              !! position of this variable
+  character(len=*),      optional, intent(in)    :: filename  !< The list of restart file names or a single
+                                                              !! character 'r' to read automatically named files
+  character(len=*),      optional, intent(in)    :: directory !< The directory in which to seek restart files.
+  logical,               optional, intent(out)   :: success   !< True if the field was read successfully
+  real,                  optional, intent(in)    :: scale     !< A factor by which the field will be scaled
+                                                              !! [A a-1 ~> 1] to convert from the units in
+                                                              !! the file to the internal units of this field
+
+  ! Local variables
+  character(len=:), allocatable :: file_path ! The full path to the file with the variable
+  logical :: found     ! True if the variable was found.
+  logical :: is_global ! True if the variable is in a global file.
+
+  found = find_var_in_restart_files(varname, G, CS, file_path, filename, directory, is_global)
+
+  if (found) then
+    call MOM_read_data(file_path, varname, f_ptr, G%domain, timelevel=1, position=position, &
+                       scale=scale, global_file=is_global)
+  endif
+  if (present(success)) success = found
+
+end subroutine only_read_restart_field_3d
+
+!> Try to read a named 2-d field from the restart files
+subroutine only_read_restart_field_2d(varname, f_ptr, G, CS, position, filename, directory, success, scale)
+  character(len=*),                intent(in)    :: varname   !< The variable name to be used in the restart file
+  real, dimension(:,:),            intent(inout) :: f_ptr     !< The array for the field to be read
+                                                              !! in arbitrary rescaled units [A ~> a]
+  type(ocean_grid_type),           intent(in)    :: G         !< The ocean's grid structure
+  type(MOM_restart_CS),            intent(in)    :: CS        !< MOM restart control struct
+  integer,               optional, intent(in)    :: position  !< A coded integer indicating the horizontal
+                                                              !! position of this variable
+  character(len=*),      optional, intent(in)    :: filename  !< The list of restart file names or a single
+                                                              !! character 'r' to read automatically named files
+  character(len=*),      optional, intent(in)    :: directory !< The directory in which to seek restart files.
+  logical,               optional, intent(out)   :: success   !< True if the field was read successfully
+  real,                  optional, intent(in)    :: scale     !< A factor by which the field will be scaled
+                                                              !! [A a-1 ~> 1] to convert from the units in
+                                                              !! the file to the internal units of this field
+
+  ! Local variables
+  character(len=:), allocatable :: file_path ! The full path to the file with the variable
+  logical :: found     ! True if the variable was found.
+  logical :: is_global ! True if the variable is in a global file.
+
+  found = find_var_in_restart_files(varname, G, CS, file_path, filename, directory, is_global)
+
+  if (found) then
+    call MOM_read_data(file_path, varname, f_ptr, G%domain, timelevel=1, position=position, &
+                       scale=scale, global_file=is_global)
+  endif
+  if (present(success)) success = found
+
+end subroutine only_read_restart_field_2d
+
+
+!> Try to read a named 3-d field from the restart files
+subroutine only_read_restart_pair_3d(a_ptr, b_ptr, a_name, b_name, G, CS, &
+                                     stagger, filename, directory, success, scale)
+  real, dimension(:,:,:),          intent(inout) :: a_ptr     !< The array for the first field to be read
+                                                              !! in arbitrary rescaled units [A ~> a]
+  real, dimension(:,:,:),          intent(inout) :: b_ptr     !< The array for the second field to be read
+                                                              !! in arbitrary rescaled units [A ~> a]
+  character(len=*),                intent(in)    :: a_name    !< The first variable name to be used in the restart file
+  character(len=*),                intent(in)    :: b_name    !< The second variable name to be used in the restart file
+  type(ocean_grid_type),           intent(in)    :: G         !< The ocean's grid structure
+  type(MOM_restart_CS),            intent(in)    :: CS        !< MOM restart control struct
+  integer,               optional, intent(in)    :: stagger   !< A coded integer indicating the horizontal
+                                                              !! position of this pair of variables
+  character(len=*),      optional, intent(in)    :: filename  !< The list of restart file names or a single
+                                                              !! character 'r' to read automatically named files
+  character(len=*),      optional, intent(in)    :: directory !< The directory in which to seek restart files.
+  logical,               optional, intent(out)   :: success   !< True if the field was read successfully
+  real,                  optional, intent(in)    :: scale     !< A factor by which the fields will be scaled
+                                                              !! [A a-1 ~> 1] to convert from the units in
+                                                              !! the file to the internal units of this field
+
+  ! Local variables
+  character(len=:), allocatable :: file_path_a ! The full path to the file with the first variable
+  character(len=:), allocatable :: file_path_b ! The full path to the file with the second variable
+  integer :: a_pos, b_pos       ! A coded position for the two variables.
+  logical :: a_found, b_found   ! True if the variables were found.
+  logical :: global_a, global_b ! True if the variables are in global files.
+
+  a_found = find_var_in_restart_files(a_name, G, CS, file_path_a, filename, directory, global_a)
+  b_found = find_var_in_restart_files(b_name, G, CS, file_path_b, filename, directory, global_b)
+
+  a_pos = EAST_FACE ; b_pos = NORTH_FACE
+  if (present(stagger)) then ; select case (stagger)
+    case (AGRID)    ; a_pos = CENTER ; b_pos = CENTER
+    case (BGRID_NE) ; a_pos = CORNER ; b_pos = CORNER
+    case (CGRID_NE) ; a_pos = EAST_FACE ; b_pos = NORTH_FACE
+    case default    ; a_pos = EAST_FACE ; b_pos = NORTH_FACE
+  end select ; endif
+
+  if (a_found .and. b_found) then
+    call MOM_read_data(file_path_a, a_name, a_ptr, G%domain, timelevel=1, position=a_pos, &
+                       scale=scale, global_file=global_b, file_may_be_4d=.true.)
+    call MOM_read_data(file_path_b, b_name, b_ptr, G%domain, timelevel=1, position=b_pos, &
+                       scale=scale, global_file=global_b, file_may_be_4d=.true.)
+  endif
+  if (present(success)) success = (a_found .and. b_found)
+
+end subroutine only_read_restart_pair_3d
+
+!> Return an indicationof whether the named variable is the restart files, and provie the full path
+!! to the restart file in which a variable is found.
+function find_var_in_restart_files(varname, G, CS, file_path, filename, directory, is_global) result (found)
+  character(len=*),                intent(in)    :: varname   !< The variable name to be used in the restart file
+  type(ocean_grid_type),           intent(in)    :: G         !< The ocean's grid structure
+  type(MOM_restart_CS),            intent(in)    :: CS        !< MOM restart control struct
+  character(len=:),   allocatable, intent(out)   :: file_path !< The full path to the file in which the
+                                                              !! variable is found
+  character(len=*),      optional, intent(in)    :: filename  !< The list of restart file names or a single
+                                                              !! character 'r' to read automatically named files
+  character(len=*),      optional, intent(in)    :: directory !< The directory in which to seek restart files.
+  logical,               optional, intent(out)   :: is_global !< True if the file is global.
+  logical :: found !< True if the named variable was found in the restart files.
+
+  ! Local variables
+  character(len=240), allocatable, dimension(:) :: file_paths ! The possible file names.
+  character(len=:), allocatable :: dir ! The directory to read from.
+  character(len=:), allocatable :: fname ! The list of file names.
+  logical, allocatable, dimension(:) :: global_file  ! True if the file is global
+  integer :: n, num_files
+
+  dir = "./INPUT/" ; if (present(directory)) dir = trim(directory)
+
+  ! Set the default return values.
+  found = .false.
+  file_path = ""
+  if (present(is_global)) is_global = .false.
+
+  fname = 'r'
+  if (present(filename)) then
+    if (.not.((LEN_TRIM(filename) == 1) .and. (filename(1:1) == 'F'))) fname = filename
+  endif
+
+  num_files = get_num_restart_files(fname, dir, G, CS)
+  if (num_files == 0) return
+  allocate(file_paths(num_files), global_file(num_files))
+  num_files = open_restart_units(fname, dir, G, CS, file_paths=file_paths, global_files=global_file)
+
+  do n=1,num_files ; if (field_exists(file_paths(n), varname, MOM_Domain=G%domain)) then
+    found = .true.
+    file_path = file_paths(n)
+    if (present(is_global)) is_global = global_file(n)
+    exit
+  endif ; enddo
+
+  deallocate(file_paths, global_file)
+
+end function find_var_in_restart_files
+
+!====================== end of the only_read_from_restarts variants =======================
+
 
 !> save_restart saves all registered variables to restart files.
 subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_rest_files, write_IC)
@@ -890,7 +1294,7 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_
   ! Local variables
   type(vardesc) :: vars(CS%max_fields)  ! Descriptions of the fields that
                                         ! are to be read from the restart file.
-  type(fieldtype) :: fields(CS%max_fields) ! Opaque types containing metadata describing
+  type(MOM_field) :: fields(CS%max_fields) ! Opaque types containing metadata describing
                                         ! each variable that will be written.
   character(len=512) :: restartpath     ! The restart file path (dir/file).
   character(len=256) :: restartname     ! The restart file name (no dir).
@@ -904,13 +1308,13 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_
                                         ! versions of NetCDF, the value was 2147483647_8.
   integer :: start_var, next_var        ! The starting variables of the
                                         ! current and next files.
-  type(file_type) :: IO_handle          ! The I/O handle of the open fileset
+  type(MOM_infra_file) :: IO_handle     ! The I/O handle of the open fileset
   integer :: m, nz
   integer :: num_files                  ! The number of restart files that will be used.
   integer :: seconds, days, year, month, hour, minute
   character(len=8) :: hor_grid, z_grid, t_grid ! Variable grid info.
-  character(len=64) :: var_name         ! A variable's name.
-  real :: restart_time
+  real :: conv                          ! Shorthand for the conversion factor [a A-1 ~> 1]
+  real :: restart_time                  ! The model time at whic the restart file is being written [days]
   character(len=32) :: filename_appendix = '' ! Appendix to filename for ensemble runs
   integer :: length                     ! The length of a text string.
   integer(kind=8) :: check_val(CS%max_fields,1)
@@ -1025,45 +1429,48 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_
       call get_checksum_loop_ranges(G, pos, isL, ieL, jsL, jeL)
     endif
     do m=start_var,next_var-1
+      conv = CS%restart_field(m)%conv
       if (associated(CS%var_ptr3d(m)%p)) then
-        check_val(m-start_var+1,1) = chksum(CS%var_ptr3d(m)%p(isL:ieL,jsL:jeL,:), turns=-turns)
+        check_val(m-start_var+1,1) = chksum(conv*CS%var_ptr3d(m)%p(isL:ieL,jsL:jeL,:), turns=-turns)
       elseif (associated(CS%var_ptr2d(m)%p)) then
-        check_val(m-start_var+1,1) = chksum(CS%var_ptr2d(m)%p(isL:ieL,jsL:jeL), turns=-turns)
+        check_val(m-start_var+1,1) = chksum(conv*CS%var_ptr2d(m)%p(isL:ieL,jsL:jeL), turns=-turns)
       elseif (associated(CS%var_ptr4d(m)%p)) then
-        check_val(m-start_var+1,1) = chksum(CS%var_ptr4d(m)%p(isL:ieL,jsL:jeL,:,:), turns=-turns)
+        check_val(m-start_var+1,1) = chksum(conv*CS%var_ptr4d(m)%p(isL:ieL,jsL:jeL,:,:), turns=-turns)
       elseif (associated(CS%var_ptr1d(m)%p)) then
-        check_val(m-start_var+1,1) = chksum(CS%var_ptr1d(m)%p)
+        check_val(m-start_var+1,1) = chksum(conv*CS%var_ptr1d(m)%p(:))
       elseif (associated(CS%var_ptr0d(m)%p)) then
-        check_val(m-start_var+1,1) = chksum(CS%var_ptr0d(m)%p, pelist=(/PE_here()/))
+        check_val(m-start_var+1,1) = chksum(conv*CS%var_ptr0d(m)%p, pelist=(/PE_here()/))
       endif
     enddo
 
     if (CS%parallel_restartfiles) then
-      call create_file(IO_handle, trim(restartpath), vars, (next_var-start_var), &
-                       fields, MULTIPLE, G=G, GV=GV, checksums=check_val)
+      call create_MOM_file(IO_handle, trim(restartpath), vars, next_var-start_var, &
+          fields, MULTIPLE, G=G, GV=GV, checksums=check_val)
     else
-      call create_file(IO_handle, trim(restartpath), vars, (next_var-start_var), &
-                       fields, SINGLE_FILE, G=G, GV=GV, checksums=check_val)
+      call create_MOM_file(IO_handle, trim(restartpath), vars, next_var-start_var, &
+          fields, SINGLE_FILE, G=G, GV=GV, checksums=check_val)
     endif
 
     do m=start_var,next_var-1
       if (associated(CS%var_ptr3d(m)%p)) then
-        call MOM_write_field(IO_handle, fields(m-start_var+1), G%Domain, &
-                         CS%var_ptr3d(m)%p, restart_time, turns=-turns)
+        call MOM_write_field(IO_handle, fields(m-start_var+1), G%Domain, CS%var_ptr3d(m)%p, &
+                             restart_time, scale=CS%restart_field(m)%conv, turns=-turns)
       elseif (associated(CS%var_ptr2d(m)%p)) then
-        call MOM_write_field(IO_handle, fields(m-start_var+1), G%Domain, &
-                         CS%var_ptr2d(m)%p, restart_time, turns=-turns)
+        call MOM_write_field(IO_handle, fields(m-start_var+1), G%Domain, CS%var_ptr2d(m)%p, &
+                             restart_time, scale=CS%restart_field(m)%conv, turns=-turns)
       elseif (associated(CS%var_ptr4d(m)%p)) then
-        call MOM_write_field(IO_handle, fields(m-start_var+1), G%Domain, &
-                         CS%var_ptr4d(m)%p, restart_time, turns=-turns)
+        call MOM_write_field(IO_handle, fields(m-start_var+1), G%Domain, CS%var_ptr4d(m)%p, &
+                             restart_time, scale=CS%restart_field(m)%conv, turns=-turns)
       elseif (associated(CS%var_ptr1d(m)%p)) then
-        call MOM_write_field(IO_handle, fields(m-start_var+1), CS%var_ptr1d(m)%p, restart_time)
+        call MOM_write_field(IO_handle, fields(m-start_var+1), CS%var_ptr1d(m)%p, &
+                             restart_time, scale=CS%restart_field(m)%conv)
       elseif (associated(CS%var_ptr0d(m)%p)) then
-        call MOM_write_field(IO_handle, fields(m-start_var+1), CS%var_ptr0d(m)%p, restart_time)
+        call MOM_write_field(IO_handle, fields(m-start_var+1), CS%var_ptr0d(m)%p, &
+                             restart_time, scale=CS%restart_field(m)%conv)
       endif
     enddo
 
-    call close_file(IO_handle)
+    call IO_handle%close()
 
     num_files = num_files+1
 
@@ -1085,27 +1492,25 @@ subroutine restore_state(filename, directory, day, G, CS)
   type(MOM_restart_CS),  intent(inout) :: CS      !< MOM restart control struct
 
   ! Local variables
-  character(len=200) :: filepath  ! The path (dir/file) to the file being opened.
-  character(len=80) :: fname      ! The name of the current file.
-  character(len=8)  :: suffix     ! A suffix (like "_2") that is added to any
-                                  ! additional restart files.
+  real :: scale  ! A scaling factor for reading a field [A a-1 ~> 1] to convert
+                 ! from the units in the file to the internal units of this field
+  real :: conv   ! The output conversion factor for writing a field [a A-1 ~> 1]
   character(len=512) :: mesg      ! A message for warnings.
   character(len=80) :: varname    ! A variable's name.
   integer :: num_file        ! The number of files (restart files and others
                              ! explicitly in filename) that are open.
   integer :: i, n, m, missing_fields
-  integer :: isL, ieL, jsL, jeL, is0, js0
-  integer :: sizes(7)
+  integer :: isL, ieL, jsL, jeL
   integer :: nvar, ntime, pos
 
-  type(file_type) :: IO_handles(CS%max_fields) ! The I/O units of all open files.
+  type(MOM_infra_file) :: IO_handles(CS%max_fields) ! The I/O units of all open files.
   character(len=200) :: unit_path(CS%max_fields) ! The file names.
   logical :: unit_is_global(CS%max_fields) ! True if the file is global.
 
   character(len=8)   :: hor_grid ! Variable grid info.
-  real    :: t1, t2 ! Two times.
-  real, allocatable :: time_vals(:)
-  type(fieldtype), allocatable :: fields(:)
+  real    :: t1, t2 ! Two times from the start of different files [days].
+  real, allocatable :: time_vals(:)  ! Times from a file extracted with getl_file_times [days]
+  type(MOM_field), allocatable :: fields(:)
   logical            :: is_there_a_checksum ! Is there a valid checksum that should be checked.
   integer(kind=8)    :: checksum_file  ! The checksum value recorded in the input file.
   integer(kind=8)    :: checksum_data  ! The checksum value for the data that was read in.
@@ -1132,7 +1537,7 @@ subroutine restore_state(filename, directory, day, G, CS)
 
   ! Get the time from the first file in the list that has one.
   do n=1,num_file
-    call get_file_times(IO_handles(n), time_vals, ntime)
+    call IO_handles(n)%get_file_times(time_vals, ntime)
     if (ntime < 1) cycle
 
     t1 = time_vals(1)
@@ -1148,7 +1553,7 @@ subroutine restore_state(filename, directory, day, G, CS)
   ! Check the remaining files for different times and issue a warning
   ! if they differ from the first time.
     do m = n+1,num_file
-      call get_file_times(IO_handles(n), time_vals, ntime)
+      call IO_handles(n)%get_file_times(time_vals, ntime)
       if (ntime < 1) cycle
 
       t2 = time_vals(1)
@@ -1164,13 +1569,13 @@ subroutine restore_state(filename, directory, day, G, CS)
 
   ! Read each variable from the first file in which it is found.
   do n=1,num_file
-    call get_file_info(IO_handles(n), nvar=nvar)
+    call IO_handles(n)%get_file_info(nvar=nvar)
 
     allocate(fields(nvar))
-    call get_file_fields(IO_handles(n), fields(1:nvar))
+    call IO_handles(n)%get_file_fields(fields(1:nvar))
 
     do m=1, nvar
-      call get_field_atts(fields(m), name=varname)
+      call IO_handles(n)%get_field_atts(fields(m), name=varname)
       do i=1,CS%num_obsolete_vars
         if (adjustl(lowercase(trim(varname))) == adjustl(lowercase(trim(CS%restart_obsolete(i)%field_name)))) then
             call MOM_error(FATAL, "MOM_restart restore_state: Attempting to use obsolete restart field "//&
@@ -1198,14 +1603,16 @@ subroutine restore_state(filename, directory, day, G, CS)
         case ('1') ; pos = 0
         case default ; pos = 0
       end select
+      conv = CS%restart_field(m)%conv
+      if (conv == 0.0) then ; scale = 1.0 ; else ; scale = 1.0 / conv ; endif
 
       call get_checksum_loop_ranges(G, pos, isL, ieL, jsL, jeL)
       do i=1, nvar
-        call get_field_atts(fields(i), name=varname)
+        call IO_handles(n)%get_field_atts(fields(i), name=varname)
         if (lowercase(trim(varname)) == lowercase(trim(CS%restart_field(m)%var_name))) then
           checksum_data = -1
           if (CS%checksum_required) then
-            call read_field_chksum(fields(i), checksum_file, is_there_a_checksum)
+            call IO_handles(n)%read_field_chksum(fields(i), checksum_file, is_there_a_checksum)
           else
             checksum_file = -1
             is_there_a_checksum = .false. ! Do not need to do data checksumming.
@@ -1214,42 +1621,42 @@ subroutine restore_state(filename, directory, day, G, CS)
           if (associated(CS%var_ptr1d(m)%p))  then
             ! Read a 1d array, which should be invariant to domain decomposition.
             call MOM_read_data(unit_path(n), varname, CS%var_ptr1d(m)%p, &
-                               timelevel=1, MOM_Domain=G%Domain)
-            if (is_there_a_checksum) checksum_data = chksum(CS%var_ptr1d(m)%p)
+                               timelevel=1, scale=scale, MOM_Domain=G%Domain)
+            if (is_there_a_checksum) checksum_data = chksum(conv*CS%var_ptr1d(m)%p(:))
           elseif (associated(CS%var_ptr0d(m)%p)) then ! Read a scalar...
             call MOM_read_data(unit_path(n), varname, CS%var_ptr0d(m)%p, &
-                               timelevel=1, MOM_Domain=G%Domain)
-            if (is_there_a_checksum) checksum_data = chksum(CS%var_ptr0d(m)%p, pelist=(/PE_here()/))
+                               timelevel=1, scale=scale, MOM_Domain=G%Domain)
+            if (is_there_a_checksum) checksum_data = chksum(conv*CS%var_ptr0d(m)%p, pelist=(/PE_here()/))
           elseif (associated(CS%var_ptr2d(m)%p)) then  ! Read a 2d array.
             if (pos /= 0) then
               call MOM_read_data(unit_path(n), varname, CS%var_ptr2d(m)%p, &
-                                 G%Domain, timelevel=1, position=pos)
+                                 G%Domain, timelevel=1, position=pos, scale=scale)
             else ! This array is not domain-decomposed.  This variant may be under-tested.
               call MOM_error(FATAL, &
                         "MOM_restart does not support 2-d arrays without domain decomposition.")
               ! call read_data(unit_path(n), varname, CS%var_ptr2d(m)%p,no_domain=.true., timelevel=1)
             endif
-            if (is_there_a_checksum) checksum_data = chksum(CS%var_ptr2d(m)%p(isL:ieL,jsL:jeL))
+            if (is_there_a_checksum) checksum_data = chksum(conv*CS%var_ptr2d(m)%p(isL:ieL,jsL:jeL))
           elseif (associated(CS%var_ptr3d(m)%p)) then  ! Read a 3d array.
             if (pos /= 0) then
               call MOM_read_data(unit_path(n), varname, CS%var_ptr3d(m)%p, &
-                                 G%Domain, timelevel=1, position=pos)
+                                 G%Domain, timelevel=1, position=pos, scale=scale)
             else ! This array is not domain-decomposed.  This variant may be under-tested.
               call MOM_error(FATAL, &
                         "MOM_restart does not support 3-d arrays without domain decomposition.")
               ! call read_data(unit_path(n), varname, CS%var_ptr3d(m)%p, no_domain=.true., timelevel=1)
             endif
-            if (is_there_a_checksum) checksum_data = chksum(CS%var_ptr3d(m)%p(isL:ieL,jsL:jeL,:))
+            if (is_there_a_checksum) checksum_data = chksum(conv*CS%var_ptr3d(m)%p(isL:ieL,jsL:jeL,:))
           elseif (associated(CS%var_ptr4d(m)%p)) then  ! Read a 4d array.
             if (pos /= 0) then
               call MOM_read_data(unit_path(n), varname, CS%var_ptr4d(m)%p, &
-                                 G%Domain, timelevel=1, position=pos)
+                                 G%Domain, timelevel=1, position=pos, scale=scale)
             else ! This array is not domain-decomposed.  This variant may be under-tested.
               call MOM_error(FATAL, &
                         "MOM_restart does not support 4-d arrays without domain decomposition.")
               ! call read_data(unit_path(n), varname, CS%var_ptr4d(m)%p, no_domain=.true., timelevel=1)
             endif
-            if (is_there_a_checksum) checksum_data = chksum(CS%var_ptr4d(m)%p(isL:ieL,jsL:jeL,:,:))
+            if (is_there_a_checksum) checksum_data = chksum(conv*CS%var_ptr4d(m)%p(isL:ieL,jsL:jeL,:,:))
           else
             call MOM_error(FATAL, "MOM_restart restore_state: No pointers set for "//trim(varname))
           endif
@@ -1273,7 +1680,7 @@ subroutine restore_state(filename, directory, day, G, CS)
   enddo
 
   do n=1,num_file
-    call close_file(IO_handles(n))
+    call IO_handles(n)%close()
   enddo
 
   ! Check whether any mandatory fields have not been found.
@@ -1375,7 +1782,7 @@ function open_restart_units(filename, directory, G, CS, IO_handles, file_paths, 
   type(ocean_grid_type), intent(in)  :: G         !< The ocean's grid structure
   type(MOM_restart_CS),  intent(in)  :: CS        !< MOM restart control struct
 
-  type(file_type), dimension(:), &
+  type(MOM_infra_file), dimension(:), &
                optional, intent(out) :: IO_handles !< The I/O handles of all opened files
   character(len=*), dimension(:), &
                optional, intent(out) :: file_paths   !< The full paths to open files
@@ -1452,7 +1859,7 @@ function open_restart_units(filename, directory, G, CS, IO_handles, file_paths, 
         if (fexists) then
           nf = nf + 1
           if (present(IO_handles)) &
-            call open_file(IO_handles(nf), trim(filepath), READONLY_FILE, &
+            call IO_handles(nf)%open(trim(filepath), READONLY_FILE, &
                            threading=MULTIPLE, fileset=SINGLE_FILE)
           if (present(global_files)) global_files(nf) = .true.
           if (present(file_paths)) file_paths(nf) = filepath
@@ -1462,7 +1869,7 @@ function open_restart_units(filename, directory, G, CS, IO_handles, file_paths, 
           if (fexists) then
             nf = nf + 1
             if (present(IO_handles)) &
-              call open_file(IO_handles(nf), trim(filepath), READONLY_FILE, MOM_domain=G%Domain)
+              call IO_handles(nf)%open(trim(filepath), READONLY_FILE, MOM_domain=G%Domain)
             if (present(global_files)) global_files(nf) = .false.
             if (present(file_paths)) file_paths(nf) = filepath
           endif
@@ -1484,7 +1891,7 @@ function open_restart_units(filename, directory, G, CS, IO_handles, file_paths, 
       if (fexists) then
         nf = nf + 1
         if (present(IO_handles)) &
-          call open_file(IO_handles(nf), trim(filepath), READONLY_FILE, &
+          call IO_handles(nf)%open(trim(filepath), READONLY_FILE, &
                        threading=MULTIPLE, fileset=SINGLE_FILE)
         if (present(global_files)) global_files(nf) = .true.
         if (present(file_paths)) file_paths(nf) = filepath

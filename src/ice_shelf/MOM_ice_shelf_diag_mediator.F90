@@ -14,6 +14,7 @@ use MOM_grid,          only : ocean_grid_type
 use MOM_safe_alloc,    only : safe_alloc_ptr, safe_alloc_alloc
 use MOM_string_functions, only : lowercase, uppercase, slasher
 use MOM_time_manager,  only : time_type
+use MOM_unit_scaling,  only : unit_scale_type
 
 implicit none ; private
 
@@ -41,8 +42,9 @@ type, private :: diag_type
   integer :: fms_diag_id         !< underlying FMS diag id
   character(len=24) :: name      !< The diagnostic name
   real :: conversion_factor = 0. !< A factor to multiply data by before posting to FMS, if non-zero.
-  real, pointer, dimension(:,:)   :: mask2d => null()      !< A 2-d mask on the data domain for this diagnostic
-  real, pointer, dimension(:,:)   :: mask2d_comp => null() !< A 2-d mask on the computational domain for this diagnostic
+  real, pointer, dimension(:,:)   :: mask2d => null()      !< A 2-d mask on the data domain for this diagnostic [nondim]
+  real, pointer, dimension(:,:)   :: mask2d_comp => null() !< A 2-d mask on the computational domain
+                                                           !! for this diagnostic [nondim]
 end type diag_type
 
 !>   The SIS_diag_ctrl data type contains times to regulate diagnostics along with masks and
@@ -63,7 +65,7 @@ type, public :: diag_ctrl
   integer :: ied !< The end i-index of cell centers within the data domain
   integer :: jsd !< The start j-index of cell centers within the data domain
   integer :: jed !< The end j-index of cell centers within the data domain
-  real :: time_int              !< The time interval in s for any fields that are offered for averaging.
+  real :: time_int              !< The time interval for any fields that are offered for averaging [s].
   type(time_type) :: time_end   !< The end time of the valid interval for any offered field.
   logical :: ave_enabled = .false. !< .true. if averaging is enabled.
 
@@ -88,8 +90,10 @@ type, public :: diag_ctrl
 #define DIAG_ALLOC_CHUNK_SIZE 15
   type(diag_type), dimension(:), allocatable :: diags !< The array of diagnostics
   integer :: next_free_diag_id !< The next unused diagnostic ID
-  !> default missing value to be sent to ALL diagnostics registerations
+  !> default missing value to be sent to ALL diagnostics registerations [various]
   real :: missing_value = -1.0e34
+
+  type(unit_scale_type), pointer :: US => null() !< A dimensional unit scaling type
 
 end type diag_ctrl
 
@@ -98,19 +102,18 @@ contains
 !> Set up the grid and axis information for use by the ice shelf model.
 subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
   type(ocean_grid_type), intent(inout) :: G   !< The horizontal grid type
-  type(param_file_type),   intent(in)    :: param_file !< A structure to parse for run-time parameters
-  type(diag_ctrl),     intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
+  type(param_file_type), intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(diag_ctrl),       intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
   character(len=*), optional, intent(in) :: axes_set_name !<  A name to use for this set of axes.
                                                 !! The default is "ice".
 !   This subroutine sets up the grid and axis information for use by the ice shelf model.
 
   ! Local variables
-  integer :: id_xq, id_yq, id_zl, id_zi, id_xh, id_yh, id_ct, id_ct0
-  integer :: k
+  integer :: id_xq, id_yq, id_xh, id_yh
   logical :: Cartesian_grid
   character(len=80) :: grid_config, units_temp, set_name
-! This include declares and sets the variable "version".
-#include "version_variable.h"
+  ! This include declares and sets the variable "version".
+# include "version_variable.h"
   character(len=40)  :: mdl = "MOM_IS_diag_mediator" ! This module's name.
 
   set_name = "ice_shelf" ; if (present(axes_set_name)) set_name = trim(axes_set_name)
@@ -126,8 +129,9 @@ subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
                  "\t spherical - a spherical grid \n"//&
                  "\t mercator  - a Mercator grid", fail_if_missing=.true.)
 
-  G%x_axis_units = "degrees_E"
-  G%y_axis_units = "degrees_N"
+  G%x_axis_units = "degrees_E" ; G%y_axis_units = "degrees_N"
+  G%x_ax_unit_short = "degrees_E" ; G%y_ax_unit_short = "degrees_N"
+
   if (index(lowercase(trim(grid_config)),"cartesian") > 0) then
     ! This is a cartesian grid, and may have different axis units.
     Cartesian_grid = .true.
@@ -139,8 +143,10 @@ subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
                  "implemented.", default='degrees')
     if (units_temp(1:1) == 'k') then
       G%x_axis_units = "kilometers" ; G%y_axis_units = "kilometers"
+      G%x_ax_unit_short = "km" ; G%y_ax_unit_short = "km"
     elseif (units_temp(1:1) == 'm') then
       G%x_axis_units = "meters" ; G%y_axis_units = "meters"
+      G%x_ax_unit_short = "m" ; G%y_ax_unit_short = "m"
     endif
     call log_param(param_file, mdl, "explicit AXIS_UNITS", G%x_axis_units)
   else
@@ -341,12 +347,11 @@ end subroutine post_IS_data
 
 !> Enable the accumulation of time averages over the specified time interval.
 subroutine enable_averaging(time_int_in, time_end_in, diag_cs)
-  real,                intent(in)    :: time_int_in !< The time interval over which any values
-!                                                   !! that are offered are valid [s].
-  type(time_type),     intent(in)    :: time_end_in !< The end time of the valid interval.
-  type(diag_ctrl), intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
-! This subroutine enables the accumulation of time averages over the
-! specified time interval.
+  real,            intent(in)    :: time_int_in !< The time interval over which any values
+                                                !! that are offered are valid [s].
+  type(time_type), intent(in)    :: time_end_in !< The end time of the valid interval.
+  type(diag_ctrl), intent(inout) :: diag_cs     !< A structure that is used to regulate diagnostic output
+  ! This subroutine enables the accumulation of time averages over the specified time interval.
 
 !  if (num_file==0) return
   diag_cs%time_int = time_int_in
@@ -369,13 +374,13 @@ subroutine enable_averages(time_int, time_end, diag_CS, T_to_s)
                                              !! that are offered are valid [T ~> s].
   type(time_type), intent(in)    :: time_end !< The end time of the valid interval.
   type(diag_ctrl), intent(inout) :: diag_CS  !< A structure that is used to regulate diagnostic output
-  real,  optional, intent(in)    :: T_to_s   !< A conversion factor for time_int to [s].
-! This subroutine enables the accumulation of time averages over the specified time interval.
+  real,  optional, intent(in)    :: T_to_s   !< A conversion factor for time_int to seconds [s T-1 ~> 1].
+  ! This subroutine enables the accumulation of time averages over the specified time interval.
 
   if (present(T_to_s)) then
     diag_cs%time_int = time_int*T_to_s
-!  elseif (associated(diag_CS%US)) then
-!    diag_cs%time_int = time_int*diag_CS%US%T_to_s
+  elseif (associated(diag_CS%US)) then
+    diag_cs%time_int = time_int*diag_CS%US%T_to_s
   else
     diag_cs%time_int = time_int
   endif
@@ -394,14 +399,12 @@ logical function query_averaging_enabled(diag_cs, time_int, time_end)
   query_averaging_enabled = diag_cs%ave_enabled
 end function query_averaging_enabled
 
+!> This subroutine initializes the diag_manager via the MOM6 infrastructure
 subroutine MOM_IS_diag_mediator_infrastructure_init(err_msg)
-  ! This subroutine initializes the FMS diag_manager.
   character(len=*), optional, intent(out)   :: err_msg !< An error message
 
   call MOM_diag_manager_init(err_msg=err_msg)
 end subroutine MOM_IS_diag_mediator_infrastructure_init
-
-!> diag_mediator_init initializes the MOM diag_mediator and opens the available
 
 !> Return the currently specified valid end time for diagnostics
 function get_diag_time_end(diag_cs)
@@ -448,7 +451,7 @@ function register_MOM_IS_diag_field(module_name, field_name, axes, init_time, &
   type(diag_type), pointer :: diag => NULL()
 
   MOM_missing_value = axes%diag_cs%missing_value
-  if(present(missing_value)) MOM_missing_value = missing_value
+  if (present(missing_value)) MOM_missing_value = missing_value
 
   diag_cs => axes%diag_cs
   primary_id = -1
@@ -531,13 +534,12 @@ integer function register_MOM_IS_static_field(module_name, field_name, axes, &
   integer,          optional, intent(in) :: tile_count   !< no clue (not used in MOM_IS?)
 
   ! Local variables
-  character(len=240) :: mesg
   real :: MOM_missing_value
   integer :: primary_id, fms_id
   type(diag_ctrl), pointer :: diag_cs !< A structure that is used to regulate diagnostic output
 
   MOM_missing_value = axes%diag_cs%missing_value
-  if(present(missing_value)) MOM_missing_value = missing_value
+  if (present(missing_value)) MOM_missing_value = missing_value
 
   diag_cs => axes%diag_cs
   primary_id = -1
@@ -564,7 +566,7 @@ subroutine describe_option(opt_name, value, diag_CS)
 
   ! Local variables
   character(len=240) :: mesg
-  integer :: start_ind = 1, end_ind, len_ind
+  integer :: len_ind
 
   len_ind = len_trim(value)
 
@@ -582,8 +584,8 @@ function i2s(a, n_in)
   character(len=15) :: i2s_temp
   integer :: i,n
 
-  n=size(a)
-  if(present(n_in)) n = n_in
+  n = size(a)
+  if (present(n_in)) n = n_in
 
   i2s = ''
   do i=1,n
@@ -594,11 +596,12 @@ function i2s(a, n_in)
 end function i2s
 
 !> Initialize the MOM_IS diag_mediator and opens the available diagnostics file.
-subroutine MOM_IS_diag_mediator_init(G, param_file, diag_cs, component, err_msg, &
+subroutine MOM_IS_diag_mediator_init(G, US, param_file, diag_cs, component, err_msg, &
                                   doc_file_dir)
-  type(ocean_grid_type),    intent(inout) :: G   !< The horizontal grid type
+  type(ocean_grid_type),      intent(inout) :: G   !< The horizontal grid type
+  type(unit_scale_type), target, intent(in) :: US !< A dimensional unit scaling type
   type(param_file_type),      intent(in)    :: param_file !< A structure to parse for run-time parameters
-  type(diag_ctrl),        intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
+  type(diag_ctrl),            intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
   character(len=*), optional, intent(in)    :: component !< An opitonal component name
   character(len=*), optional, intent(out)   :: err_msg !< A string for a returned error message
   character(len=*), optional, intent(in)    :: doc_file_dir !< A directory in which to create the file
@@ -622,6 +625,7 @@ subroutine MOM_IS_diag_mediator_init(G, param_file, diag_cs, component, err_msg,
   diag_cs%next_free_diag_id = 1
   diag_cs%diags(:)%in_use = .false.
 
+  diag_cs%US => US
   diag_cs%is = G%isc - (G%isd-1) ; diag_cs%ie = G%iec - (G%isd-1)
   diag_cs%js = G%jsc - (G%jsd-1) ; diag_cs%je = G%jec - (G%jsd-1)
   diag_cs%isd = G%isd ; diag_cs%ied = G%ied ; diag_cs%jsd = G%jsd ; diag_cs%jed = G%jed
