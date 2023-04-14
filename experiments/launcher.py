@@ -5,12 +5,17 @@ import numpy as np
 # creates slurm script mom.sub
 def create_slurm(p, filename):
     # p - dictionary with parameters
+    if p['mem'] < 1:
+        mem = str(int(p['mem']*1000))+'MB'
+    else:
+        mem = str(p['mem'])+'GB'
+    
     lines = [
     '#!/bin/bash',
     '#SBATCH --nodes='+str(p['nodes']),
     '#SBATCH --ntasks-per-node='+str(p['ntasks']),
     '#SBATCH --cpus-per-task=1',
-    '#SBATCH --mem='+str(p['mem'])+'GB',
+    '#SBATCH --mem='+mem,
     '#SBATCH --time='+str(p['time'])+':00:00',
     '#SBATCH --begin=now+'+str(p['begin']),
     '#SBATCH --job-name='+str(p['name']),
@@ -139,8 +144,8 @@ def configuration(exp='R4'):
 
 HPC = dictionary(
     nodes=1,
-    ntasks=4,
-    mem=10,
+    ntasks=1,
+    mem=0.5,
     time=24,
     name='mom6',
     begin='0hour'
@@ -154,18 +159,17 @@ PARAMETERS = dictionary(
     SMAGORINSKY_AH='True',
     SMAG_BI_CONST=0.03, 
     USE_ZB2020='False',
-    amplitude=1.,
-    amp_bottom=-1.,
-    ZB_type=0, 
-    ZB_cons=1, 
-    LPF_iter=0, 
-    LPF_order=1, 
-    HPF_iter=0,
-    HPF_order=1,
-    Stress_iter=0,
-    Stress_order=1,
-    ssd_iter=-1,
-    ssd_bound_coef=0.8
+    ZB_SCALING=1.,
+    ZB_TRACE_MODE=0, 
+    ZB_SCHEME=1, 
+    VG_SMOOTH_PASS=0, 
+    VG_SMOOTH_SEL=1, 
+    VG_SHARP_PASS=0,
+    VG_SHARP_SEL=1,
+    STRESS_SMOOTH_PASS=0,
+    STRESS_SMOOTH_SEL=1,
+    ZB_HYPERVISC=0,
+    HYPVISC_GRID_DAMP=0.2
 ) + configuration('R4')
 
 JansenHeld = dictionary(
@@ -319,4 +323,22 @@ if __name__ == '__main__':
     #     parameters = PARAMETERS.add(USE_ZB2020='True',amplitude=0.3,ssd_iter=10,ssd_bound_coef=0.2, ZB_type=ZB_type)
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2022/trace/ZB-ssd-{postfix}', HPC, parameters)
 
-    run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/JansenHeld/R4-JH', HPC, PARAMETERS+JansenHeld)
+    #run_experiment(f'/scratch/pp2681/mom6/Apr2022/R4/JansenHeld/R4-JH', HPC, PARAMETERS+JansenHeld)
+
+    ####################################### Hopefully final runs ########################################
+
+    # for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-clean/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+        
+    # for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING, ZB_HYPERVISC=10)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-ssd/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    for STRESS_SMOOTH_PASS, STRESS_SMOOTH_SEL in [(1,1), (2,1), (3,1), (4,1), (1,2), (1,4), (2,2), (4,4)]:
+        for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
+            for Cs in [0.03, 0.06, 0.09]:
+                parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=STRESS_SMOOTH_PASS,STRESS_SMOOTH_SEL=STRESS_SMOOTH_SEL)
+                run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-stress-pass-{STRESS_SMOOTH_PASS}-sel-{STRESS_SMOOTH_SEL}/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
