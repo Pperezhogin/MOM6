@@ -67,7 +67,7 @@ def default_rcParams(kw={}):
         #'ytick.labelsize': 10,
         #'legend.fontsize': 10,
 
-        'axes.formatter.limits': (-2,2),
+        'axes.formatter.limits': (-2,3),
         'axes.formatter.use_mathtext': True,
         'axes.labelpad': 0,
         'axes.titlelocation' : 'center',

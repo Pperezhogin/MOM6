@@ -211,8 +211,8 @@ class Experiment:
         return self.ea.isel(zi=0).sel(Time=Averaging_Time).mean(dim='Time')
 
     @netcdf_property
-    def ssh_var(self):
-        return self.ea.isel(zi=0).sel(Time=Averaging_Time).var(dim='Time')
+    def ssh_std(self):
+        return self.e.isel(zi=0).sel(Time=Averaging_Time).std(dim='Time')
 
     @netcdf_property
     def u_mean(self):
@@ -241,7 +241,7 @@ class Experiment:
     @netcdf_property
     def KE_spectrum_global_series(self):
         return compute_isotropic_KE(self.u, self.v, self.param.dxT, self.param.dyT, 
-            Lat=(30,50), Lon=(0,22))
+            Lat=(30,50), Lon=(0,22), detrend=None, truncate=True, nfactor=4, window=None, window_correction=False)
 
     @netcdf_property
     def KE_spectrum(self):
@@ -337,144 +337,52 @@ class Experiment:
     def velocity(self):
         return np.sqrt(2*self.KE)
 
-    @netcdf_property
-    def KE_series(self):
-        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L763
-        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L501
-        # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L674
-        return mass_average(self.KE, self.h, self.param.dxT, self.param.dyT)
-    
-    @property
-    def EKE_series(self):
-        return (self.KE_series - self.MKE_val).sel(Time=Averaging_Time)
+    def KE_joul(self, u, v, h):
+        return (0.5 * self.vert_grid.R * (remesh(u**2, h) + remesh(v**2, h)) * h * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
 
     @netcdf_property
-    def MKE(self):
-        return 0.5 * (remesh(self.u_mean**2, self.e) + remesh(self.v_mean**2, self.e))  
+    def KE_joul_series(self):
+        return self.KE_joul(self.u, self.v, self.h)
 
-    @netcdf_property
-    def EKE(self):
-        eke = self.KE.sel(Time=Averaging_Time).mean(dim='Time') - self.MKE
-        eke = eke.where(eke>0).fillna(0) # 
-        return eke
-
-    @property
-    def EKE_old(self):
-        try:
-            eke = self.energy.KE.sel(Time=Averaging_Time).mean(dim='Time') - self.MKE
-            eke = eke.where(eke>0).fillna(0) #
-        except:
-            eke = self.EKE
-        return eke
-
-    @netcdf_property
-    def KE_total(self):
-        return self.MKE+self.EKE
-
-    @netcdf_property
-    def MKE_val(self):
-        return mass_average(self.MKE, self.h_mean, self.param.dxT, self.param.dyT)
-
-    @netcdf_property
-    def EKE_val(self):
-        return mass_average(self.EKE, self.h_mean, self.param.dxT, self.param.dyT)
-
-    @netcdf_property
-    def KE_total_val(self):
-        return self.MKE_val + self.EKE_val
-    
     @netcdf_property
     def MKE_joul(self):
-        return (0.5 * self.vert_grid.R * (remesh(self.u_mean**2, self.e) + remesh(self.v_mean**2, self.e)) * self.h_mean * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
+        return self.KE_joul(self.u_mean, self.v_mean, self.h_mean)
     
     @netcdf_property
     def EKE_joul(self):
-        return (0.5 * self.vert_grid.R * (remesh(self.u**2, self.e) + remesh(self.v**2, self.e)) * self.h * self.param.dxT * self.param.dyT).sum(dim=('xh','yh')).sel(Time=Averaging_Time).mean(dim='Time') - self.MKE_joul
+        return self.KE_joul_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MKE_joul
     
     #-------------------------  PE, MPE, EPE  ---------------------------#
-    @netcdf_property
-    def PE_Joul_series(self):
+    def PE_joul(self, e):
         # APE for internal interface, total value in Joules. Compare to seires.APE.isel(Interface=1)
         H0 = 1000. # 1000 is reference depth (see series.H0.isel(Interface=1))
-        hint = self.e.isel(zi=1)+H0 # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L655
-        mask = self.h.isel(zl=1)>1e-9 # mask of wet points. Boundaries have values 1e-10; https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L656
-        return 0.5 * self.vert_grid.R.isel(zl=1)*self.vert_grid.g.isel(zl=1)*(hint**2 * mask * self.param.dxT * self.param.dyT).sum(dim=('xh','yh')) # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L657
+        hint = e.isel(zi=1)+H0 # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L655
+        hbot = np.maximum(self.e.isel(zi=2, Time=0)+1000,0) # Time-independent bottom profile, where there is no fluid at rest; https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L656
+        return 0.5 * self.vert_grid.R.isel(zl=1)*self.vert_grid.g.isel(zl=1)*((hint**2 - hbot**2) * self.param.dxT * self.param.dyT).sum(dim=('xh','yh')) # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L657
     
+    def PE_ssh(self, e):
+        hint = e.isel(zi=0)
+        return 0.5 * self.vert_grid.R.isel(zl=0)*self.vert_grid.g.isel(zl=0)*(hint**2 * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
+
+    @netcdf_property
+    def PE_joul_series(self):
+        return self.PE_joul(self.e)
+
     @netcdf_property
     def PE_ssh_series(self):
-        hint = self.e.isel(zi=0)
-        return 0.5 * self.vert_grid.R.isel(zl=0)*self.vert_grid.g.isel(zl=0)*(hint**2 * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
-    
-    @netcdf_property
-    def PE(self):
-        '''
-        Avaliable Potential for internal interface devided by all constants, i.e. [m^2]
-        '''
-        H0 = 1000.
-        hint = self.e.isel(zi=1)+H0
-        mask = self.h.isel(zl=1)>1e-9
-        hint = hint * mask
-        return 0.5 * hint**2
+        return self.PE_ssh(self.e)
 
-    @netcdf_property
-    def MPE(self):
-        '''
-        Avaliable Potential for internal interface of the mean flow [m^2]
-        '''
-        H0 = 1000.
-        hint = self.e_mean.isel(zi=1)+H0
-        mask = self.h_mean.isel(zl=1)>1e-9
-        hint = hint * mask
-        return 0.5 * hint**2
-
-    @netcdf_property
-    def EPE(self):
-        '''
-        Potential energy of the eddy fluctuations [m^2]
-        '''
-        epe = self.PE.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE
-        epe = epe.where(epe>0).fillna(0)
-        return epe
-
-    @netcdf_property
-    def PE_total(self):
-        return self.MPE + self.EPE
-
-    @netcdf_property
-    def MPE_val(self):
-        '''
-        Bad behaviour near the boundary!!!
-        [m^2]
-        '''
-        return select_LatLon(self.MPE,Lat=(35,45), Lon=(5,15)).mean(dim=('xh','yh'))
-    
-    @netcdf_property
-    def EPE_val(self):
-        return select_LatLon(self.EPE,Lat=(35,45), Lon=(5,15)).mean(dim=('xh','yh'))
-
-    @netcdf_property
-    def PE_total_val(self):
-        return self.MPE_val + self.EPE_val
-    
     @netcdf_property
     def MPE_joul(self):
-        '''
-        MPE value, in [Joules] but not [m^2]
-        '''
-        H0 = 1000.
-        hint = self.e_mean.isel(zi=1)+H0
-        mask = self.h_mean.isel(zl=1)>1e-9
-        hint = hint * mask
-        return 0.5 * self.vert_grid.R.isel(zl=1)*self.vert_grid.g.isel(zl=1)*(hint**2 * mask * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
-    
-    @netcdf_property
-    def EPE_joul(self):
-        return self.PE_Joul_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE_joul
+        return self.PE_joul(self.e_mean)
     
     @netcdf_property
     def MPE_ssh(self):
-        hint = self.e_mean.isel(zi=0)
-        return 0.5 * self.vert_grid.R.isel(zl=0)*self.vert_grid.g.isel(zl=0)*(hint**2 * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
+        return self.PE_ssh(self.e_mean)
+    
+    @netcdf_property
+    def EPE_joul(self):
+        return self.PE_joul_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE_joul
     
     @netcdf_property
     def EPE_ssh(self):

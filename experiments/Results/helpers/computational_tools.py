@@ -318,7 +318,7 @@ def remesh(input, target):
     return result
 
 def compute_isotropic_KE(u_in, v_in, dx, dy, Lat=(35,45), Lon=(5,15), window='hann', 
-        nfactor=2, truncate=True, detrend='linear', window_correction=True):
+        nfactor=2, truncate=True, detrend='linear', window_correction=True, nd_wavenumber=False):
     '''
     u, v - "velocity" arrays defined on corresponding staggered grids
     dx, dy - grid step arrays defined in the center of the cells
@@ -356,6 +356,13 @@ def compute_isotropic_KE(u_in, v_in, dx, dy, Lat=(35,45), Lon=(5,15), window='ha
 
     E = (Eu+Ev) / 2 # because power spectrum is twice the energy
     E['freq_r'] = E['freq_r']*2*np.pi # because library returns frequencies, but not wavenumbers
+
+    if nd_wavenumber:
+        Lx = x.max() - x.min()
+        Ly = y.max() - y.min()
+        kmin = 2*np.pi * min(1/Lx, 1/Ly)
+        E['freq_r'] = E['freq_r'] / kmin
+        E = E * kmin
     
     ############## normalization tester #############
     #print('Energy balance:')

@@ -109,14 +109,15 @@ class CollectionOfExperiments:
             KE_upper = KE.isel(zl=0)
             KE_lower = KE.isel(zl=1)
 
-            p.extend(ax[0].loglog(k, KE_upper, lw=3, label=labels[j], color='k' if exp==exps[-1] else None))
+            color = {exps[0]: 'gray', exps[-1]: 'k'}
+            p.extend(ax[0].loglog(k, KE_upper, lw=3, label=labels[j], color=color.get(exp,None)))
             ax[0].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[0].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[0].set_title('Upper layer')
             ax[0].legend(prop={'size': 14})
             #ax[0].grid(which='both',linestyle=':')
 
-            p.extend(ax[1].loglog(k, KE_lower, lw=3, label=labels[j], color='k' if exp==exps[-1] else None))
+            p.extend(ax[1].loglog(k, KE_lower, lw=3, label=labels[j], color=color.get(exp,None)))
             ax[1].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[1].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[1].set_title('Lower layer')
@@ -128,9 +129,11 @@ class CollectionOfExperiments:
         E[1] = E[0] * (k[1]/k[0])**(-3)
         ax[0].loglog(k,E,'--k')
         ax[0].text(8e-5,5e+1,'$k^{-3}$')
-        #ax[0].set_xlim([2e-6, 2e-3])
+        ax[0].set_xlim([None,1e-3])
+        ax[0].set_ylim([1e-3,1e+3])
         
-        #ax[1].set_xlim([2e-6, 2e-3])
+        ax[1].set_xlim([None,1e-3])
+        ax[1].set_ylim([1e-3,1e+3])
         k = [5e-5, 1e-4]
         E = [3e+1, 0]
         E[1] = E[0] * (k[1]/k[0])**(-3)
@@ -235,6 +238,25 @@ class CollectionOfExperiments:
 
         plt.tight_layout()
 
+    def plot_velocity(self, exps, labels=None, key='u_mean'):
+        if labels is None:
+            labels=exps
+        plt.figure(figsize=(4*len(exps),3))
+        nfig = len(exps)
+        for ifig, exp in enumerate(exps):
+            plt.subplot(1,nfig,ifig+1)
+            v = self[exp].__getattribute__(key).isel(zl=0)
+            levels = np.linspace(-0.3,0.3,21)
+            label = 'Velocity [$m/s$]'
+            v.plot.contourf(levels=levels, cmap='bwr', linewidths=1, extend='both', cbar_kwargs={'label': label})
+            plt.xticks((0, 5, 10, 15, 20))
+            plt.yticks((30, 35, 40, 45, 50))
+            plt.xlabel('Longitude')
+            plt.ylabel('Latitude')
+            plt.title(labels[ifig])
+
+        plt.tight_layout()
+
     def plot_KE_PE(self, exps=['R4', 'R8', 'R64_R4'], labels=None, color=['k', 'tab:cyan', 'tab:blue', 'tab:red']):
         if labels is None:
             labels = exps
@@ -260,18 +282,19 @@ class CollectionOfExperiments:
                 plt.title('KE, Lower layer')
             plt.legend(loc='upper left', fontsize=14)
             plt.ylim([0, 1.5*(EKE[-1]+MKE[-1])*(1.55-zl/2)])
+            plt.axhline(y=MKE[-1], ls=':', color=color[0])
             
         plt.subplot(2,2,3)
         MPE = []
         EPE = []
         for exp in exps:
-            MPE.append(1e-15*self[exp].MPE_joul.values)
-            EPE.append(1e-15*self[exp].EPE_joul.values)     
+            MPE.append(1e-15*(self[exp].MPE_joul.values+self[exp].MPE_ssh))
+            EPE.append(1e-15*(self[exp].EPE_joul.values+self[exp].EPE_ssh))     
         x=np.arange(len(exps));
         x[-1] += 1.5
         plt.bar(x,MPE,width,label='MPE',color=color[2])
         plt.bar(x,EPE,width,bottom=MPE,label='EPE',color=color[3])
-        plt.ylabel('Interface displacement \n potential energy, PJ', fontsize=14);
+        plt.ylabel('Avaliable potential energy, PJ', fontsize=14);
         plt.xticks(ticks=x,labels=labels,rotation='vertical')
         plt.title('Potential energy')
         plt.legend(loc='upper left', fontsize=14)
@@ -291,3 +314,4 @@ class CollectionOfExperiments:
         plt.xticks(ticks=x,labels=labels,rotation='vertical')
         plt.legend(loc='upper left', fontsize=14)
         plt.ylim([0, 1.5*(EKE[-1]+EPE[-1])*1.4])
+        plt.axhline(y=EKE[-1], ls=':', color=color[1])

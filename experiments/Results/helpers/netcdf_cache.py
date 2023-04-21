@@ -43,9 +43,15 @@ class netcdf_property:
             except:
                 ncfile = xr.open_dataset(filename, decode_times=False) # for very small files
             #print(f'Returning cached value of {funcname}')
-            value = ncfile[funcname]
-            ncfile.close() # to prevent out of memory
-            return value
+            if funcname in ncfile:
+                value = ncfile[funcname]
+                ncfile.close() # to prevent out of memory
+                if free_of_NaNs_and_zeros(value):
+                    return value
+                else:
+                    os.remove(filename) # value will be recalculated below
+            else:
+                os.remove(filename) # value will be recalculated below
 
         #print(f'Calculating value of {funcname}')
         try:
@@ -53,13 +59,37 @@ class netcdf_property:
         except:
             value = self.function(instance) # for very small objects
         
-        # Create new dataset
-        ncfile = xr.Dataset()
-        
-        # store on disk and close file
-        ncfile[funcname] = value
-        #print(f'Saving result to {filename}')
-        ncfile.to_netcdf(filename)
-        ncfile.close() # to prevent out of memory
-
+        # Save value only if it is not trivial
+        if free_of_NaNs_and_zeros(value):
+            # Create new dataset
+            ncfile = xr.Dataset()
+            
+            # store on disk and close file
+            ncfile[funcname] = value
+            #print(f'Saving result to {filename}')
+            ncfile.to_netcdf(filename)
+            ncfile.close() # to prevent out of memory
+        else:
+            print('Warning: NaN or zero is detected in', instance.key+'-'+funcname)
+            
         return value
+        
+
+def free_of_NaNs_and_zeros(value):
+    '''
+    This function checks that values in Xarray are not trivial 
+    (no zeros, Nans and so on)
+    '''
+    if len(value.dims) <= 1:
+        if value.notnull().sum() == value.size: # every scalar value is not NaN
+            if (value==0.).sum() != value.size: # every scalar value is not 0.
+                return True
+            else:
+                False
+        else:
+            False
+    else:
+        if value.notnull().sum() > value.size/2: # 50% of values are not nan
+            return True
+        else:
+            False

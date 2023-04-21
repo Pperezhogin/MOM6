@@ -337,8 +337,57 @@ if __name__ == '__main__':
     #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING, ZB_HYPERVISC=10)
     #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-ssd/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
 
-    for STRESS_SMOOTH_PASS, STRESS_SMOOTH_SEL in [(1,1), (2,1), (3,1), (4,1), (1,2), (1,4), (2,2), (4,4)]:
-        for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
-            for Cs in [0.03, 0.06, 0.09]:
-                parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=STRESS_SMOOTH_PASS,STRESS_SMOOTH_SEL=STRESS_SMOOTH_SEL)
-                run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-stress-pass-{STRESS_SMOOTH_PASS}-sel-{STRESS_SMOOTH_SEL}/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+    # for STRESS_SMOOTH_PASS, STRESS_SMOOTH_SEL in [(1,1), (2,1), (3,1), (4,1), (1,2), (1,4), (2,2), (4,4)]:
+    #     for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
+    #         for Cs in [0.03, 0.06, 0.09]:
+    #             parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=STRESS_SMOOTH_PASS,STRESS_SMOOTH_SEL=STRESS_SMOOTH_SEL)
+    #             run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-stress-pass-{STRESS_SMOOTH_PASS}-sel-{STRESS_SMOOTH_SEL}/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+######################################################## non-simple experiments ########################################################
+
+    # for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING, ZB_HYPERVISC=11)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-ssd-11/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    # for ZB_SCALING in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,VG_SMOOTH_PASS=2)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-VG-pass-2/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    # for SMOOTH_PASS, SMOOTH_SEL in [(1,1), (2,1), (4,1), (1,2), (1,4), (2,2), (4,4)]:
+    #     for ZB_SCALING in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0]:
+    #         for Cs in [0.03, 0.06, 0.09]:
+    #             parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=SMOOTH_PASS,STRESS_SMOOTH_SEL=SMOOTH_SEL,VG_SHARP_PASS=SMOOTH_PASS,VG_SHARP_SEL=SMOOTH_SEL)
+    #             run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-change-range/ZB-Reynolds-pass-{SMOOTH_PASS}-sel-{SMOOTH_SEL}/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    # for SMOOTH_PASS, SMOOTH_SEL in [(1,1), (2,1), (4,1), (1,2), (1,4), (2,2), (4,4)]:
+    #     for ZB_SCALING in [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0]:
+    #         for Cs in [0.03, 0.06, 0.09]:
+    #             parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=SMOOTH_PASS,STRESS_SMOOTH_SEL=SMOOTH_SEL,VG_SHARP_PASS=SMOOTH_PASS,VG_SHARP_SEL=SMOOTH_SEL,VG_SMOOTH_PASS=SMOOTH_PASS,VG_SMOOTH_SEL=SMOOTH_SEL)
+    #             run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-change-range/ZB-Reynolds-VG-smooth-pass-{SMOOTH_PASS}-sel-{SMOOTH_SEL}/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    # for ZB_SCALING in [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=1,STRESS_SMOOTH_SEL=2,VG_SHARP_PASS=2,VG_SHARP_SEL=2,VG_SMOOTH_PASS=1,VG_SMOOTH_SEL=4)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-sensitivity/ZB-EXP205/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    #for ZB_SCALING in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.4, 4.6, 4.8, 5.0]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=4,VG_SHARP_SEL=1)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-selected/ZB-Reynolds-pass-4-pass-4/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    # for ZB_SCALING in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.4, 4.6, 4.8, 5.0]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=1,VG_SHARP_SEL=1)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-selected/ZB-Reynolds-pass-4-pass-1/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    for ZB_SCALING in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.4, 4.6, 4.8, 5.0]:
+        for Cs in [0.03, 0.06, 0.09]:
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=2,VG_SHARP_SEL=1)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-selected/ZB-Reynolds-pass-4-pass-2/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
+
+    # for ZB_SCALING in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.4, 4.6, 4.8, 5.0]:
+    #     for Cs in [0.03, 0.06, 0.09]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=Cs,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=1,VG_SHARP_SEL=2)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/R4-selected/ZB-Reynolds-pass-4-pass-1-sel-2/Cs-{Cs}-ZB-{ZB_SCALING}', HPC, parameters)
