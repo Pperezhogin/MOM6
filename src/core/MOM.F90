@@ -135,14 +135,12 @@ use MOM_tracer_flow_control,   only : call_tracer_register, tracer_flow_control_
 use MOM_tracer_flow_control,   only : tracer_flow_control_init, call_tracer_surface_state
 use MOM_tracer_flow_control,   only : tracer_flow_control_end, call_tracer_register_obc_segments
 use MOM_transcribe_grid,       only : copy_dyngrid_to_MOM_grid, copy_MOM_grid_to_dyngrid
-use MOM_unit_scaling,          only : unit_scale_type, unit_scaling_init
-use MOM_unit_scaling,          only : unit_scaling_end, fix_restart_unit_scaling
+use MOM_unit_scaling,          only : unit_scale_type, unit_scaling_init, unit_scaling_end
 use MOM_variables,             only : surface, allocate_surface_state, deallocate_surface_state
 use MOM_variables,             only : thermo_var_ptrs, vertvisc_type, porous_barrier_type
 use MOM_variables,             only : accel_diag_ptrs, cont_diag_ptrs, ocean_internal_state
 use MOM_variables,             only : rotate_surface_state
 use MOM_verticalGrid,          only : verticalGrid_type, verticalGridInit, verticalGridEnd
-use MOM_verticalGrid,          only : fix_restart_scaling
 use MOM_verticalGrid,          only : get_thickness_units, get_flux_units, get_tr_flux_units
 use MOM_wave_interface,        only : wave_parameters_CS, waves_end, waves_register_restarts
 use MOM_wave_interface,        only : Update_Stokes_Drift
@@ -1229,7 +1227,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
   if ((CS%thickness_diffuse .or. CS%interface_filter) .and. &
       .not.CS%thickness_diffuse_first) then
 
-    if (CS%debug) call hchksum(h,"Pre-thickness_diffuse h", G%HI, haloshift=0, scale=GV%H_to_m)
+    if (CS%debug) call hchksum(h,"Pre-thickness_diffuse h", G%HI, haloshift=0, scale=GV%H_to_MKS)
 
     if (CS%thickness_diffuse) then
       call cpu_clock_begin(id_clock_thick_diff)
@@ -1238,7 +1236,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
       call thickness_diffuse(h, CS%uhtr, CS%vhtr, CS%tv, dt, G, GV, US, &
                              CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp)
 
-      if (CS%debug) call hchksum(h,"Post-thickness_diffuse h", G%HI, haloshift=1, scale=GV%H_to_m)
+      if (CS%debug) call hchksum(h,"Post-thickness_diffuse h", G%HI, haloshift=1, scale=GV%H_to_MKS)
       call cpu_clock_end(id_clock_thick_diff)
       call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
       if (showCallTree) call callTree_waypoint("finished thickness_diffuse (step_MOM)")
@@ -1257,9 +1255,9 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
   ! apply the submesoscale mixed layer restratification parameterization
   if (CS%mixedlayer_restrat) then
     if (CS%debug) then
-      call hchksum(h,"Pre-mixedlayer_restrat h", G%HI, haloshift=1, scale=GV%H_to_m)
+      call hchksum(h,"Pre-mixedlayer_restrat h", G%HI, haloshift=1, scale=GV%H_to_MKS)
       call uvchksum("Pre-mixedlayer_restrat uhtr", &
-                    CS%uhtr, CS%vhtr, G%HI, haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
+                    CS%uhtr, CS%vhtr, G%HI, haloshift=0, scale=GV%H_to_MKS*US%L_to_m**2)
     endif
     call cpu_clock_begin(id_clock_ml_restrat)
     call mixedlayer_restrat(h, CS%uhtr, CS%vhtr, CS%tv, forces, dt, CS%visc%MLD, &
@@ -1267,9 +1265,9 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
     call cpu_clock_end(id_clock_ml_restrat)
     call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
     if (CS%debug) then
-      call hchksum(h,"Post-mixedlayer_restrat h", G%HI, haloshift=1, scale=GV%H_to_m)
+      call hchksum(h,"Post-mixedlayer_restrat h", G%HI, haloshift=1, scale=GV%H_to_MKS)
       call uvchksum("Post-mixedlayer_restrat [uv]htr", &
-                    CS%uhtr, CS%vhtr, G%HI, haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
+                    CS%uhtr, CS%vhtr, G%HI, haloshift=0, scale=GV%H_to_MKS*US%L_to_m**2)
     endif
   endif
 
@@ -1329,9 +1327,9 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
 
   if (CS%debug) then
     call cpu_clock_begin(id_clock_other)
-    call hchksum(h,"Pre-advection h", G%HI, haloshift=1, scale=GV%H_to_m)
+    call hchksum(h,"Pre-advection h", G%HI, haloshift=1, scale=GV%H_to_MKS)
     call uvchksum("Pre-advection uhtr", CS%uhtr, CS%vhtr, G%HI, &
-                  haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
+                  haloshift=0, scale=GV%H_to_MKS*US%L_to_m**2)
     if (associated(CS%tv%T)) call hchksum(CS%tv%T, "Pre-advection T", G%HI, haloshift=1, scale=US%C_to_degC)
     if (associated(CS%tv%S)) call hchksum(CS%tv%S, "Pre-advection S", G%HI, haloshift=1, scale=US%S_to_ppt)
     if (associated(CS%tv%frazil)) call hchksum(CS%tv%frazil, "Pre-advection frazil", G%HI, haloshift=0, &
@@ -1494,9 +1492,9 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
   if (.not.CS%adiabatic) then
     if (CS%debug) then
       call uvchksum("Pre-diabatic [uv]", u, v, G%HI, haloshift=2, scale=US%L_T_to_m_s)
-      call hchksum(h,"Pre-diabatic h", G%HI, haloshift=1, scale=GV%H_to_m)
+      call hchksum(h,"Pre-diabatic h", G%HI, haloshift=1, scale=GV%H_to_MKS)
       call uvchksum("Pre-diabatic [uv]h", CS%uhtr, CS%vhtr, G%HI, &
-                    haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
+                    haloshift=0, scale=GV%H_to_MKS*US%L_to_m**2)
     ! call MOM_state_chksum("Pre-diabatic ", u, v, h, CS%uhtr, CS%vhtr, G, GV, vel_scale=1.0)
       call MOM_thermo_chksum("Pre-diabatic ", tv, G, US, haloshift=0)
       call check_redundant("Pre-diabatic ", u, v, G, unscale=US%L_T_to_m_s)
@@ -1600,9 +1598,9 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
 
     if (CS%debug) then
       call uvchksum("Post-diabatic u", u, v, G%HI, haloshift=2, scale=US%L_T_to_m_s)
-      call hchksum(h, "Post-diabatic h", G%HI, haloshift=1, scale=GV%H_to_m)
+      call hchksum(h, "Post-diabatic h", G%HI, haloshift=1, scale=GV%H_to_MKS)
       call uvchksum("Post-diabatic [uv]h", CS%uhtr, CS%vhtr, G%HI, &
-                    haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
+                    haloshift=0, scale=GV%H_to_MKS*US%L_to_m**2)
     ! call MOM_state_chksum("Post-diabatic ", u, v, &
     !                       h, CS%uhtr, CS%vhtr, G, GV, haloshift=1)
       if (associated(tv%T)) call hchksum(tv%T, "Post-diabatic T", G%HI, haloshift=1, scale=US%C_to_degC)
@@ -1978,7 +1976,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   real :: conv2watt            ! A conversion factor from temperature fluxes to heat
                                ! fluxes [J m-2 H-1 C-1 ~> J m-3 degC-1 or J kg-1 degC-1]
   real :: conv2salt            ! A conversion factor for salt fluxes [m H-1 ~> 1] or [kg m-2 H-1 ~> 1]
-  real :: RL2_T2_rescale, Z_rescale, QRZ_rescale ! Unit conversion factors
   character(len=48) :: S_flux_units
 
   type(vardesc) :: vd_T, vd_S  ! Structures describing temperature and salinity variables.
@@ -2198,7 +2195,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
 
   ! This is here in case these values are used inappropriately.
   use_frazil = .false. ; bound_salinity = .false.
-  CS%tv%P_Ref = 2.0e7*US%kg_m3_to_R*US%m_s_to_L_T**2
+  CS%tv%P_Ref = 2.0e7*US%Pa_to_RL2_T2
   if (use_temperature) then
     call get_param(param_file, "MOM", "FRAZIL", use_frazil, &
                  "If true, water freezes if it gets too cold, and the "//&
@@ -2234,7 +2231,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                  "The pressure that is used for calculating the coordinate "//&
                  "density.  (1 Pa = 1e4 dbar, so 2e7 is commonly used.) "//&
                  "This is only used if USE_EOS and ENABLE_THERMODYNAMICS are true.", &
-                 units="Pa", default=2.0e7, scale=US%kg_m3_to_R*US%m_s_to_L_T**2)
+                 units="Pa", default=2.0e7, scale=US%Pa_to_RL2_T2)
 
   if (bulkmixedlayer) then
     call get_param(param_file, "MOM", "NKML", nkml, &
@@ -2862,7 +2859,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
     ! all examples. !###
     if (CS%debug) then
       call uvchksum("Pre ALE adjust init cond [uv]", CS%u, CS%v, G%HI, haloshift=1)
-      call hchksum(CS%h,"Pre ALE adjust init cond h", G%HI, haloshift=1, scale=GV%H_to_m)
+      call hchksum(CS%h,"Pre ALE adjust init cond h", G%HI, haloshift=1, scale=GV%H_to_MKS)
     endif
     call callTree_waypoint("Calling adjustGridForIntegrity() to remap initial conditions (initialize_MOM)")
     call adjustGridForIntegrity(CS%ALE_CSp, G, GV, CS%h )
@@ -2902,7 +2899,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
 
     if (CS%debug) then
       call uvchksum("Post ALE adjust init cond [uv]", CS%u, CS%v, G%HI, haloshift=1)
-      call hchksum(CS%h, "Post ALE adjust init cond h", G%HI, haloshift=1, scale=GV%H_to_m)
+      call hchksum(CS%h, "Post ALE adjust init cond h", G%HI, haloshift=1, scale=GV%H_to_MKS)
       if (use_temperature) then
         call hchksum(CS%tv%T, "Post ALE adjust init cond T", G%HI, haloshift=1, scale=US%C_to_degC)
         call hchksum(CS%tv%S, "Post ALE adjust init cond S", G%HI, haloshift=1, scale=US%S_to_ppt)
@@ -3117,16 +3114,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   call register_obsolete_diagnostics(param_file, CS%diag)
 
   if (use_frazil) then
-    if (query_initialized(CS%tv%frazil, "frazil", restart_CSp)) then
-      ! Test whether the dimensional rescaling has changed for heat content.
-      if ((US%J_kg_to_Q_restart*US%kg_m3_to_R_restart*US%m_to_Z_restart /= 0.0) .and. &
-          (US%J_kg_to_Q_restart*US%kg_m3_to_R_restart*US%m_to_Z_restart /= 1.0) ) then
-        QRZ_rescale = 1.0 / (US%J_kg_to_Q_restart*US%kg_m3_to_R_restart*US%m_to_Z_restart)
-        do j=js,je ; do i=is,ie
-          CS%tv%frazil(i,j) = QRZ_rescale * CS%tv%frazil(i,j)
-        enddo ; enddo
-      endif
-    else
+    if (.not.query_initialized(CS%tv%frazil, "frazil", restart_CSp)) then
       CS%tv%frazil(:,:) = 0.0
       call set_initialized(CS%tv%frazil, "frazil", restart_CSp)
     endif
@@ -3136,39 +3124,11 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
     CS%p_surf_prev_set = query_initialized(CS%p_surf_prev, "p_surf_prev", restart_CSp)
 
     if (CS%p_surf_prev_set) then
-      ! Test whether the dimensional rescaling has changed for pressure.
-      if ((US%kg_m3_to_R_restart*US%s_to_T_restart*US%m_to_L_restart /= 0.0) .and. &
-          (US%s_to_T_restart**2 /= US%kg_m3_to_R_restart * US%m_to_L_restart**2) ) then
-        RL2_T2_rescale = US%s_to_T_restart**2 / (US%kg_m3_to_R_restart*US%m_to_L_restart**2)
-        do j=js,je ; do i=is,ie
-          CS%p_surf_prev(i,j) = RL2_T2_rescale * CS%p_surf_prev(i,j)
-        enddo ; enddo
-      endif
-
       call pass_var(CS%p_surf_prev, G%domain)
     endif
   endif
 
-  if (use_ice_shelf .and. associated(CS%Hml)) then
-    if (query_initialized(CS%Hml, "hML", restart_CSp)) then
-      ! Test whether the dimensional rescaling has changed for depths.
-      if ((US%m_to_Z_restart /= 0.0) .and. (US%m_to_Z_restart /= 1.0) ) then
-        Z_rescale = 1.0 / US%m_to_Z_restart
-        do j=js,je ; do i=is,ie
-          CS%Hml(i,j) = Z_rescale * CS%Hml(i,j)
-        enddo ; enddo
-      endif
-    endif
-  endif
-
-  if (query_initialized(CS%ave_ssh_ibc, "ave_ssh", restart_CSp)) then
-    if ((US%m_to_Z_restart /= 0.0) .and. (US%m_to_Z_restart /= 1.0) ) then
-      Z_rescale = 1.0 / US%m_to_Z_restart
-      do j=js,je ; do i=is,ie
-        CS%ave_ssh_ibc(i,j) = Z_rescale * CS%ave_ssh_ibc(i,j)
-      enddo ; enddo
-    endif
-  else
+  if (.not.query_initialized(CS%ave_ssh_ibc, "ave_ssh", restart_CSp)) then
     if (CS%split) then
       call find_eta(CS%h, CS%tv, G, GV, US, CS%ave_ssh_ibc, eta, dZref=G%Z_ref)
     else
@@ -3194,10 +3154,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
 
   ! initialize stochastic physics
   call stochastics_init(CS%dt_therm, CS%G, CS%GV, CS%stoch_CS, param_file, diag, Time)
-
-  !### This could perhaps go here instead of in finish_MOM_initialization?
-  ! call fix_restart_scaling(GV)
-  ! call fix_restart_unit_scaling(US)
 
   call callTree_leave("initialize_MOM()")
   call cpu_clock_end(id_clock_init)
@@ -3225,11 +3181,6 @@ subroutine finish_MOM_initialization(Time, dirs, CS, restart_CSp)
 
   ! Pointers for convenience
   G => CS%G ; GV => CS%GV ; US => CS%US
-
-  !### Move to initialize_MOM?
-  call fix_restart_scaling(GV, unscaled=.true.)
-  call fix_restart_unit_scaling(US, unscaled=.true.)
-
 
   if (CS%use_particles) then
     call particles_init(CS%particles, G, CS%Time, CS%dt_therm, CS%u, CS%v)
@@ -3382,18 +3333,6 @@ subroutine set_restart_fields(GV, US, param_file, CS, restart_CSp)
   endif
 
   ! Register scalar unit conversion factors.
-  call register_restart_field(US%m_to_Z_restart, "m_to_Z", .false., restart_CSp, &
-                              "Height unit conversion factor", "Z meter-1")
-  call register_restart_field(GV%m_to_H_restart, "m_to_H", .false., restart_CSp, &
-                              "Thickness unit conversion factor", "H meter-1")
-  call register_restart_field(US%m_to_L_restart, "m_to_L", .false., restart_CSp, &
-                              "Length unit conversion factor", "L meter-1")
-  call register_restart_field(US%s_to_T_restart, "s_to_T", .false., restart_CSp, &
-                              "Time unit conversion factor", "T second-1")
-  call register_restart_field(US%kg_m3_to_R_restart, "kg_m3_to_R", .false., restart_CSp, &
-                              "Density unit conversion factor", "R m3 kg-1")
-  call register_restart_field(US%J_kg_to_Q_restart, "J_kg_to_Q", .false., restart_CSp, &
-                              "Heat content unit conversion factor.", units="Q kg J-1")
   call register_restart_field(CS%first_dir_restart, "First_direction", .false., restart_CSp, &
                               "Indicator of the first direction in split calculations.", "nondim")
 
