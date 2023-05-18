@@ -55,6 +55,8 @@ type, public :: ZB2020_CS ; private
                               !! by hyperviscous dissipation:
                               !! 0.0: no damping
                               !! 1.0: grid harmonic is removed after a step in time
+  real      :: outcrop_hmin   !< If thickness is lower than this parameter,
+                              !! grid point is regarded as land. [Z ~> m]
   real      :: DT             !< The (baroclinic) dynamics time step [T ~> s]
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
@@ -157,6 +159,11 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
                  "\t 0.0 - no damping\n" //&
                  "\t 1.0 - grid harmonic is removed after a step in time", &
                  units="nondim", default=0.2, do_not_log = CS%ssd_iter==-1)
+
+  call get_param(param_file, mdl, "ZB_OUTCROP_HMIN", CS%outcrop_hmin, &
+                 "If thickness is lower than this parameter, " //& 
+                 "grid point is regarded as land. ", &
+                 units="m", default=GV%Angstrom_H * 2.)
 
   call get_param(param_file, mdl, "DT", CS%dt, &
                  "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
@@ -372,7 +379,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) ) ! corner of the cell
     enddo ; enddo
 
-    call compute_masks(G, GV, h, mask_T, mask_q, k)
+    call compute_masks(G, GV, h, mask_T, mask_q, k, CS%outcrop_hmin)
     if (CS%id_maskT>0) then
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
         mask_T_3d(i,j,k) = mask_T(i,j)
@@ -845,7 +852,7 @@ end subroutine
 !! Method: compare layer thicknesses with Angstrom_H.
 !! Mask is computed separately for every vertical layer and
 !! for every time step.
-subroutine compute_masks(G, GV, h, mask_T, mask_q, k)
+subroutine compute_masks(G, GV, h, mask_T, mask_q, k, hmin)
   type(ocean_grid_type),        intent(in)    :: G      !< Ocean grid
   type(verticalGrid_type),      intent(in)    :: GV     !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -855,12 +862,9 @@ subroutine compute_masks(G, GV, h, mask_T, mask_q, k)
   real, dimension(SZIB_(G),SZJB_(G)),        &
                                 intent(inout) :: mask_q !< mask of wet points in q (CORNER) points [nondim]
   integer,                      intent(in)    :: k      !< index of vertical layer
+  real,                         intent(in)    :: hmin   !< Minimum layer thickness [Z ~> m]
 
-  real :: hmin       ! Minimum layer thickness
-                     ! beyond which we have boundary [H ~> m or kg m-2]
   integer :: i, j
-
-  hmin = GV%Angstrom_H * 2.
 
   mask_q(:,:) = 0.
   do J = G%JscB, G%JecB
