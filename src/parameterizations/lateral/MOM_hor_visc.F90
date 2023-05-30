@@ -212,6 +212,8 @@ type, public :: hor_visc_CS ; private
   integer :: id_FrictWork = -1, id_FrictWorkIntz = -1
   integer :: id_FrictWork_GME = -1
   integer :: id_normstress = -1, id_shearstress = -1
+  integer :: id_visc_limit_h_frac = -1
+  integer :: id_visc_limit_q_frac = -1
   !>@}
 
 end type hor_visc_CS
@@ -316,7 +318,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     vort_xy_q, & ! vertical vorticity at corner points [T-1 ~> s-1]
     sh_xy_q,   & ! horizontal shearing strain at corner points [T-1 ~> s-1]
     GME_coeff_q, &  !< GME coeff. at q-points [L2 T-1 ~> m2 s-1]
-    ShSt         ! A diagnostic array of shear stress [T-1 ~> s-1].
+    ShSt, &      ! A diagnostic array of shear stress [T-1 ~> s-1].
+    visc_limit_q_frac
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1) :: &
     KH_u_GME     !< Isopycnal height diffusivities in u-columns [L2 T-1 ~> m2 s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1) :: &
@@ -332,7 +335,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
     grid_Re_Kh, &    ! Grid Reynolds number for Laplacian horizontal viscosity at h points [nondim]
     grid_Re_Ah, &    ! Grid Reynolds number for Biharmonic horizontal viscosity at h points [nondim]
-    GME_coeff_h      ! GME coefficient at h-points [L2 T-1 ~> m2 s-1]
+    GME_coeff_h, &   ! GME coefficient at h-points [L2 T-1 ~> m2 s-1]
+    visc_limit_h_frac ! 
 
   ! Zanna-Bolton fields
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
@@ -546,7 +550,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   h_neglect, h_neglect3, inv_PI3, inv_PI6, &
   !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_GME, &
   !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
-  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt &
+  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt, &
+  !$OMP   visc_limit_h_frac, visc_limit_q_frac &
   !$OMP ) &
   !$OMP private( &
   !$OMP   i, j, k, n, &
@@ -1100,6 +1105,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           enddo ; enddo
         else
           do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+            visc_limit_h_frac(i,j,k) = Ah(i,j) / (hrat_min(i,j) * CS%Ah_Max_xx(i,j))
             Ah(i,j) = min(Ah(i,j), hrat_min(i,j) * CS%Ah_Max_xx(i,j))
           enddo ; enddo
         endif
@@ -1390,6 +1396,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           enddo ; enddo
         else
           do J=js-1,Jeq ; do I=is-1,Ieq
+            visc_limit_q_frac(I,J,k) = Ah(I,J) / (hrat_min(I,J) * CS%Ah_Max_xy(I,J))
             Ah(I,J) = min(Ah(I,J), hrat_min(I,J) * CS%Ah_Max_xy(I,J))
           enddo ; enddo
         endif
@@ -1623,7 +1630,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   enddo ! end of k loop
 
   if (CS%use_ZB2020) then
-    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
+    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, visc_limit_h_frac, visc_limit_q_frac, G, GV, CS%ZB2020)
 
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
@@ -1659,6 +1666,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     if (CS%id_dudy_bt > 0) call post_data(CS%id_dudy_bt, dudy_bt, CS%diag)
     if (CS%id_dvdx_bt > 0) call post_data(CS%id_dvdx_bt, dvdx_bt, CS%diag)
   endif
+
+  if (CS%id_visc_limit_h_frac>0)      call post_data(CS%id_visc_limit_h_frac, visc_limit_h_frac, CS%diag)
+  if (CS%id_visc_limit_q_frac>0)      call post_data(CS%id_visc_limit_q_frac, visc_limit_q_frac, CS%diag)
 
   if (CS%debug) then
     if (CS%Laplacian) then
@@ -2505,6 +2515,11 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
         'Biharmonic Horizontal Viscosity at q Points', 'm4 s-1', conversion=US%L_to_m**4*US%s_to_T)
     CS%id_grid_Re_Ah = register_diag_field('ocean_model', 'grid_Re_Ah', diag%axesTL, Time, &
         'Grid Reynolds number for the Biharmonic horizontal viscosity at h points', 'nondim')
+
+    CS%id_visc_limit_h_frac = register_diag_field('ocean_model', 'visc_limit_h_frac', diag%axesTL, Time, &
+        'Value of the biharmonic viscosity limiter at h points', 'nondim')
+    CS%id_visc_limit_q_frac = register_diag_field('ocean_model', 'visc_limit_q_frac', diag%axesBL, Time, &
+        'Value of the biharmonic viscosity limiter at q points', 'nondim')
 
     if (CS%id_grid_Re_Ah > 0) &
       ! Compute the smallest biharmonic viscosity capable of modifying the

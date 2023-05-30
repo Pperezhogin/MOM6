@@ -56,8 +56,20 @@ type, public :: ZB2020_CS ; private
                               !! 0.0: no damping
                               !! 1.0: grid harmonic is removed after a step in time
   real      :: outcrop_hmin   !< If thickness is lower than this parameter,
-                              !! grid point is regarded as land. [Z ~> m]
+                              !! grid point is regarded as land [Z ~> m]
+  real      :: outcrop_hnegl  !< Below this thickness momentum contribution of 
+                              !! ZB parameterization will be attenuated [Z ~> m]
+  real      :: R_diss         !< The non-dimensional parameter which turnes off
+                              !! the ZB parameterization in the regions of 
+                              !! geostrophically-unbalanced flows (Klower 2018, Juricke2020,2019)
+  integer   :: c_diss_type    !< Type of c_diss coefficient
+  real      :: KS_coef        !< Kill-switch coefficient
+  real      :: CFL_limit      !< Turn-off parameterization if advection CFL limit is achieved
   real      :: DT             !< The (baroclinic) dynamics time step [T ~> s]
+
+  !> A negligible parameter which avoids division by zero, but is too small to
+  !! modify physical values.
+  real :: subroundoff = 1e-30  
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -67,6 +79,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_S_11 = -1
   integer :: id_S_22 = -1
   integer :: id_S_12 = -1
+  integer :: id_c_diss = -1
   !>@}
 
 end type ZB2020_CS
@@ -165,6 +178,27 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
                  "grid point is regarded as land. ", &
                  units="m", default=GV%Angstrom_H * 2.)
 
+  call get_param(param_file, mdl, "ZB_OUTCROP_HNEGLECT", CS%outcrop_hnegl, &
+                 "Below this thickness momentum contribution of " //&
+                 "ZB parameterization will be attenuated", &
+                 units="m", default=0.)
+
+  call get_param(param_file, mdl, "ZB_R_diss", CS%R_diss, &
+                 "The non-dimensional parameter which turnes off " //&
+                 "the ZB parameterization in the regions of " //&
+                 "geostrophically-unbalanced flows " //&
+                 "(Klower 2018, Juricke2020,2019)", &
+                 units="nondim", default=-1.)
+
+  call get_param(param_file, mdl, "ZB_C_DISS_SCHEME", CS%c_diss_type, &
+                 "0: Klower scheme, 1: new improved scheme", default=0)
+
+  call get_param(param_file, mdl, "ZB_KILL_SWITCH", CS%KS_coef, &
+                 "fraction relative to the CFL limit for biharmonic diffusion", default=-1.)
+  
+  call get_param(param_file, mdl, "ZB_CFL_LIMIT", CS%CFL_limit, &
+                 "fraction relative to the CFL limit for adveciton", default=-1.)
+
   call get_param(param_file, mdl, "DT", CS%dt, &
                  "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
                  fail_if_missing=.true.)
@@ -196,6 +230,9 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_S_12 = register_diag_field('ocean_model', 'S_12', diag%axesBL, Time, &
       'Off-diagonal term in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
+  CS%id_c_diss  = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
+      'Klower (2018) attenuation coefficient', '1', conversion=1.)
+
 end subroutine ZB_2020_init
 
 !> Baroclinic Zanna-Bolton-2020 parameterization, see
@@ -218,7 +255,7 @@ end subroutine ZB_2020_init
 !! k_BC = - amplitude * grid_cell_area
 !! amplitude = 0.1..10 (approx)
 
-subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
+subroutine Zanna_Bolton_2020(u, v, h, fx, fy, visc_limit_h_frac, visc_limit_q_frac, G, GV, CS)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
   type(ZB2020_CS),               intent(in)  :: CS     !< ZB2020 control structure.
@@ -236,7 +273,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                                  intent(out) :: fy     !< Meridional acceleration due to convergence
                                                        !! of along-coordinate stress tensor [L T-2 ~> m s-2]
-
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
+                                 intent(in) :: visc_limit_h_frac
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), &
+                                 intent(in) :: visc_limit_q_frac
   ! Arrays defined in h (CENTER) points
   real, dimension(SZI_(G),SZJ_(G)) :: &
     dx_dyT, &          ! dx/dy at h points [nondim]
@@ -253,7 +293,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ssd_11, &          ! Diagonal component of hyperviscous stress [L2 T-2 ~> m2 s-2]
     ssd_11_coef, &     ! Viscosity coefficient in hyperviscous stress in center points
                        ! [L2 T-1 ~> m2 s-1]
-    mask_T             ! Mask of wet points in T (CENTER) points [nondim]
+    mask_T, &          ! Mask of wet points in T (CENTER) points [nondim]
+    c_diss             ! attenuation parameter (Klower 2018, Juricke2019,2020) [nondim]
 
   ! Arrays defined in q (CORNER) points
   real, dimension(SZIB_(G),SZJB_(G)) :: &
@@ -282,8 +323,9 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     h_v                ! Thickness interpolated to v points [H ~> m or kg m-2].
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
-    mask_T_3d, &       ! Mask of wet points in T (CENTER) points [nondim]
-    S_11_3d, S_22_3d   ! Diagonal terms in the ZB stress tensor [L2 T-2 ~> m2 s-2]
+    mask_T_3d, &        ! Mask of wet points in T (CENTER) points [nondim]
+    S_11_3d, S_22_3d, & ! Diagonal terms in the ZB stress tensor [L2 T-2 ~> m2 s-2]
+    c_diss_3d           ! attenuation parameter (Klower 2018, Juricke2019,2020) [nondim]
 
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
     mask_q_3d, &       ! Mask of wet points in q (CORNER) points [nondim]
@@ -299,6 +341,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   real :: k_bc         ! Constant in from of the parameterization [L2 ~> m2]
                        ! Related to the amplitude as follows:
                        ! k_bc = - amplitude * grid_cell_area < 0
+  real :: CoriolisT    ! Coriolis parameter at T points [T-1 ~> s-1]
+  real :: shear        ! sqrt(sh_xx**2 + sh_xy**2) [L-1 ~> s-1]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
@@ -378,6 +422,33 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
       vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) ) ! corner of the cell
     enddo ; enddo
+
+    if ((CS%R_diss > 0) .and. (CS%c_diss_type <= 2)) then
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        if (CS%c_diss_type == 0) then
+          shear = sqrt(sh_xx(i,j)**2 + 0.25 * ( &
+            (sh_xy(I-1,J-1)**2 + sh_xy(I,J)**2)      &
+          + (sh_xy(I-1,J)**2 + sh_xy(I,J-1)**2)      &
+          ))
+        elseif (CS%c_diss_type > 0 ) then
+          shear = sh_xx(i,j)**2 + 0.25 * ( &
+            ((sh_xy(I-1,J-1)**2+vort_xy(I-1,J-1)**2) + (sh_xy(I,J)**2+vort_xy(I,J)**2))      &
+          + ((sh_xy(I-1,J)**2+vort_xy(I-1,J)**2) + (sh_xy(I,J-1)**2+vort_xy(I,J-1)**2))      &
+          )
+        endif
+        ! Absolute value in Center points
+        CoriolisT = abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
+                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1))))
+        
+        if (CS%c_diss_type == 0) then
+          c_diss(i,j) = CoriolisT / (CS%subroundoff + CoriolisT + 1./CS%R_diss * shear)
+        elseif (CS%c_diss_type == 1) then
+          c_diss(i,j) = CoriolisT**2 / (CS%subroundoff + CoriolisT**2 + 1./CS%R_diss * shear)
+        elseif (CS%c_diss_type == 2) then
+          c_diss(i,j) = 1. / (1. + 1./CS%R_diss * (shear/(CoriolisT+CS%subroundoff)**2)**2)
+        endif
+      enddo ; enddo
+    endif
 
     call compute_masks(G, GV, h, mask_T, mask_q, k, CS%outcrop_hmin)
     if (CS%id_maskT>0) then
@@ -513,6 +584,56 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_22)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, q=S_12)
 
+    if ((CS%R_diss > 0) .and. (CS%c_diss_type == 3)) then
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        shear = - (S_11(i,j) + S_22(i,j)) / G%areaT(i,j)
+        ! Absolute value in Center points
+        CoriolisT = abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
+                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1))))
+        
+        c_diss(i,j) = 1. / (1. + (shear/(CS%R_diss * (CoriolisT+CS%subroundoff)**2))**2)
+      enddo ; enddo
+    endif
+
+    if (CS%c_diss_type == 4) then
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        if ( (0.5 * ABS(u(i,j,k) + u(i-1,j,k)) * CS%DT * G%IdxT(i,j) > CS%CFL_limit) &
+        .OR. (0.5 * ABS(v(i,j,k) + v(i,j-1,k)) * CS%DT * G%IdyT(i,j) > CS%CFL_limit) ) then
+          c_diss(i,j) = 0.
+        else
+          c_diss(i,j) = 1.
+        endif
+      enddo; enddo
+    endif
+
+    if (CS%R_diss > 0. .or. CS%c_diss_type == 4) then
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        S_11(i,j) = S_11(i,j) * c_diss(i,j)
+        S_22(i,j) = S_22(i,j) * c_diss(i,j)
+      enddo ; enddo
+      do J=js-1,Jeq ; do I=is-1,Ieq
+        S_12(I,J) = S_12(I,J) * &
+        0.25 * ((c_diss(I,J) + c_diss(I+1,J+1)) + (c_diss(I,J+1) + c_diss(I+1,J)))
+      enddo ; enddo
+    endif
+
+    if (CS%KS_coef > 0.) then
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        c_diss(i,j) = 1.0
+        if (visc_limit_h_frac(i,j,k) > CS%KS_coef) then
+          c_diss(i,j) = 0.
+          S_11(i,j) = 0.
+          S_22(i,j) = 0.
+        endif
+      enddo ; enddo
+
+      do J=js-1,Jeq ; do I=is-1,Ieq
+        if (visc_limit_q_frac(I,J,k) > CS%KS_coef) then
+          S_12(I,J) = 0.
+        endif
+      enddo ; enddo
+    endif
+
     if (CS%ssd_iter>-1) then
       do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         S_11(i,j) = S_11(i,j) + ssd_11(i,j)
@@ -541,16 +662,29 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       enddo; enddo
     endif
 
+    if (CS%id_c_diss>0) then
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        c_diss_3d(i,j,k) = c_diss(i,j)
+      enddo; enddo
+    endif
+
     ! Weight with interface height (Line 1478 of MOM_hor_visc.F90)
     ! Note that reduction is removed
     do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       S_11(i,j) = S_11(i,j) * h(i,j,k)
       S_22(i,j) = S_22(i,j) * h(i,j,k)
+      if (CS%outcrop_hnegl > h_neglect) then
+        S_11(i,j) = S_11(i,j) * h(i,j,k) / (h(i,j,k) + CS%outcrop_hnegl)
+        S_22(i,j) = S_22(i,j) * h(i,j,k) / (h(i,j,k) + CS%outcrop_hnegl)
+      endif
     enddo ; enddo
 
     ! Free slip (Line 1487 of MOM_hor_visc.F90)
     do J=js-1,Jeq ; do I=is-1,Ieq
       S_12(I,J) = S_12(I,J) * (hq(I,J) * G%mask2dBu(I,J))
+      if (CS%outcrop_hnegl > h_neglect) then
+        S_12(I,J) = S_12(I,J) * hq(I,J) / (hq(I,J) + CS%outcrop_hnegl)
+      endif
     enddo ; enddo
 
     ! Evaluate 1/h x.Div(h S) (Line 1495 of MOM_hor_visc.F90)
@@ -586,6 +720,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   if (CS%id_S_22>0)     call post_data(CS%id_S_22, S_22_3d, CS%diag)
 
   if (CS%id_S_12>0)     call post_data(CS%id_S_12, S_12_3d, CS%diag)
+
+  if (CS%id_c_diss>0)   call post_data(CS%id_c_diss, c_diss_3d, CS%diag)
 
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
