@@ -2,13 +2,13 @@
 1 1 1 0 0 0
 "prog_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
 "ave_prog_%4yr_%3dy", 30,"days",1,"days","Time",365,"days"
-"cont_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
+#"cont_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
 "mom_%4yr_%3dy",      30,"days",1,"days","Time",365,"days"
 #"bt_mom_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
 #"visc_%4yr_%3dy",     30,"days",1,"days","Time",365,"days"
 "energy_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
 #"ML_TKE_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
-"forcing_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
+#"forcing_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
 
 #This is the field section of the diag_table.
 
@@ -39,8 +39,8 @@
 #===========================
 #"ocean_model","dhdt","dhdt","cont_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","wd","wd","cont_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","uh","uh","cont_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","vh","vh","cont_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","uh","uh","cont_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","vh","vh","cont_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","uhGM","uhGM","cont_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","vhGM","vhGM","cont_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","uhbt","uhbt","cont_%4yr_%3dy","all",.true.,"none",2
@@ -91,12 +91,6 @@
 
 "ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","kbc_ZB2020","kbc_ZB2020","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","maskT","maskT","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","maskq","maskq","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","S_11f","S_11f","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","S_22f","S_22f","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","S_12f","S_12f","mom_%4yr_%3dy","all",.false.,"none",2
 
 # Barotropic Momentum Balance Terms:
 # (only available with split time stepping.)
@@ -126,15 +120,15 @@
 #
 # Kinetic Energy Balance Terms:
 #=============================
-"ocean_model","KE","KE","energy_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","KE","KE","energy_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","dKE_dt","dKE_dt","energy_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","PE_to_KE","PE_to_KE","energy_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","PE_to_KE","PE_to_KE","energy_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","KE_Coradv","KE_Coradv","energy_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","KE_adv","KE_adv","energy_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","KE_visc","KE_visc","energy_%4yr_%3dy","all",.true.,"none",2
 "ocean_model","KE_horvisc","KE_horvisc","energy_%4yr_%3dy","all",.true.,"none",2
 "ocean_model","KE_ZB2020","KE_ZB2020","energy_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","Rd1","Rd1","energy_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","Rd1","Rd1","energy_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","KE_dia","KE_dia","energy_%4yr_%3dy","all",.true.,"none",2
 #
 # Mixed Layer TKE Budget Terms:
@@ -149,13 +143,13 @@
 
 # Surface Forcing:
 #=================
-"ocean_model","taux","taux","forcing_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","tauy","tauy","forcing_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","taux","taux","forcing_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","tauy","tauy","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","ustar","ustar","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","PRCmE","PRCmE","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","SW","SW","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","LwLatSens","LwLatSens","forcing_%4yr_%3dy","all",.true.,"none",2
-"ocean_model","p_surf","p_surf","forcing_%4yr_%3dy","all",.true.,"none",2
+#"ocean_model","p_surf","p_surf","forcing_%4yr_%3dy","all",.true.,"none",2
 #"ocean_model","salt_flux","salt_flux","forcing_%4yr_%3dy","all",.true.,"none",2
 #
 

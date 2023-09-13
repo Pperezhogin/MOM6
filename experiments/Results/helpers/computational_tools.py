@@ -5,6 +5,69 @@ import numpy.fft as npfft
 from scipy import signal
 import xarray as xr
 import os
+import gcm_filters
+
+def grid_spacing(param):
+        IdxCv = 1. / param.dxCv.values
+        IdyCu = 1. / param.dyCu.values
+        dyCv = param.dyCv.values
+        dxCu = param.dxCu.values
+        IareaBu = 1. / (param.dxBu * param.dyBu).values
+        return IdxCv, IdyCu, dyCv, dxCu, IareaBu
+
+def velocity(psi, IdxCv, IdyCu, dyCv, dxCu, IareaBu):
+    '''
+    u = -d psi / dy
+    v = d psi / dx
+    psi in Q points
+    '''
+    u = - (psi[1:,:] - psi[:-1,:]) * IdyCu
+    v = (psi[:,1:] - psi[:,:-1]) * IdxCv
+    return u,v
+
+def vorticity(u, v, IdxCv, IdyCu, dyCv, dxCu, IareaBu):
+    vdy = v * dyCv
+    dvdx = (vdy[:,1:]-vdy[:,:-1])*IareaBu[:,1:-1]
+    
+    udy = u * dxCu
+    dudy = (udy[1:,:] - udy[:-1])*IareaBu[1:-1,:]
+    
+    RV = dvdx[1:-1,:] - dudy[:,1:-1]
+    return RV
+    
+def laplace(psi, IdxCv, IdyCu, dyCv, dxCu, IareaBu):
+    u, v = velocity(psi, IdxCv, IdyCu, dyCv, dxCu, IareaBu)
+    return vorticity(u, v, IdxCv, IdyCu, dyCv, dxCu, IareaBu)
+    
+def compute_diag(psi, IdxCv, IdyCu, dyCv, dxCu, IareaBu):
+    Ny, Nx = psi.shape
+    
+    D = np.zeros((Ny-2,Nx-2))
+    for j in range(1,Ny-1):
+        for i in range(1,Nx-1):
+            p = 0 * psi
+            p[j,i] = 1.
+            D[j-1,i-1] = laplace(p, IdxCv, IdyCu, dyCv, dxCu, IareaBu)[j-1,i-1]
+    return D
+
+def jacobi_iteration(RV, param, eps=1e-6):
+    '''
+    Solves the Laplace euqation Laplace(psi) = RV,
+    where psi is the streamfunction accounting for the 
+    boundary condition (psi=0). RV is the RHS
+    which is defined inside the domain, i.e.
+    commonly pass ds['R4'].RV.isel(Time=-1,zl=0)[1:-1,1:-1]
+    '''
+    grid = grid_spacing(param)
+    Ny, Nx = RV.shape
+    psi = np.zeros((Ny+2,Nx+2))
+    D = compute_diag(psi, *grid)
+    for i in range(1000000000):
+        psi[1:-1,1:-1] = (RV-(laplace(psi, *grid)-D*psi[1:-1,1:-1]))/D
+        rel_residual = np.sqrt(((RV - laplace(psi, *grid))**2).mean()) / np.sqrt(((RV)**2).mean())
+        if (rel_residual < eps):
+            break
+    return psi
 
 def optimal_amplitude(ZBx,ZBy,Smagx,Smagy,SGSx,SGSy,u,v,amp_Eng):
     '''
@@ -264,7 +327,7 @@ def select_LatLon(array, Lat=(35,45), Lon=(5,15)):
     return array.sel({x.name: slice(Lon[0],Lon[1]), 
                       y.name: slice(Lat[0],Lat[1])})
 
-def remesh(input, target):
+def remesh(input, target, fillna=True):
     '''
     Input and target should be xarrays of any type (u-array, v-array, q-array, h-array).
     Datasets are prohibited.
@@ -295,7 +358,10 @@ def remesh(input, target):
     ratioy = math.ceil(ratioy)
     
     # B.C.
-    result = input.fillna(0)
+    if fillna:
+        result = input.fillna(0)
+    else:
+        result = input
     
     if (ratiox > 1 or ratioy > 1):
         # Coarsening; x_input.name returns 'xq' or 'xh'
@@ -307,7 +373,9 @@ def remesh(input, target):
 
     # Interpolate if needed
     if not x_result.equals(x_target) or not y_result.equals(y_target):
-        result = result.interp({x_result.name: x_target, y_result.name: y_target}).fillna(0)
+        result = result.interp({x_result.name: x_target, y_result.name: y_target})
+        if fillna:
+            result = result.fillna(0)
 
     # Remove unnecessary coordinates
     if x_target.name != x_input.name:
@@ -316,6 +384,28 @@ def remesh(input, target):
         result = result.drop_vars(y_input.name)
     
     return result
+
+def gaussian_remesh(_input, target, FGR=2):
+    '''
+    input - xr.DataArray() on high-resolution grid
+    target - any xr.DataArray() containing target coordinates;
+    returns filtered and coarsegrained version of input_field
+    '''
+    # Define grid ratio
+    ratio = math.ceil(np.diff(x_coord(target))[0] / np.diff(x_coord(_input))[0])
+
+    G = gcm_filters.Filter(filter_scale = ratio * FGR, dx_min=1) 
+    
+    # Find spatial coordinates
+    x = 'xh' if 'xh' in _input.dims else 'xq'
+    y = 'yh' if 'yh' in _input.dims else 'yq'    
+    
+    filtered = G.apply(_input, dims=(y,x))
+    
+    # Coarsegrain
+    coarsegrained = remesh(filtered, target)
+    
+    return coarsegrained
 
 def compute_isotropic_KE(u_in, v_in, dx, dy, Lat=(35,45), Lon=(5,15), window='hann', 
         nfactor=2, truncate=True, detrend='linear', window_correction=True, nd_wavenumber=False):
@@ -378,8 +468,8 @@ def compute_isotropic_cospectrum(u_in, v_in, fu_in, fv_in, dx, dy, Lat=(35,45), 
     # Interpolate to the center of the cells
     u = remesh(u_in, dx)
     v = remesh(v_in, dy)
-    fu = remesh(fu_in.transpose(*u_in.dims), dx)
-    fv = remesh(fv_in.transpose(*v_in.dims), dy)
+    fu = remesh(fu_in, dx).transpose(*u.dims)
+    fv = remesh(fv_in, dy).transpose(*v.dims)
 
     # Select desired Lon-Lat square
     u = select_LatLon(u,Lat,Lon)

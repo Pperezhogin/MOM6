@@ -5,8 +5,9 @@ import os
 from PIL import Image
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import cmocean
+import imageio
 
-def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loop=0):
+def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loop=0, deezering=True):
     '''
     See https://pythonprogramming.altervista.org/png-to-gif/
     fun(i) - a function creating one snapshot, has only one input:
@@ -22,7 +23,10 @@ def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loo
         fun(i)
         plt.savefig('.frame.png', dpi=dpi, bbox_inches='tight')
         plt.close()
-        frames.append(Image.open('.frame.png').convert('RGB'))
+        if deezering:
+            frames.append(Image.open('.frame.png').convert('RGB'))
+        else:
+            frames.append(Image.open('.frame.png'))
         print(f'Frame {i} is created', end='\r')
     os.system('rm .frame.png')
     # How long to persist one frame in milliseconds to have a desired FPS
@@ -35,6 +39,65 @@ def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loo
         duration=duration,
         loop=loop)
     
+def merge_gifs(gif_files, output_file, fps=20):
+    '''
+    Note it is purely chatgpt code
+    '''
+    # Get a list of all GIF files in the input folder
+
+    # Create a list to store individual frames
+    frames = []
+
+    # Read each GIF file and extract frames
+    for gif_file in gif_files:
+        gif_path = os.path.join(gif_file)
+        try:
+            with imageio.get_reader(gif_path) as reader:
+                for frame in reader:
+                    frames.append(frame)
+        except Exception as e:
+            print(f"Error reading {gif_file}: {e}")
+
+    # Write the merged frames to the output GIF
+    try:
+        with imageio.get_writer(output_file, mode='I', duration=1000//fps, loop=0) as writer:
+            for frame in frames:
+                writer.append_data(frame)
+        print(f"Merged {len(gif_files)} GIFs into {output_file}")
+    except Exception as e:
+        print(f"Error writing {output_file}: {e}")
+
+def split_gif(input_file, output_folder, n):
+    '''
+    Note it is purely chatgpt code
+    '''
+    try:
+        with imageio.get_reader(input_file) as reader:
+            num_frames = len(reader)
+            frames_per_segment = num_frames // n
+
+            if frames_per_segment == 0:
+                print("Cannot split into that many segments. Try a smaller value of n.")
+                return
+
+            for i in range(n):
+                start_frame = i * frames_per_segment
+                end_frame = (i + 1) * frames_per_segment if i < n - 1 else num_frames
+
+                os.system('mkdir -p ' + output_folder)
+                output_file = os.path.join(output_folder, f"segment_{i}.gif")
+
+                with imageio.get_writer(output_file, mode='I', duration=reader.get_meta_data()['duration'], loop=0) as writer:
+                    for frame_number in range(start_frame, end_frame):
+                        frame = reader.get_data(frame_number)
+                        writer.append_data(frame)
+
+                print(f"Segment {i} saved as {output_file}")
+
+        print(f"Split {input_file} into {n} segments")
+    except Exception as e:
+        print(f"Error splitting {input_file}: {e}")
+    
 def default_rcParams(kw={}):
     '''
     Also matplotlib.rcParamsDefault contains the default values,
@@ -46,12 +109,14 @@ def default_rcParams(kw={}):
     plt.plot()
     plt.close()
     rcParams = matplotlib.rcParamsDefault.copy()
-    try:
-        rcParams.pop('backend') # can break inlining
-    except:
-        pass
-    matplotlib.rcParams.update(rcParams)
     
+    # We do not change backend because it can break
+    # inlining; Also, 'backend' key is broken and 
+    # we cannot use pop method
+    for key, val in rcParams.items():
+        if key != 'backend':
+            rcParams[key] = val
+
     matplotlib.rcParams.update({
         'font.family': 'MathJax_Main',
         'mathtext.fontset': 'cm',
@@ -144,3 +209,23 @@ def imshow(_q, cbar=True, location='right', cbar_label=None, ax=None, cmap=None,
     # Return axis to initial image
     plt.sca(ax)
     return im
+
+def set_letters(x=-0.2, y=1.05, fontsize=11, letters=['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p'], color='k'):
+    fig = plt.gcf()
+    axes = fig.axes
+    j = 0
+    for ax in axes:
+        if hasattr(ax, 'collections'):
+            if len(ax.collections) > 0:
+                collection = ax.collections[0]
+            else:
+                collection = ax.collections
+            if isinstance(collection, matplotlib.collections.LineCollection):
+                print('Colorbar-like object skipped')
+            else:
+                try:
+                    ax.text(x,y,f'({letters[j]})', transform = ax.transAxes, fontweight='bold', fontsize=fontsize, color=color)
+                except:
+                    print('Cannot set letter', letters[j])
+                j += 1
+        

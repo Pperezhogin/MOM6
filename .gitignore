@@ -19,3 +19,9 @@ experiments/test*
 experiments/Results/figures/*
 experiments/Results/*.pdf
 experiments/Results/*.png
+experiments/Results/*.gif
+experiments/Results/site-visit/*
+experiments/Results/Paper-Figures/*
+experiments/Results/Cs-ZB/*
+experiments/Results/presentation/*
+experiments/Results/SGS_generator/*

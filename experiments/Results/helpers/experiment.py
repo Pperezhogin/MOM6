@@ -6,7 +6,6 @@ from functools import cached_property
 from helpers.computational_tools import rename_coordinates, remesh, compute_isotropic_KE, compute_isotropic_cospectrum, compute_isotropic_PE, compute_KE_time_spectrum, mass_average, Lk_error, select_LatLon, diffx_uq, diffy_vq, diffx_tv, diffy_tu, prodx_uq, prody_vq, filter_iteration, filter_AD
 from helpers.netcdf_cache import netcdf_property
 
-Averaging_Time = slice(3650,7300)
 class main_property(cached_property):
     '''
     https://stackoverflow.com/questions/9541025/how-to-copy-a-python-class
@@ -36,21 +35,23 @@ class Experiment:
         if not os.path.exists(os.path.join(self.folder, 'ocean_geometry.nc')):
             print('Error, cannot find files in folder'+self.folder)
 
-    def remesh(self, target, key, compute=False):
+    def remesh(self, target, key, compute=False, operator=remesh):
         '''
         Returns object "experiment", where "Main variables"
         are coarsegrained according to resolution of the target experiment
+        operator - filtering/coarsegraining operator 
         '''
 
         # The coarsegrained experiment is no longer attached to the folder
         result = Experiment(folder=self.folder, key=key)
+        result.operator = operator
 
         # Coarsegrain "Main variables" explicitly
         for key in Experiment.get_list_of_main_properties():
             if compute:
-                setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)).compute())
+                setattr(result, key, operator(self.__getattribute__(key),target.__getattribute__(key)).compute())
             else:
-                setattr(result, key, remesh(self.__getattribute__(key),target.__getattribute__(key)))
+                setattr(result, key, operator(self.__getattribute__(key),target.__getattribute__(key)))
 
         result.param = target.param # copy coordinates from target experiment
         result._hires = self # store reference to the original experiment
@@ -76,6 +77,14 @@ class Experiment:
             errors_dict[feature] = error
 
         return errors_list, errors_dict
+    
+    @property
+    def Averaging_time(self):
+        if np.max(self.prog.Time) > 3650:
+            Averaging_time = slice(3650,7300)
+        else:
+            Averaging_time = slice(1825,3650)
+        return Averaging_time
 
     @classmethod
     def get_list_of_netcdf_properties(cls):
@@ -208,30 +217,30 @@ class Experiment:
     #-------------------  Mean flow and variability  --------------------#
     @netcdf_property
     def ssh_mean(self):
-        return self.ea.isel(zi=0).sel(Time=Averaging_Time).mean(dim='Time')
+        return self.ea.isel(zi=0).sel(Time=self.Averaging_time).mean(dim='Time')
 
     @netcdf_property
     def ssh_std(self):
-        return self.e.isel(zi=0).sel(Time=Averaging_Time).std(dim='Time')
+        return self.e.isel(zi=0).sel(Time=self.Averaging_time).std(dim='Time')
 
     @netcdf_property
     def u_mean(self):
-        return self.ua.sel(Time=Averaging_Time).mean(dim='Time')
+        return self.ua.sel(Time=self.Averaging_time).mean(dim='Time')
 
     @netcdf_property
     def v_mean(self):
-        return self.va.sel(Time=Averaging_Time).mean(dim='Time')
+        return self.va.sel(Time=self.Averaging_time).mean(dim='Time')
 
     @netcdf_property
     def h_mean(self):
-        return self.ha.sel(Time=Averaging_Time).mean(dim='Time')
+        return self.ha.sel(Time=self.Averaging_time).mean(dim='Time')
 
     @netcdf_property
     def e_mean(self):
-        return self.ea.sel(Time=Averaging_Time).mean(dim='Time')
+        return self.ea.sel(Time=self.Averaging_time).mean(dim='Time')
 
     def average(self, prop):
-        return eval(f'self.{prop}').sel(Time=Averaging_Time).mean(dim='Time')
+        return eval(f'self.{prop}').sel(Time=self.Averaging_time).mean(dim='Time')
 
     #-----------------------  Spectral analysis  ------------------------#
     @netcdf_property
@@ -245,19 +254,19 @@ class Experiment:
 
     @netcdf_property
     def KE_spectrum(self):
-        return self.KE_spectrum_series.sel(Time=Averaging_Time).mean(dim='Time')
+        return self.KE_spectrum_series.sel(Time=self.Averaging_time).mean(dim='Time')
 
     @netcdf_property
     def KE_spectrum_global(self):
-        return self.KE_spectrum_global_series.sel(Time=Averaging_Time).mean(dim='Time')
+        return self.KE_spectrum_global_series.sel(Time=self.Averaging_time).mean(dim='Time')
     
     def transfer(self, fx, fy, **kw):
         return compute_isotropic_cospectrum(self.u, self.v, fx, fy,
-            self.param.dxT, self.param.dyT, **kw).sel(Time=Averaging_Time).mean(dim='Time')
+            self.param.dxT, self.param.dyT, **kw).sel(Time=self.Averaging_time).mean(dim='Time')
     
     def power(self, fx, fy, **kw):
         return 2*compute_isotropic_KE(fx, fy,
-            self.param.dxT, self.param.dyT, **kw).sel(Time=Averaging_Time).mean(dim='Time')
+            self.param.dxT, self.param.dyT, **kw).sel(Time=self.Averaging_time).mean(dim='Time')
 
     @netcdf_property
     def Smagorinsky_transfer(self):
@@ -266,10 +275,19 @@ class Experiment:
     @netcdf_property
     def ZB_transfer(self):
         return self.transfer(self.mom.ZB2020u, self.mom.ZB2020v)
+    
+    @netcdf_property
+    def GZ_transfer(self):
+        return self.transfer(self.mom.CNNu, self.mom.CNNv)
+    
+    @netcdf_property
+    def JH_transfer(self):
+        return self.transfer(self.mom.JHu, self.mom.JHv)
         
     @property
     def Model_transfer(self):
-        return self.Smagorinsky_transfer+self.ZB_transfer
+        return self.transfer(self.mom.diffu, self.mom.diffv)
+        #return self.Smagorinsky_transfer+self.ZB_transfer
     
     @netcdf_property
     def SGS_transfer(self):
@@ -315,23 +333,32 @@ class Experiment:
         hint = self.e.isel(zi=1)+H0 # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L655
         mask = self.h.isel(zl=1)>1e-9 # mask of wet points. Boundaries have values 1e-10; https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L656
         hint = hint * mask
-        return compute_isotropic_PE(hint, self.param.dxT, self.param.dyT).sel(Time=Averaging_Time).mean(dim='Time')
+        return compute_isotropic_PE(hint, self.param.dxT, self.param.dyT).sel(Time=self.Averaging_time).mean(dim='Time')
 
     @property
     def EKE_spectrum_direct(self):
         # Difference with EKE_spectrum 0.7%
-        u_eddy = self.u.sel(Time=Averaging_Time) - self.u_mean
-        v_eddy = self.v.sel(Time=Averaging_Time) - self.v_mean
+        u_eddy = self.u.sel(Time=self.Averaging_time) - self.u_mean
+        v_eddy = self.v.sel(Time=self.Averaging_time) - self.v_mean
         return compute_isotropic_KE(u_eddy, v_eddy, self.param.dxT, self.param.dyT).mean(dim='Time')
 
     @netcdf_property
     def KE_time_spectrum(self):
-        return compute_KE_time_spectrum(self.ua, self.va, Time=Averaging_Time)
+        return compute_KE_time_spectrum(self.ua, self.va, Time=self.Averaging_time)
 
     #-------------------------  KE, MKE, EKE  ---------------------------#        
     @netcdf_property
     def KE(self):
         return 0.5 * (remesh(self.u**2, self.e) + remesh(self.v**2, self.e))
+    
+    @property
+    def logKEz(self):
+        return np.log10(0.5 * (self.h * (remesh(self.u**2, self.e) + remesh(self.v**2, self.e))).sum('zl'))
+    
+    @netcdf_property
+    def EKE(self):
+        MKE = 0.5 * (remesh(self.u_mean**2, self.e) + remesh(self.v_mean**2, self.e))
+        return np.maximum(self.KE.sel(Time=self.Averaging_time).mean(dim='Time') - MKE,0)
     
     @property
     def velocity(self):
@@ -350,7 +377,7 @@ class Experiment:
     
     @netcdf_property
     def EKE_joul(self):
-        return self.KE_joul_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MKE_joul
+        return self.KE_joul_series.sel(Time=self.Averaging_time).mean(dim='Time') - self.MKE_joul
     
     #-------------------------  PE, MPE, EPE  ---------------------------#
     def PE_joul(self, e):
@@ -382,11 +409,49 @@ class Experiment:
     
     @netcdf_property
     def EPE_joul(self):
-        return self.PE_joul_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE_joul
+        return self.PE_joul_series.sel(Time=self.Averaging_time).mean(dim='Time') - self.MPE_joul
     
     @netcdf_property
     def EPE_ssh(self):
-        return self.PE_ssh_series.sel(Time=Averaging_Time).mean(dim='Time') - self.MPE_ssh
+        return self.PE_ssh_series.sel(Time=self.Averaging_time).mean(dim='Time') - self.MPE_ssh
+    
+    # --------------------------------- Momentum balance -------------------------------- #
+    def meridional_profile(self, field, h=None, npoints=20):
+        '''
+        Implemets the integration in depth and in the zonal direction.
+        The output quantity will have dimensions of input
+        field multiplied by L^2
+        field - 2 x ny x nx field to be integrated
+        h - 2 x ny x nx field of layer thicknesses
+        '''
+        if h is None:
+            h = self.h
+        nfactor = int(len(self.h.yh) / npoints)
+        return (remesh(field,h) * h * self.param.dxT).sum(dim=('zl', 'xh')).sel(Time=self.Averaging_time).mean(dim='Time').coarsen({'yh':nfactor}).mean().compute()
+    
+    @property
+    def SGS_flux_profile(self):
+        S11, S12, S22 = self.subgrid_momentum_flux
+        return self.meridional_profile(S11), self.meridional_profile(S12), self.meridional_profile(S22)
+    
+    @property
+    def SGS_profile(self, npoints=20):
+        nfactor = int(self.h.yh.size / npoints)
+
+        SGSx = self.SGSx; SGSy = self.SGSy; 
+        h_u = self.h_u; h_v = self.h_v
+
+        fx = (SGSx * h_u * self.param.dxCu).sum(dim=('xq')).sel(Time=self.Averaging_time).mean(dim='Time').coarsen({'yh':nfactor}).mean().compute()
+        fy = (SGSy * h_v * self.param.dxCv).sum(dim=('xh')).sel(Time=self.Averaging_time).mean(dim='Time').coarsen({'yq':nfactor}, boundary='trim').mean().compute()
+        return fx, fy
+        
+    def ZB_flux_profile(self, **kw_ZB):
+        _, S11, S12, S22 = self.ZB_offline(**kw_ZB)
+        return self.meridional_profile(S11), self.meridional_profile(S12), self.meridional_profile(S22)
+    
+    def Smagorinsky_flux_profile(self, **kw_Smagorinsky):
+        _, S11, S12, S22, = self.Smagorinsky(**kw_Smagorinsky)
+        return self.meridional_profile(S11), self.meridional_profile(S12), self.meridional_profile(S22)
     
     # ------------------ Advection Arakawa(gradKE)-Sadourny(PVxuv) ---------------------- #
     # https://mom6.readthedocs.io/en/dev-gfdl/api/generated/pages/Governing_Equations.html
@@ -488,10 +553,24 @@ class Experiment:
             adv = self.advection
             hires_advection = self._hires.advection
 
-            fx = remesh(hires_advection[0],adv[0]) - adv[0]
-            fy = remesh(hires_advection[1],adv[1]) - adv[1]
+            fx = self.operator(hires_advection[0],adv[0]) - adv[0]
+            fy = self.operator(hires_advection[1],adv[1]) - adv[1]
 
             return (fx,fy)
+        else:
+            print('Error: subgrid forcing cannot be computed')
+            print('because there is no associated hires experiment')
+            return
+        
+    @property
+    def subgrid_forcing_PV(self):
+        if hasattr(self, '_hires'):
+            CAu = self.PV_cross_uv[0]
+            hires_CAu = self._hires.PV_cross_uv[0]
+
+            fx = self.operator(hires_CAu,CAu) - CAu
+
+            return fx
         else:
             print('Error: subgrid forcing cannot be computed')
             print('because there is no associated hires experiment')
@@ -511,9 +590,9 @@ class Experiment:
         ub = u
         vb = v
 
-        S_11 = remesh(u*u,hc) - remesh(uc*uc,hc)
-        S_22 = remesh(v*v,hc) - remesh(vc*vc,hc)
-        S_12 = remesh(remesh(u,h) * remesh(v,h),RVc) - remesh(uc,RVc) * remesh(vc,RVc)
+        S_11 = -remesh(u*u,hc) + remesh(uc*uc,hc)
+        S_22 = -remesh(v*v,hc) + remesh(vc*vc,hc)
+        S_12 = -remesh(remesh(u,h) * remesh(v,h),RVc) + remesh(uc,RVc) * remesh(vc,RVc)
         return S_11, S_12, S_22
     
         
@@ -618,7 +697,8 @@ class Experiment:
             LPF_iter=0, LPF_order=1,
             HPF_iter=0, HPF_order=1,
             Stress_iter=0, Stress_order=1,
-            AD_iter=0, AD_order=0, **kw):
+            AD_iter=0, AD_order=0,
+            ssd_iter=-1, ssd_bound_coef=0.2, DT=1080., **kw):
         amp = xr.DataArray([amplitude, amp_bottom if amp_bottom > -0.5 else amplitude], dims=['zl'])
 
         areaBu = self.param.dxBu * self.param.dyBu
@@ -629,9 +709,12 @@ class Experiment:
             x = filter_iteration(x,LPF_iter,LPF_order,self.h,residual=False)
             x = filter_AD(x,AD_iter,AD_order)
             return x
+        
+        sh_xx0 = self.sh_xx()
+        sh_xy0 = self.sh_xy()
 
-        sh_xx = ftr(self.sh_xx())
-        sh_xy = ftr(self.sh_xy())
+        sh_xx = ftr(sh_xx0)
+        sh_xy = ftr(sh_xy0)
         vort_xy = ftr(self.vort_xy())
 
         if ZB_type == 0:
@@ -654,7 +737,27 @@ class Experiment:
         def ftr(x):
             return filter_iteration(x,Stress_iter,Stress_order,self.h)
         
-        return self.divergence(ftr(S_11), ftr(S_12), ftr(S_22)), -S_11, -S_12, -S_22
+        S_11 = ftr(S_11)
+        S_22 = ftr(S_22)
+        S_12 = ftr(S_12)
+
+        if ssd_iter > -1:
+            dx2h = self.param.dxT**2
+            dy2h = self.param.dyT**2
+            mu_11 = ((ssd_bound_coef * 0.25) / DT) * (dx2h * dy2h) / (dx2h + dy2h)
+            mu_12 = remesh(mu_11,self.RV)
+
+            ssd_11 = sh_xx0 * mu_11
+            ssd_12 = sh_xy0 * mu_12
+            if ssd_iter > 0:
+                ssd_11 = filter_iteration(ssd_11,1,ssd_iter,self.h,residual=True)
+                ssd_12 = filter_iteration(ssd_12,1,ssd_iter,self.h,residual=True)
+            
+            S_11 = S_11 + ssd_11
+            S_12 = S_12 + ssd_12
+            S_22 = S_22 - ssd_11
+        
+        return self.divergence(S_11, S_12, S_22)#, S_11, S_12, S_22
 
     def ZB_offline_cartesian(self,amplitude=1./24):
         D = self.sh_xy()
@@ -687,7 +790,8 @@ class Experiment:
 
         Shear_mag = (self.sh_xx()**2+remesh(self.sh_xy()**2,self.h))**0.5
 
-        AhSm = Biharm_const * Shear_mag
+        # Biharmonic viscosity is negative
+        AhSm = - Biharm_const * Shear_mag
 
         # Del2u = Laplace(u)
         Del2u, Del2v = self.divergence(self.sh_xx(), self.sh_xy(), -self.sh_xx(), h=False)
@@ -697,8 +801,7 @@ class Experiment:
 
         fx, fy = self.divergence(S_11, S_12, -S_11)
 
-        # Viscosity and ZB are different in sign in from of divergence
-        return (-fx, -fy)
+        return (fx, fy)#, S_11, S_12, -S_11
     
     # -------------------------- Reynolds stress model -------------------------- #
     
