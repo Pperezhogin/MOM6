@@ -24,6 +24,8 @@ use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs
 use MOM_Zanna_Bolton,          only : Zanna_Bolton_2020, ZB_2020_init, ZB2020_CS
+use MOM_cpu_clock,             only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
+use MOM_cpu_clock,             only : CLOCK_MODULE
 
 implicit none ; private
 
@@ -197,6 +199,7 @@ type, public :: hor_visc_CS ; private
   !! Diagnostic id
   integer :: id_grid_Re_Ah = -1, id_grid_Re_Kh   = -1
   integer :: id_diffu     = -1, id_diffv         = -1
+  integer :: id_JHu       = -1, id_JHv           = -1
   ! integer :: id_hf_diffu  = -1, id_hf_diffv      = -1
   integer :: id_h_diffu  = -1, id_h_diffv      = -1
   integer :: id_hf_diffu_2d = -1, id_hf_diffv_2d = -1
@@ -212,11 +215,13 @@ type, public :: hor_visc_CS ; private
   integer :: id_FrictWork = -1, id_FrictWorkIntz = -1
   integer :: id_FrictWork_GME = -1
   integer :: id_normstress = -1, id_shearstress = -1
-  integer :: id_visc_limit_h_frac = -1
-  integer :: id_visc_limit_q_frac = -1
   !>@}
 
 end type hor_visc_CS
+
+!>@{ CPU time clock IDs
+integer :: id_clock_ZB2020
+!>@}
 
 contains
 
@@ -252,7 +257,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                                                        !! related to Mesoscale Eddy Kinetic Energy.
   type(VarMix_CS),               intent(inout) :: VarMix !< Variable mixing control structure
   type(unit_scale_type),         intent(in)  :: US     !< A dimensional unit scaling type
-  type(hor_visc_CS),             intent(in)  :: CS     !< Horizontal viscosity control structure
+  type(hor_visc_CS),             intent(inout)  :: CS  !< Horizontal viscosity control structure
   type(ocean_OBC_type), optional, pointer    :: OBC    !< Pointer to an open boundary condition type
   type(barotropic_CS), intent(in), optional  :: BT     !< Barotropic control structure
   type(thickness_diffuse_CS), intent(in), optional :: TD  !< Thickness diffusion control structure
@@ -318,8 +323,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     vort_xy_q, & ! vertical vorticity at corner points [T-1 ~> s-1]
     sh_xy_q,   & ! horizontal shearing strain at corner points [T-1 ~> s-1]
     GME_coeff_q, &  !< GME coeff. at q-points [L2 T-1 ~> m2 s-1]
-    ShSt, &      ! A diagnostic array of shear stress [T-1 ~> s-1].
-    visc_limit_q_frac
+    ShSt         ! A diagnostic array of shear stress [T-1 ~> s-1].
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1) :: &
     KH_u_GME     !< Isopycnal height diffusivities in u-columns [L2 T-1 ~> m2 s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1) :: &
@@ -335,8 +339,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
     grid_Re_Kh, &    ! Grid Reynolds number for Laplacian horizontal viscosity at h points [nondim]
     grid_Re_Ah, &    ! Grid Reynolds number for Biharmonic horizontal viscosity at h points [nondim]
-    GME_coeff_h, &   ! GME coefficient at h-points [L2 T-1 ~> m2 s-1]
-    visc_limit_h_frac ! 
+    GME_coeff_h      ! GME coefficient at h-points [L2 T-1 ~> m2 s-1]
 
   ! Zanna-Bolton fields
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
@@ -346,6 +349,16 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
     ZB2020v           !< Meridional acceleration due to convergence
                       !! of along-coordinate stress tensor for ZB model
+                      !! [L T-2 ~> m s-2]
+
+  ! Jansen-Held backscatter momentum forscing
+    real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
+    JHu               !< Zonal acceleration due to Laplacian
+                      !! part of backscatter parameterization
+                      !! [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    JHv               !< Meridional acceleration due to Laplacian
+                      !! part of backscatter parameterization
                       !! [L T-2 ~> m s-2]
 
   real :: AhSm       ! Smagorinsky biharmonic viscosity [L4 T-1 ~> m4 s-1]
@@ -550,8 +563,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   h_neglect, h_neglect3, inv_PI3, inv_PI6, &
   !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_GME, &
   !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
-  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt, &
-  !$OMP   visc_limit_h_frac, visc_limit_q_frac &
+  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt &
   !$OMP ) &
   !$OMP private( &
   !$OMP   i, j, k, n, &
@@ -1105,7 +1117,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           enddo ; enddo
         else
           do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-            visc_limit_h_frac(i,j,k) = Ah(i,j) / (hrat_min(i,j) * CS%Ah_Max_xx(i,j))
             Ah(i,j) = min(Ah(i,j), hrat_min(i,j) * CS%Ah_Max_xx(i,j))
           enddo ; enddo
         endif
@@ -1396,7 +1407,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           enddo ; enddo
         else
           do J=js-1,Jeq ; do I=is-1,Ieq
-            visc_limit_q_frac(I,J,k) = Ah(I,J) / (hrat_min(I,J) * CS%Ah_Max_xy(I,J))
             Ah(I,J) = min(Ah(I,J), hrat_min(I,J) * CS%Ah_Max_xy(I,J))
           enddo ; enddo
         endif
@@ -1483,7 +1493,14 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       diffu(I,j,k) = ((G%IdyCu(I,j)*(CS%dy2h(i,j)*str_xx(i,j) - CS%dy2h(i+1,j)*str_xx(i+1,j)) + &
                        G%IdxCu(I,j)*(CS%dx2q(I,J-1)*str_xy(I,J-1) - CS%dx2q(I,J)*str_xy(I,J))) * &
                      G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
-    enddo ; enddo
+      
+      if (CS%id_JHu > 0) then
+        ! We subtract the biharmonic term from the diffusive term to get the Laplacian.
+        JHu(I,j,k) = diffu(I,j,k) - ((G%IdyCu(I,j)*(CS%dy2h(i,j)*bhstr_xx(i,j) - CS%dy2h(i+1,j)*bhstr_xx(i+1,j)) + &
+                      G%IdxCu(I,j)*(CS%dx2q(I,J-1)*bhstr_xy(I,J-1) - CS%dx2q(I,J)*bhstr_xy(I,J))) * &
+                    G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
+      endif
+  enddo ; enddo
 
     if (apply_OBC) then
       ! This is not the right boundary condition. If all the masking of tendencies are done
@@ -1503,6 +1520,13 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       diffv(i,J,k) = ((G%IdyCv(i,J)*(CS%dy2q(I-1,J)*str_xy(I-1,J) - CS%dy2q(I,J)*str_xy(I,J)) - &
                        G%IdxCv(i,J)*(CS%dx2h(i,j)*str_xx(i,j) - CS%dx2h(i,j+1)*str_xx(i,j+1))) * &
                      G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
+      
+      if (CS%id_JHv > 0) then
+        ! We subtract the biharmonic term from the diffusive term to get the Laplacian.
+        JHv(i,J,k) = diffv(i,J,k) - ((G%IdyCv(i,J)*(CS%dy2q(I-1,J)*bhstr_xy(I-1,J) - CS%dy2q(I,J)*bhstr_xy(I,J)) - &
+                      G%IdxCv(i,J)*(CS%dx2h(i,j)*bhstr_xx(i,j) - CS%dx2h(i,j+1)*bhstr_xx(i,j+1))) * &
+                    G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
+      endif
     enddo ; enddo
 
     if (apply_OBC) then
@@ -1630,7 +1654,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   enddo ! end of k loop
 
   if (CS%use_ZB2020) then
-    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, visc_limit_h_frac, visc_limit_q_frac, G, GV, CS%ZB2020)
+    call cpu_clock_begin(id_clock_ZB2020)
+    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
+    call cpu_clock_end(id_clock_ZB2020)
 
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
@@ -1646,6 +1672,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   if (CS%id_shearstress > 0) call post_data(CS%id_shearstress, ShSt, CS%diag)
   if (CS%id_diffu>0)     call post_data(CS%id_diffu, diffu, CS%diag)
   if (CS%id_diffv>0)     call post_data(CS%id_diffv, diffv, CS%diag)
+  if (CS%id_JHu>0)     call post_data(CS%id_JHu, JHu, CS%diag)
+  if (CS%id_JHv>0)     call post_data(CS%id_JHv, JHv, CS%diag)
   if (CS%id_FrictWork>0) call post_data(CS%id_FrictWork, FrictWork, CS%diag)
   if (CS%id_Ah_h>0)      call post_data(CS%id_Ah_h, Ah_h, CS%diag)
   if (CS%id_grid_Re_Ah>0) call post_data(CS%id_grid_Re_Ah, grid_Re_Ah, CS%diag)
@@ -1666,9 +1694,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     if (CS%id_dudy_bt > 0) call post_data(CS%id_dudy_bt, dudy_bt, CS%diag)
     if (CS%id_dvdx_bt > 0) call post_data(CS%id_dvdx_bt, dvdx_bt, CS%diag)
   endif
-
-  if (CS%id_visc_limit_h_frac>0)      call post_data(CS%id_visc_limit_h_frac, visc_limit_h_frac, CS%diag)
-  if (CS%id_visc_limit_q_frac>0)      call post_data(CS%id_visc_limit_q_frac, visc_limit_q_frac, CS%diag)
 
   if (CS%debug) then
     if (CS%Laplacian) then
@@ -1791,7 +1816,8 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   ! init control structure
-  call ZB_2020_init(Time, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
+  call ZB_2020_init(Time, G, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
+  id_clock_ZB2020 = cpu_clock_id('(Zanna-Bolton-2020 model)', grain=CLOCK_MODULE)
 
   CS%initialized = .true.
 
@@ -2433,6 +2459,11 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
   CS%id_diffv = register_diag_field('ocean_model', 'diffv', diag%axesCvL, Time, &
       'Meridional Acceleration from Horizontal Viscosity', 'm s-2', conversion=US%L_T2_to_m_s2)
 
+  CS%id_JHu = register_diag_field('ocean_model', 'JHu', diag%axesCuL, Time, &
+      'Zonal Acceleration Jansen-Held backscatter', 'm s-2', conversion=US%L_T2_to_m_s2)
+  CS%id_JHv = register_diag_field('ocean_model', 'JHv', diag%axesCvL, Time, &
+      'Meridional Acceleration Jansen-Held backscatter', 'm s-2', conversion=US%L_T2_to_m_s2)
+
   !CS%id_hf_diffu = register_diag_field('ocean_model', 'hf_diffu', diag%axesCuL, Time, &
   !    'Fractional Thickness-weighted Zonal Acceleration from Horizontal Viscosity', &
   !    'm s-2', v_extensive=.true., conversion=US%L_T2_to_m_s2)
@@ -2515,11 +2546,6 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
         'Biharmonic Horizontal Viscosity at q Points', 'm4 s-1', conversion=US%L_to_m**4*US%s_to_T)
     CS%id_grid_Re_Ah = register_diag_field('ocean_model', 'grid_Re_Ah', diag%axesTL, Time, &
         'Grid Reynolds number for the Biharmonic horizontal viscosity at h points', 'nondim')
-
-    CS%id_visc_limit_h_frac = register_diag_field('ocean_model', 'visc_limit_h_frac', diag%axesTL, Time, &
-        'Value of the biharmonic viscosity limiter at h points', 'nondim')
-    CS%id_visc_limit_q_frac = register_diag_field('ocean_model', 'visc_limit_q_frac', diag%axesBL, Time, &
-        'Value of the biharmonic viscosity limiter at q points', 'nondim')
 
     if (CS%id_grid_Re_Ah > 0) &
       ! Compute the smallest biharmonic viscosity capable of modifying the
