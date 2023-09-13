@@ -55,7 +55,19 @@ type, public :: ZB2020_CS ; private
                               !! by hyperviscous dissipation:
                               !! 0.0: no damping
                               !! 1.0: grid harmonic is removed after a step in time
+  real      :: Klower_R_diss  !< Attenuation of
+                              !! the ZB parameterization in the regions of 
+                              !! geostrophically-unbalanced flows (Klower 2018, Juricke2020,2019)
+                              !! Subgrid stress is multiplied by 1/(1+(shear/(f*R_diss)))
+                              !! R_diss=-1: attenuation is not used; typical value R_diss=1.0 [nondim]
+  integer   :: Klower_shear   !< Type of expression for shear in Klower formula
+                              !! 0: sqrt(sh_xx**2 + sh_xy**2)
+                              !! 1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+                              !! 2: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2 + div_xx**2)
   real      :: DT             !< The (baroclinic) dynamics time step [T ~> s]
+
+  real :: subroundoff = 1e-30 !> A negligible parameter which avoids division by zero, but is too small to
+                              !! modify physical values. [nondim]
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -158,6 +170,20 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
                  "\t 1.0 - grid harmonic is removed after a step in time", &
                  units="nondim", default=0.2, do_not_log = CS%ssd_iter==-1)
 
+  call get_param(param_file, mdl, "ZB_KLOWER_R_DISS", CS%Klower_R_diss, &
+                 "Attenuation of " //&
+                 "the ZB parameterization in the regions of " //&
+                 "geostrophically-unbalanced flows (Klower 2018, Juricke2020,2019). " //&
+                 "Subgrid stress is multiplied by 1/(1+(shear/(f*R_diss))) " //&
+                 "R_diss=-1: attenuation is not used; typical value R_diss=1.0", &
+                 units="nondim", default=-1.)
+
+  call get_param(param_file, mdl, "ZB_KLOWER_SHEAR", CS%Klower_shear, &
+                 "Type of expression for shear in Klower formula: " //&
+                 "0: sqrt(sh_xx**2 + sh_xy**2) " //&
+                 "1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)", &
+                 default=0)
+  
   call get_param(param_file, mdl, "DT", CS%dt, &
                  "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
                  fail_if_missing=.true.)
@@ -246,7 +272,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     ssd_11, &          ! Diagonal component of hyperviscous stress [L2 T-2 ~> m2 s-2]
     ssd_11_coef, &     ! Viscosity coefficient in hyperviscous stress in center points
                        ! [L2 T-1 ~> m2 s-1]
-    mask_T             ! Mask of wet points in T (CENTER) points [nondim]
+    mask_T, &          ! Mask of wet points in T (CENTER) points [nondim]
+    c_diss             ! Attenuation parameter at h points (Klower 2018, Juricke2019,2020) [nondim]
 
   ! Arrays defined in q (CORNER) points
   real, dimension(SZIB_(G),SZJB_(G)) :: &
@@ -292,6 +319,8 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   real :: k_bc         ! Constant in from of the parameterization [L2 ~> m2]
                        ! Related to the amplitude as follows:
                        ! k_bc = - amplitude * grid_cell_area < 0
+  real :: Coriolis_h   ! Coriolis parameter at h points [T-1 ~> s-1]
+  real :: shear        ! Shear in Klower2018 formula at h points [L-1 ~> s-1]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
@@ -371,6 +400,31 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
       vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) ) ! corner of the cell
     enddo ; enddo
+
+    ! Attenuation parameter (Klower 2018, Juricke2019,2020)
+    if (CS%Klower_R_diss > 0) then
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        ! sqrt(sh_xx**2 + sh_xy**2)
+        if (CS%Klower_shear == 0) then
+          shear = sqrt(sh_xx(i,j)**2 + 0.25 * (      &
+            (sh_xy(I-1,J-1)**2 + sh_xy(I,J)**2)      &
+          + (sh_xy(I-1,J)**2 + sh_xy(I,J-1)**2)      &
+          ))
+        ! sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+        elseif (CS%Klower_shear == 1) then
+          shear = sqrt(sh_xx(i,j)**2 + 0.25 * (                                              &
+            ((sh_xy(I-1,J-1)**2+vort_xy(I-1,J-1)**2) + (sh_xy(I,J)**2+vort_xy(I,J)**2))      &
+          + ((sh_xy(I-1,J)**2+vort_xy(I-1,J)**2) + (sh_xy(I,J-1)**2+vort_xy(I,J-1)**2))      &
+          ))
+        endif
+        
+        ! Interpolate Coriolis parameter to h points and add subroundoff
+        Coriolis_h = abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
+                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff
+        
+        c_diss(i,j) = 1. / (1. + shear/(Coriolis_h*CS%Klower_R_diss))
+      enddo; enddo
+    endif
 
     call compute_masks(G, GV, h, mask_T, mask_q, k)
     if (CS%id_maskT>0) then
@@ -505,6 +559,17 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_11)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, T=S_22)
     call filter(G, mask_T, mask_q, CS%Stress_iter, CS%Stress_order, q=S_12)
+
+    if (CS%Klower_R_diss > 0.) then
+      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        S_11(i,j) = S_11(i,j) * c_diss(i,j)
+        S_22(i,j) = S_22(i,j) * c_diss(i,j)
+      enddo ; enddo
+      do J=js-1,Jeq ; do I=is-1,Ieq
+        S_12(I,J) = S_12(I,J) * &
+        0.25 * ((c_diss(I,J) + c_diss(I+1,J+1)) + (c_diss(I,J+1) + c_diss(I+1,J)))
+      enddo ; enddo
+    endif
 
     if (CS%ssd_iter>-1) then
       do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
