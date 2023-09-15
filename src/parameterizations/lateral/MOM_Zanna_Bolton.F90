@@ -67,6 +67,11 @@ type, public :: ZB2020_CS ; private
           vort_xy   !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
                     !! points including metric terms [T-1 ~> s-1]
 
+  real, allocatable ::    &
+        ICoriolis_h(:,:), &  !< Inverse Coriolis parameter at h points [T ~> s]
+        c_diss(:,:,:)        !< Attenuation parameter at h points 
+                             !! (Klower 2018, Juricke2019,2020) [nondim]
+
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1
@@ -93,9 +98,14 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
   logical,                 intent(out)   :: use_ZB2020 !< If true, turns on ZB scheme.
 
+  integer :: Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_Zanna_Bolton" ! This module's name.
+
+  Isq  = G%IscB ; Ieq  = G%IecB ; Jsq  = G%JscB ; Jeq  = G%JecB
 
   call log_version(param_file, mdl, version, "")
 
@@ -170,9 +180,22 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
                  fail_if_missing=.true.)
 
-  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)))
-  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)))
-  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)))
+  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
+  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
+  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
+
+  if (CS%Klower_R_diss > 0) then
+    allocate(CS%ICoriolis_h(SZI_(G),SZJ_(G))); CS%ICoriolis_h(:,:) = 0.
+    allocate(CS%c_diss(SZI_(G),SZJ_(G),SZK_(GV))); CS%c_diss(:,:,:) = 0.
+
+    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+      ! Note that ideally it should be 1/expression. However,
+      ! it will break reproducibility. So for a while we keep it as is
+      CS%ICoriolis_h(i,j) = ((abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
+                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff) &
+                          * CS%Klower_R_diss)
+    enddo; enddo
+  endif
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -207,9 +230,14 @@ end subroutine ZB_2020_init
 subroutine ZB_2020_end(CS)
   type(ZB2020_CS), intent(inout) :: CS  !< ZB2020 control structure.
 
-  deallocate(CS%sh_xx);
-  deallocate(CS%sh_xy);
-  deallocate(CS%vort_xy);
+  deallocate(CS%sh_xx)
+  deallocate(CS%sh_xy)
+  deallocate(CS%vort_xy)
+
+  if (CS%Klower_R_diss > 0) then
+    deallocate(CS%ICoriolis_h)
+    deallocate(CS%c_diss)
+  endif
 
 end subroutine ZB_2020_end
 
@@ -345,10 +373,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
         
         ! precompute this
         ! Interpolate Coriolis parameter to h points and add subroundoff
-        Coriolis_h = abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
-                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff
+        !Coriolis_h = abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
+        !                  + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff
         
-        c_diss(i,j) = 1. / (1. + shear/(Coriolis_h*CS%Klower_R_diss))
+        c_diss(i,j) = 1. / (1. + shear / CS%ICoriolis_h(i,j))
       enddo; enddo
     endif
 
