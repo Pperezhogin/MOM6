@@ -23,7 +23,7 @@ use MOM_open_boundary,         only : OBC_DIRECTION_N, OBC_DIRECTION_S, OBC_NONE
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs
-use MOM_Zanna_Bolton,          only : Zanna_Bolton_2020, ZB_2020_init, ZB2020_CS
+use MOM_Zanna_Bolton,          only : Zanna_Bolton_2020, ZB_2020_init, ZB_2020_end, ZB2020_CS
 use MOM_cpu_clock,             only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,             only : CLOCK_MODULE
 
@@ -256,7 +256,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                                                        !! related to Mesoscale Eddy Kinetic Energy.
   type(VarMix_CS),               intent(inout) :: VarMix !< Variable mixing control structure
   type(unit_scale_type),         intent(in)  :: US     !< A dimensional unit scaling type
-  type(hor_visc_CS),             intent(in)  :: CS     !< Horizontal viscosity control structure
+  type(hor_visc_CS),             intent(inout)  :: CS  !< Horizontal viscosity control structure
   type(ocean_OBC_type), optional, pointer    :: OBC    !< Pointer to an open boundary condition type
   type(barotropic_CS), intent(in), optional  :: BT     !< Barotropic control structure
   type(thickness_diffuse_CS), intent(in), optional :: TD  !< Thickness diffusion control structure
@@ -784,6 +784,21 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
         vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) )
       enddo ; enddo
+    endif
+
+    ! Pass the velocity gradients to ZB2020
+    if (CS%use_ZB2020) then
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        CS%ZB2020%sh_xx(i,j,k) = sh_xx(i,j)
+      enddo ; enddo
+      
+      do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+        CS%ZB2020%sh_xy(I,J,k) = sh_xy(I,J)
+      enddo; enddo
+
+      do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
+        CS%ZB2020%vort_xy(I,J,k) = vort_xy(I,J)
+      enddo; enddo
     endif
 
     ! Divergence
@@ -1786,7 +1801,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   ! init control structure
-  call ZB_2020_init(Time, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
+  call ZB_2020_init(Time, G, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
   id_clock_ZB2020 = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE)
 
   CS%initialized = .true.
@@ -2701,6 +2716,11 @@ subroutine hor_visc_end(CS)
     DEALLOC_(CS%n1n1_m_n2n2_h)
     DEALLOC_(CS%n1n1_m_n2n2_q)
   endif
+
+  if (CS%use_ZB2020) then
+    call ZB_2020_end(CS%ZB2020)
+  endif
+
 end subroutine hor_visc_end
 !> \namespace mom_hor_visc
 !!
