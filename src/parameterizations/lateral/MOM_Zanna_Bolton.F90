@@ -210,7 +210,8 @@ end subroutine ZB_2020_init
 !! k_BC = - amplitude * grid_cell_area
 !! amplitude = 0.1..10 (approx)
 
-subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
+subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
+                             dx2h, dy2h, dx2q, dy2q)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
   type(ZB2020_CS),               intent(in)  :: CS     !< ZB2020 control structure.
@@ -229,12 +230,18 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
                                  intent(out) :: fy     !< Meridional acceleration due to convergence
                                                        !! of along-coordinate stress tensor [L T-2 ~> m s-2]
 
+  real, dimension(SZI_(G),SZJ_(G)),           & 
+                                 intent(in) :: dx2h, & !< dx^2 at h points [L2 ~> m2]
+                                               dy2h    !< dy^2 at h points [L2 ~> m2]
+
+  real, dimension(SZI_(G),SZJ_(G)),           & 
+                                 intent(in) :: dx2q, & !< dx^2 at q points [L2 ~> m2]
+                                               dy2q    !< dy^2 at q points [L2 ~> m2]
+
   ! Arrays defined in h (CENTER) points
   real, dimension(SZI_(G),SZJ_(G)) :: &
     dx_dyT, &          ! dx/dy at h points [nondim]
     dy_dxT, &          ! dy/dx at h points [nondim]
-    dx2h, &            ! dx^2 at h points [L2 ~> m2]
-    dy2h, &            ! dy^2 at h points [L2 ~> m2]
     dudx, dvdy, &      ! Components in the horizontal tension [T-1 ~> s-1]
     sh_xx, &           ! Horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
     vort_xy_center, &  ! Vorticity interpolated to the center [T-1 ~> s-1]
@@ -249,8 +256,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dx_dyBu, &         ! dx/dy at q points [nondim]
     dy_dxBu, &         ! dy/dx at q points [nondim]
-    dx2q, &            ! dx^2 at q points [L2 ~> m2]
-    dy2q, &            ! dy^2 at q points [L2 ~> m2]
     dvdx, dudy, &      ! Components in the shearing strain [T-1 ~> s-1]
     vort_xy, &         ! Vertical vorticity (dv/dx - du/dy) including metric terms [T-1 ~> s-1]
     sh_xy, &           ! Horizontal shearing strain (du/dy + dv/dx) including metric terms [T-1 ~> s-1]
@@ -304,13 +309,11 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
 
   ! Calculate metric terms (line 2119 of MOM_hor_visc.F90)
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-    dx2q(I,J) = G%dxBu(I,J)*G%dxBu(I,J) ; dy2q(I,J) = G%dyBu(I,J)*G%dyBu(I,J)
     DX_dyBu(I,J) = G%dxBu(I,J)*G%IdyBu(I,J) ; DY_dxBu(I,J) = G%dyBu(I,J)*G%IdxBu(I,J)
   enddo ; enddo
 
   ! Calculate metric terms (line 2122 of MOM_hor_visc.F90)
   do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
-    dx2h(i,j) = G%dxT(i,j)*G%dxT(i,j) ; dy2h(i,j) = G%dyT(i,j)*G%dyT(i,j)
     DX_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; DY_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
   enddo ; enddo
 
