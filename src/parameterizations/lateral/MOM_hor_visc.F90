@@ -24,6 +24,8 @@ use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs
 use MOM_Zanna_Bolton,          only : Zanna_Bolton_2020, ZB_2020_init, ZB2020_CS
+use MOM_cpu_clock,             only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
+use MOM_cpu_clock,             only : CLOCK_MODULE
 
 implicit none ; private
 
@@ -215,6 +217,10 @@ type, public :: hor_visc_CS ; private
   !>@}
 
 end type hor_visc_CS
+
+!>@{ CPU time clock IDs
+integer :: id_clock_ZB2020
+!>@}
 
 contains
 
@@ -1623,7 +1629,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   enddo ! end of k loop
 
   if (CS%use_ZB2020) then
+    call cpu_clock_begin(id_clock_ZB2020)
     call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
+    call cpu_clock_end(id_clock_ZB2020)
 
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
@@ -1778,6 +1786,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
 
   ! init control structure
   call ZB_2020_init(Time, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
+  id_clock_ZB2020 = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE)
 
   CS%initialized = .true.
 
