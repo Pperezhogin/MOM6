@@ -10,7 +10,6 @@ use MOM_diag_mediator, only : post_data, register_diag_field
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
-use MOM_coms,          only : reproducing_sum, max_across_PEs, min_across_PEs
 use MOM_error_handler, only : MOM_error, WARNING
 
 implicit none ; private
@@ -625,10 +624,6 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
       q(I,J) = q(I,J) * mask_q(I,J)
     enddo ; enddo
 
-    if (n_highpass==1 .AND. n_lowpass>0) then
-      call min_max(G, min_before, max_before, q=q)
-    endif
-
     do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
       q1(I,J) = q(I,J)
     enddo ; enddo
@@ -659,15 +654,6 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
         q(I,J) = q1(I,J)
       enddo ; enddo
     endif
-
-    if (n_highpass==1 .AND. n_lowpass>0) then
-      call min_max(G, min_after, max_after, q=q)
-      if (max_after > max_before .OR. min_after < min_before) then
-        call MOM_error(WARNING, "MOM_Zanna_Bolton.F90, filter applied in CORNER points "//&
-                                "does not preserve [min,max] values. There may be issues with "//&
-                                "boundary conditions")
-      endif
-    endif
   endif
 
   if (present(T)) then
@@ -675,10 +661,6 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
       T(i,j) = T(i,j) * mask_T(i,j)
     enddo ; enddo
-
-    if (n_highpass==1 .AND. n_lowpass>0) then
-      call min_max(G, min_before, max_before, T=T)
-    endif
 
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
       T1(i,j) = T(i,j)
@@ -704,15 +686,6 @@ subroutine filter(G, mask_T, mask_q, n_lowpass, n_highpass, T, q)
       do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
         T(i,j) = T1(i,j)
       enddo ; enddo
-    endif
-
-    if (n_highpass==1 .AND. n_lowpass>0) then
-      call min_max(G, min_after, max_after, T=T)
-      if (max_after > max_before .OR. min_after < min_before) then
-        call MOM_error(WARNING, "MOM_Zanna_Bolton.F90, filter applied in CENTER points "//&
-                                " does not preserve [min,max] values. There may be issues with "//&
-                                " boundary conditions")
-      endif
     endif
   endif
 end subroutine filter
@@ -802,36 +775,6 @@ subroutine smooth_Tq(G, mask_T, mask_q, T, q)
   endif
 
 end subroutine smooth_Tq
-
-!> Returns min and max values of array across all PEs.
-!! It is used in filter() to check its monotonicity.
-subroutine min_max(G, min_val, max_val, T, q)
-  type(ocean_grid_type), intent(in) :: G   !< Ocean grid
-  real, dimension(SZI_(G),SZJ_(G)),   &
-             optional, intent(inout) :: T  !< any field at T (CENTER) points [arbitrary]
-  real, dimension(SZIB_(G),SZJB_(G)), &
-             optional, intent(inout) :: q  !< any field at q (CORNER) points [arbitrary]
-  real, intent(out) :: min_val, max_val    !< min and max values of array accross PEs [arbitrary]
-
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
-
-  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-
-  if (present(q)) then
-    min_val = minval(q(Isq:Ieq, Jsq:Jeq))
-    max_val = maxval(q(Isq:Ieq, Jsq:Jeq))
-  endif
-
-  if (present(T)) then
-    min_val = minval(T(is:ie, js:je))
-    max_val = maxval(T(is:ie, js:je))
-  endif
-
-  call min_across_PEs(min_val)
-  call max_across_PEs(max_val)
-
-end subroutine
 
 !> Computes mask of wet points in T (CENTER) and q (CORNER) points.
 !! Method: compare layer thicknesses with Angstrom_H.
