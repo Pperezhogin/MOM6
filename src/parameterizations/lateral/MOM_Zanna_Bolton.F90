@@ -296,8 +296,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
     S_11, S_22, &      ! Diagonal terms in the ZB stress tensor:
                        ! Above Line 539 [L2 T-2 ~> m2 s-2]
                        ! Below Line 539 it is layer-integrated [H L2 T-2 ~> m3 s-2 or kg s-2]
-    mask_T, &          ! Mask of wet points in T (CENTER) points [nondim]
-    c_diss             ! Attenuation parameter at h points (Klower 2018, Juricke2019,2020) [nondim]
+    mask_T             ! Mask of wet points in T (CENTER) points [nondim]
 
   ! Arrays defined in q (CORNER) points
   real, dimension(SZIB_(G),SZJB_(G)) :: &
@@ -333,9 +332,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
   real :: k_bc         ! Constant in from of the parameterization [L2 ~> m2]
                        ! Related to the amplitude as follows:
                        ! k_bc = - amplitude * grid_cell_area < 0
-  real :: Coriolis_h   ! Coriolis parameter at h points [T-1 ~> s-1]
-  real :: shear        ! Shear in Klower2018 formula at h points [L-1 ~> s-1]
-
+  
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
 
@@ -349,36 +346,15 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
   fx(:,:,:) = 0.
   fy(:,:,:) = 0.
 
+  if (CS%Klower_R_diss > 0.) then
+    ! c_diss = F(sh_xx,sh_xy,vort_xy)
+    call compute_c_diss(CS%sh_xx, CS%sh_xy, CS%vort_xy, CS%c_diss, G, GV, CS)
+  endif
+
   do k=1,nz
     S_12(:,:) = 0.
     S_11(:,:) = 0.
     S_22(:,:) = 0.
-
-    ! Attenuation parameter (Klower 2018, Juricke2019,2020)
-    if (CS%Klower_R_diss > 0) then
-      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
-        ! sqrt(sh_xx**2 + sh_xy**2)
-        if (CS%Klower_shear == 0) then
-          shear = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (      &
-            (CS%sh_xy(I-1,J-1,k)**2 + CS%sh_xy(I,J,k)**2)      &
-          + (CS%sh_xy(I-1,J,k)**2 + CS%sh_xy(I,J-1,k)**2)      &
-          ))
-        ! sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
-        elseif (CS%Klower_shear == 1) then
-          shear = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (                                              &
-            ((CS%sh_xy(I-1,J-1,k)**2+CS%vort_xy(I-1,J-1,k)**2) + (CS%sh_xy(I,J,k)**2+CS%vort_xy(I,J,k)**2))      &
-          + ((CS%sh_xy(I-1,J,k)**2+CS%vort_xy(I-1,J,k)**2) + (CS%sh_xy(I,J-1,k)**2+CS%vort_xy(I,J-1,k)**2))      &
-          ))
-        endif
-        
-        ! precompute this
-        ! Interpolate Coriolis parameter to h points and add subroundoff
-        !Coriolis_h = abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
-        !                  + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff
-        
-        c_diss(i,j) = 1. / (1. + shear / CS%ICoriolis_h(i,j))
-      enddo; enddo
-    endif
 
     call compute_masks(G, GV, h, mask_T, mask_q, k)
     if (CS%id_maskT>0) then
@@ -503,12 +479,12 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
 
     if (CS%Klower_R_diss > 0.) then
       do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        S_11(i,j) = S_11(i,j) * c_diss(i,j)
-        S_22(i,j) = S_22(i,j) * c_diss(i,j)
+        S_11(i,j) = S_11(i,j) * CS%c_diss(i,j,k)
+        S_22(i,j) = S_22(i,j) * CS%c_diss(i,j,k)
       enddo ; enddo
       do J=js-1,Jeq ; do I=is-1,Ieq
         S_12(I,J) = S_12(I,J) * &
-        0.25 * ((c_diss(I,J) + c_diss(I+1,J+1)) + (c_diss(I,J+1) + c_diss(I+1,J)))
+        0.25 * ((CS%c_diss(I,J,k) + CS%c_diss(I+1,J+1,k)) + (CS%c_diss(I,J+1,k) + CS%c_diss(I+1,J,k)))
       enddo ; enddo
     endif
 
@@ -579,6 +555,60 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
 end subroutine Zanna_Bolton_2020
+
+!> Compute the attenuation parameter similarly
+!! in h points as in Klower2018, Juricke2019,2020:
+!! c_diss = 1/(1+(shear/(abs(f)*R_diss)))
+!! where shear = sqrt(sh_xx**2 + sh_xy**2)
+!! or shear = sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
+  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   &
+        intent(in) :: sh_xx     !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
+                                !! points including metric terms [T-1 ~> s-1]
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), &
+        intent(in) :: sh_xy, &  !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
+                                !! points including metric terms [T-1 ~> s-1]
+                      vort_xy   !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
+                                !! points including metric terms [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   &
+        intent(inout) :: c_diss !< Attenuation parameter in h points
+                                !! (Klower 2018, Juricke2019,2020) [nondim]
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+
+  real :: shear ! Shear in Klower2018 formula at h points [L-1 ~> s-1]
+
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB; nz = GV%ke
+
+  do k=1,nz
+    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+      ! sqrt(sh_xx**2 + sh_xy**2)
+      if (CS%Klower_shear == 0) then
+        shear = sqrt(sh_xx(i,j,k)**2 + 0.25 * (          &
+          (sh_xy(I-1,J-1,k)**2 + sh_xy(I,J  ,k)**2)      &
+        + (sh_xy(I-1,J  ,k)**2 + sh_xy(I,J-1,k)**2)      &
+        ))
+      ! sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+      elseif (CS%Klower_shear == 1) then
+        shear = sqrt(sh_xx(i,j,k)**2 + 0.25 * (                                               &
+          ((sh_xy(I-1,J-1,k)**2+vort_xy(I-1,J-1,k)**2)   &
+         + (sh_xy(I,J,k)**2+vort_xy(I,J,k)**2))          &
+        + ((sh_xy(I-1,J,k)**2+vort_xy(I-1,J,k)**2)       &
+         + (sh_xy(I,J-1,k)**2+vort_xy(I,J-1,k)**2))      &
+        ))
+      endif
+      
+      c_diss(i,j,k) = 1. / (1. + shear / CS%ICoriolis_h(i,j))
+    enddo; enddo
+  enddo
+  
+end subroutine compute_c_diss
 
 !> Filter which is used to smooth velocity gradient tensor
 !! or the stress tensor.
