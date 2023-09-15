@@ -1630,7 +1630,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   if (CS%use_ZB2020) then
     call cpu_clock_begin(id_clock_ZB2020)
-    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020)
+    call Zanna_Bolton_2020(u, v, h, ZB2020u, ZB2020v, G, GV, CS%ZB2020, &
+                           CS%dx2h, CS%dy2h, CS%dx2q, CS%dy2q)
     call cpu_clock_end(id_clock_ZB2020)
 
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
