@@ -46,15 +46,6 @@ type, public :: ZB2020_CS ; private
   integer   :: Stress_order   !< The scale selectivity of the smoothing filter
                               !! 1 - Laplacian filter
                               !! 2 - Bilaplacian filter
-  integer   :: ssd_iter       !< Hyperviscosity parameter. Defines the number of sharpening passes
-                              !! in Laplacian viscosity model:
-                              !! -1: hyperviscosity is off
-                              !!  0: Laplacian viscosity
-                              !!  9: (Laplacian)^10 viscosity, ...
-  real      :: ssd_bound_coef !< The non-dimensional damping coefficient of the grid harmonic
-                              !! by hyperviscous dissipation:
-                              !! 0.0: no damping
-                              !! 1.0: grid harmonic is removed after a step in time
   real      :: Klower_R_diss  !< Attenuation of
                               !! the ZB parameterization in the regions of 
                               !! geostrophically-unbalanced flows (Klower 2018, Juricke2020,2019)
@@ -152,23 +143,6 @@ subroutine ZB_2020_init(Time, GV, US, param_file, diag, CS, use_ZB2020)
                 "\t 1 - Laplacian filter\n" //&
                 "\t 2 - Bilaplacian filter,...", &
                 default=1, do_not_log = CS%Stress_iter==0)
-
-  call get_param(param_file, mdl, "ZB_HYPERVISC", CS%ssd_iter, &
-                 "Select an additional hyperviscosity to stabilize the ZB model:\n" //&
-                 "\t 0  - off\n" //&
-                 "\t 1  - Laplacian viscosity\n" //&
-                 "\t 10 - (Laplacian)**10 viscosity, ...", &
-                 default=0)
-                 ! Convert to the number of sharpening passes
-                 ! applied to the Laplacian viscosity model
-                 CS%ssd_iter = CS%ssd_iter-1
-
-  call get_param(param_file, mdl, "HYPVISC_GRID_DAMP", CS%ssd_bound_coef, &
-                 "The non-dimensional damping coefficient of the grid harmonic " //&
-                 "by hyperviscous dissipation:\n" //&
-                 "\t 0.0 - no damping\n" //&
-                 "\t 1.0 - grid harmonic is removed after a step in time", &
-                 units="nondim", default=0.2, do_not_log = CS%ssd_iter==-1)
 
   call get_param(param_file, mdl, "ZB_KLOWER_R_DISS", CS%Klower_R_diss, &
                  "Attenuation of " //&
@@ -269,9 +243,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     S_11, S_22, &      ! Diagonal terms in the ZB stress tensor:
                        ! Above Line 539 [L2 T-2 ~> m2 s-2]
                        ! Below Line 539 it is layer-integrated [H L2 T-2 ~> m3 s-2 or kg s-2]
-    ssd_11, &          ! Diagonal component of hyperviscous stress [L2 T-2 ~> m2 s-2]
-    ssd_11_coef, &     ! Viscosity coefficient in hyperviscous stress in center points
-                       ! [L2 T-1 ~> m2 s-1]
     mask_T, &          ! Mask of wet points in T (CENTER) points [nondim]
     c_diss             ! Attenuation parameter at h points (Klower 2018, Juricke2019,2020) [nondim]
 
@@ -288,9 +259,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     S_12, &            ! Off-diagonal term in the ZB stress tensor:
                        ! Above Line 539 [L2 T-2 ~> m2 s-2]
                        ! Below Line 539 it is layer-integrated [H L2 T-2 ~> m3 s-2 or kg s-2]
-    ssd_12, &          ! Off-diagonal component of hyperviscous stress [L2 T-2 ~> m2 s-2]
-    ssd_12_coef, &     ! Viscosity coefficient in hyperviscous stress in corner points
-                       ! [L2 T-1 ~> m2 s-1]
     mask_q             ! Mask of wet points in q (CORNER) points [nondim]
 
   ! Thickness arrays for computing the horizontal divergence of the stress tensor
@@ -347,20 +315,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     DX_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; DY_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
   enddo ; enddo
 
-  if (CS%ssd_iter > -1) then
-    ssd_11_coef(:,:) = 0.
-    ssd_12_coef(:,:) = 0.
-    do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      ssd_11_coef(i,j) = ((CS%ssd_bound_coef * 0.25) / CS%DT) &
-                       * ((dx2h(i,j) * dy2h(i,j)) / (dx2h(i,j) + dy2h(i,j)))
-    enddo; enddo
-
-    do J=js-1,Jeq ; do I=is-1,Ieq
-      ssd_12_coef(I,J) = ((CS%ssd_bound_coef * 0.25) / CS%DT) &
-                       * ((dx2q(I,J) * dy2q(I,J)) / (dx2q(I,J) + dy2q(I,J)))
-    enddo; enddo
-  endif
-
   do k=1,nz
 
     sh_xx(:,:) = 0.
@@ -369,8 +323,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
     S_12(:,:) = 0.
     S_11(:,:) = 0.
     S_22(:,:) = 0.
-    ssd_11(:,:) = 0.
-    ssd_12(:,:) = 0.
 
     ! Calculate horizontal tension (line 590 of MOM_hor_visc.F90)
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
@@ -453,21 +405,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       sh_xy(i,j) = sh_xy(i,j) * mask_q(i,j)
       vort_xy(i,j) = vort_xy(i,j) * mask_q(i,j)
     enddo ; enddo
-
-    if (CS%ssd_iter > -1) then
-      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        ssd_11(i,j) = sh_xx(i,j) * ssd_11_coef(i,j)
-      enddo; enddo
-
-      do J=js-1,Jeq ; do I=is-1,Ieq
-        ssd_12(I,J) = sh_xy(I,J) * ssd_12_coef(I,J)
-      enddo; enddo
-
-      if (CS%ssd_iter > 0) then
-        call filter(G, mask_T, mask_q, -1, CS%ssd_iter, T=ssd_11)
-        call filter(G, mask_T, mask_q, -1, CS%ssd_iter, q=ssd_12)
-      endif
-    endif
 
     call filter(G, mask_T, mask_q, -CS%HPF_iter, CS%HPF_order, T=sh_xx)
     call filter(G, mask_T, mask_q, +CS%LPF_iter, CS%LPF_order, T=sh_xx)
@@ -568,16 +505,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
       do J=js-1,Jeq ; do I=is-1,Ieq
         S_12(I,J) = S_12(I,J) * &
         0.25 * ((c_diss(I,J) + c_diss(I+1,J+1)) + (c_diss(I,J+1) + c_diss(I+1,J)))
-      enddo ; enddo
-    endif
-
-    if (CS%ssd_iter>-1) then
-      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        S_11(i,j) = S_11(i,j) + ssd_11(i,j)
-        S_22(i,j) = S_22(i,j) - ssd_11(i,j)
-      enddo ; enddo
-      do J=js-1,Jeq ; do I=is-1,Ieq
-        S_12(I,J) = S_12(I,J) + ssd_12(I,J)
       enddo ; enddo
     endif
 
