@@ -60,12 +60,15 @@ type, public :: ZB2020_CS ; private
                               !! modify physical values. [nondim]
 
   real, dimension(:,:,:), allocatable, public :: &
-          sh_xx, &  !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
-                    !! points including metric terms [T-1 ~> s-1]
-          sh_xy, &  !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
-                    !! points including metric terms [T-1 ~> s-1]
-          vort_xy   !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
-                    !! points including metric terms [T-1 ~> s-1]
+          sh_xx,   & !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
+                     !! points including metric terms [T-1 ~> s-1]
+          sh_xy,   & !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
+                     !! points including metric terms [T-1 ~> s-1]
+          vort_xy, & !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
+                     !! points including metric terms [T-1 ~> s-1]
+          h_u,     & !< ! Thickness interpolated to u points [H ~> m or kg m-2]
+          h_v,     & !< ! Thickness interpolated to v points [H ~> m or kg m-2]
+          hq         !< ! Thickness in CORNER points [H ~> m or kg m-2]
 
   real, allocatable ::    &
         ICoriolis_h(:,:), &  !< Inverse Coriolis parameter at h points [T ~> s]
@@ -183,6 +186,9 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
+  allocate(CS%h_u(SZIB_(G),SZJ_(G),SZK_(GV))); CS%h_u(:,:,:) = 0.
+  allocate(CS%h_v(SZI_(G),SZJB_(G),SZK_(GV))); CS%h_v(:,:,:) = 0.
+  allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV))); CS%hq(:,:,:) = 0.
 
   if (CS%Klower_R_diss > 0) then
     allocate(CS%ICoriolis_h(SZI_(G),SZJ_(G))); CS%ICoriolis_h(:,:) = 0.
@@ -233,6 +239,9 @@ subroutine ZB_2020_end(CS)
   deallocate(CS%sh_xx)
   deallocate(CS%sh_xy)
   deallocate(CS%vort_xy)
+  deallocate(CS%h_u)
+  deallocate(CS%h_v)
+  deallocate(CS%hq)
 
   if (CS%Klower_R_diss > 0) then
     deallocate(CS%ICoriolis_h)
@@ -305,14 +314,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
                        ! Above Line 539 [L2 T-2 ~> m2 s-2]
                        ! Below Line 539 it is layer-integrated [H L2 T-2 ~> m3 s-2 or kg s-2]
     mask_q             ! Mask of wet points in q (CORNER) points [nondim]
-
-  ! Thickness arrays for computing the horizontal divergence of the stress tensor
-  real, dimension(SZIB_(G),SZJB_(G)) :: &
-    hq                 ! Thickness in CORNER points [H ~> m or kg m-2].
-  real, dimension(SZIB_(G),SZJ_(G))  :: &
-    h_u                ! Thickness interpolated to u points [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZJB_(G))  :: &
-    h_v                ! Thickness interpolated to v points [H ~> m or kg m-2].
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     mask_T_3d, &       ! Mask of wet points in T (CENTER) points [nondim]
@@ -411,24 +412,6 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
                                  + (CS%sh_xx(i+1,j,k) + CS%sh_xx(i,j+1,k)))
     enddo ; enddo
 
-    ! WITH land mask (line 622 of MOM_hor_visc.F90)
-    ! Use of mask eliminates dependence on the
-    ! values on land
-    do j=js-2,je+2 ; do I=Isq-1,Ieq+1
-      h_u(I,j) = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k))
-    enddo ; enddo
-    do J=Jsq-1,Jeq+1 ; do i=is-2,ie+2
-      h_v(i,J) = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k))
-    enddo ; enddo
-
-    ! Line 1187 of MOM_hor_visc.F90
-    do J=js-1,Jeq ; do I=is-1,Ieq
-      h2uq = 4.0 * (h_u(I,j) * h_u(I,j+1))
-      h2vq = 4.0 * (h_v(i,J) * h_v(i+1,J))
-      hq(I,J) = (2.0 * (h2uq * h2vq)) &
-          / (h_neglect3 + (h2uq + h2vq) * ((h_u(I,j) + h_u(I,j+1)) + (h_v(i,J) + h_v(i+1,J))))
-    enddo ; enddo
-
     ! Form S_11 and S_22 tensors
     ! Indices - intersection of loops for
     ! sh_xy_center and sh_xx
@@ -515,7 +498,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
 
     ! Free slip (Line 1487 of MOM_hor_visc.F90)
     do J=js-1,Jeq ; do I=is-1,Ieq
-      S_12(I,J) = S_12(I,J) * (hq(I,J) * G%mask2dBu(I,J))
+      S_12(I,J) = S_12(I,J) * (CS%hq(I,J,k) * G%mask2dBu(I,J))
     enddo ; enddo
 
     ! Evaluate 1/h x.Div(h S) (Line 1495 of MOM_hor_visc.F90)
@@ -526,7 +509,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
                                     dy2h(i+1,j)*S_11(i+1,j)) + &
                       G%IdxCu(I,j)*(dx2q(I,J-1)*S_12(I,J-1) - &
                                     dx2q(I,J)  *S_12(I,J))) * &
-                      G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
+                      G%IareaCu(I,j)) / (CS%h_u(I,j,k) + h_neglect)
     enddo ; enddo
 
     ! Evaluate 1/h y.Div(h S) (Line 1517 of MOM_hor_visc.F90)
@@ -535,7 +518,7 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
                                     dy2q(I,J)  *S_12(I,J)) + & ! NOTE this plus
                       G%IdxCv(i,J)*(dx2h(i,j)  *S_22(i,j) - &
                                     dx2h(i,j+1)*S_22(i,j+1))) * &
-                      G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
+                      G%IareaCv(i,J)) / (CS%h_v(i,J,k) + h_neglect)
     enddo ; enddo
 
   enddo ! end of k loop
