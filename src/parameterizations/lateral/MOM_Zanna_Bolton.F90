@@ -175,7 +175,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   enddo; enddo
 
   do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
-    CS%kappa_q = - CS%amplitude * G%areaBu(i,j)
+    CS%kappa_q(I,J) = - CS%amplitude * G%areaBu(i,j)
   enddo; enddo
 
   if (CS%Klower_R_diss > 0) then
@@ -576,7 +576,7 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
     ! Here we assume that Txy is initialized to zero
     if (CS%ZB_type .NE. 2) then
       do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
-        Txy(I,J,k) = CS%kappa_q(i,j) * vort_xy(I,J,k) * sh_xx_corner(I,J)
+        Txy(I,J,k) = CS%kappa_q(i,j) * (vort_xy(I,J,k) * sh_xx_corner(I,J))
       enddo ; enddo
     endif
 
