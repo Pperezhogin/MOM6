@@ -11,12 +11,14 @@ use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_error_handler, only : MOM_error, WARNING
+use MOM_cpu_clock,             only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
+use MOM_cpu_clock,             only : CLOCK_MODULE, CLOCK_ROUTINE
 
 implicit none ; private
 
 #include <MOM_memory.h>
 
-public Zanna_Bolton_2020, ZB_2020_init, ZB_2020_end
+public Zanna_Bolton_2020, ZB_2020_init, ZB_2020_end, ZB_pass_gradient_and_thickness
 
 !> Control structure for Zanna-Bolton-2020 parameterization.
 type, public :: ZB2020_CS ; private
@@ -43,7 +45,7 @@ type, public :: ZB2020_CS ; private
   real :: subroundoff = 1e-30 !> A negligible parameter which avoids division by zero, but is too small to
                               !! modify physical values. [nondim]
 
-  real, dimension(:,:,:), allocatable, public :: &
+  real, dimension(:,:,:), allocatable :: &
           sh_xx,   & !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
                      !! points including metric terms [T-1 ~> s-1]
           sh_xy,   & !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
@@ -74,6 +76,17 @@ type, public :: ZB2020_CS ; private
   integer :: id_Txx = -1
   integer :: id_Tyy = -1
   integer :: id_Txy = -1
+  !>@}
+
+  !>@{ CPU time clock IDs
+  integer :: id_clock_module
+  integer :: id_clock_pass
+  integer :: id_clock_cdiss
+  integer :: id_clock_stress
+  integer :: id_clock_divergence
+  integer :: id_clock_upd
+  integer :: id_clock_post
+  integer :: id_clock_source
   !>@}
 
 end type ZB2020_CS
@@ -193,6 +206,16 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
+  ! Clock IDs
+  CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE)
+  CS%id_clock_pass = cpu_clock_id('(ZB2020 pass fields)', grain=CLOCK_ROUTINE)
+  CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE)
+  CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE)
+  CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE)
+  CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE)
+  CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE)
+  CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE)
+
 end subroutine ZB_2020_init
 
 !> Deallocated any variables allocated in ZB_2020_init
@@ -219,10 +242,72 @@ subroutine ZB_2020_end(CS)
 
 end subroutine ZB_2020_end
 
+!> Save precomputed velocity gradients and thicknesses
+!! from the horizontal eddy viscosity module
+subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
+                                       G, GV, CS, k)
+  type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
+  type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
+  type(ZB2020_CS),               intent(inout) :: CS     !< ZB2020 control structure.
+
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(in) :: sh_xy,   &  !< horizontal shearing strain (du/dy + dv/dx) 
+                              !! including metric terms [T-1 ~> s-1]
+                  vort_xy, &  !< Vertical vorticity (dv/dx - du/dy) 
+                              !! including metric terms [T-1 ~> s-1]
+                  hq          !< harmonic mean of the harmonic means 
+                              !! of the u- & v point thicknesses [H ~> m or kg m-2]
+
+  real, dimension(SZI_(G),SZJ_(G)), &
+    intent(in) :: sh_xx       !< horizontal tension (du/dx - dv/dy) 
+                              !! including metric terms [T-1 ~> s-1]
+  
+  real, dimension(SZIB_(G),SZJ_(G)), &
+    intent(in) :: h_u         !< Thickness interpolated to u points [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJB_(G)), &
+    intent(in) :: h_v         !< Thickness interpolated to v points [H ~> m or kg m-2].
+
+  integer, intent(in) :: k    !< The vertical index of the layer to be passed.
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+
+  call cpu_clock_begin(CS%id_clock_pass)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  do J=js-1,Jeq ; do I=is-1,Ieq
+    CS%hq(I,J,k) = hq(I,J)
+  enddo; enddo
+
+  do j=js-2,je+2 ; do I=Isq-1,Ieq+1
+    CS%h_u(I,j,k) = h_u(I,j)
+  enddo; enddo
+
+  do J=Jsq-1,Jeq+1 ; do i=is-2,ie+2
+    CS%h_v(i,J,k) = h_v(i,J)
+  enddo; enddo
+
+  do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+    CS%sh_xx(i,j,k) = sh_xx(i,j)
+  enddo ; enddo
+  
+  do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+    CS%sh_xy(I,J,k) = sh_xy(I,J)
+  enddo; enddo
+
+  do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
+    CS%vort_xy(I,J,k) = vort_xy(I,J)
+  enddo; enddo
+
+  call cpu_clock_end(CS%id_clock_pass)
+
+end subroutine ZB_pass_gradient_and_thickness
+
 !> Baroclinic Zanna-Bolton-2020 parameterization, see
 !! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
-
-subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
+subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                              dx2h, dy2h, dx2q, dy2q)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
@@ -236,11 +321,11 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
                                  intent(in) :: h       !< Layer thicknesses [H ~> m or kg m-2].
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(out) :: fx     !< Zonal acceleration due to convergence of
-                                                       !! along-coordinate stress tensor [L T-2 ~> m s-2]
+                                 intent(inout) :: diffu   !< Zonal acceleration due to convergence of
+                                                          !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(out) :: fy     !< Meridional acceleration due to convergence
-                                                       !! of along-coordinate stress tensor [L T-2 ~> m s-2]
+                                 intent(inout) :: diffv   !< Meridional acceleration due to convergence
+                                                          !! of along-coordinate stress tensor [L T-2 ~> m s-2]
 
   real, dimension(SZI_(G),SZJ_(G)),           & 
                                  intent(in) :: dx2h, & !< dx^2 at h points [L2 ~> m2]
@@ -249,6 +334,23 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
   real, dimension(SZI_(G),SZJ_(G)),           & 
                                  intent(in) :: dx2q, & !< dx^2 at q points [L2 ~> m2]
                                                dy2q    !< dy^2 at q points [L2 ~> m2]
+
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
+    ZB2020u           !< Zonal acceleration due to convergence of
+                      !! along-coordinate stress tensor for ZB model
+                      !! [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    ZB2020v           !< Meridional acceleration due to convergence
+                      !! of along-coordinate stress tensor for ZB model
+                      !! [L T-2 ~> m s-2]
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+
+  call cpu_clock_begin(CS%id_clock_module)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   if (CS%Klower_R_diss > 0.) then
     call compute_c_diss(CS%sh_xx, CS%sh_xy, CS%vort_xy, &
@@ -260,19 +362,33 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS, &
                       G, GV, CS)
 
   call compute_stress_divergence(CS%Txx, CS%Tyy, CS%Txy, h, &
-                                 fx, fy, G, GV, CS, &
+                                 ZB2020u, ZB2020v, G, GV, CS, &
                                  dx2h, dy2h, dx2q, dy2q)
 
-  if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, fx, CS%diag)
-  if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, fy, CS%diag)
+  call cpu_clock_begin(CS%id_clock_upd)
+  do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+    diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
+  enddo ; enddo ; enddo
+
+  do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+    diffv(i,J,k) = diffv(i,J,k) + ZB2020v(i,J,k)
+  enddo ; enddo ; enddo
+  call cpu_clock_end(CS%id_clock_upd)
+
+  call cpu_clock_begin(CS%id_clock_post)
+  if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, ZB2020u, CS%diag)
+  if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, ZB2020v, CS%diag)
 
   if (CS%id_Txx>0)     call post_data(CS%id_Txx, CS%Txx, CS%diag)
 
   if (CS%id_Tyy>0)     call post_data(CS%id_Tyy, CS%Tyy, CS%diag)
 
   if (CS%id_Txy>0)     call post_data(CS%id_Txy, CS%Txy, CS%diag)
+  call cpu_clock_end(CS%id_clock_post)
 
-  call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
+  call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS)
+
+  call cpu_clock_end(CS%id_clock_module)
 
 end subroutine Zanna_Bolton_2020
 
@@ -304,6 +420,8 @@ subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
 
   real :: shear ! Shear in Klower2018 formula at h points [L-1 ~> s-1]
 
+  call cpu_clock_begin(CS%id_clock_cdiss)
+
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB; nz = GV%ke
 
   do k=1,nz
@@ -330,6 +448,8 @@ subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
 
   enddo ! end of k loop
   
+  call cpu_clock_end(CS%id_clock_cdiss)
+
 end subroutine compute_c_diss
 
 !> Compute stress tensor T
@@ -365,12 +485,6 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
         intent(inout) :: Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
 
-  real :: sum_sq       ! 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) [T-2 ~> s-2]
-  real :: vort_sh      ! vort_xy*sh_xy [T-2 ~> s-2]
-
-  integer :: Isq, Ieq, Jsq, Jeq, nz
-  integer :: i, j, k, n
-
   ! Arrays defined in h (CENTER) points
   real, dimension(SZI_(G),SZJ_(G)) :: &
     vort_xy_center, &  ! Vorticity interpolated to the center [T-1 ~> s-1]
@@ -379,6 +493,14 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
   ! Arrays defined in q (CORNER) points
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     sh_xx_corner       ! Horizontal tension interpolated to the corner [T-1 ~> s-1]
+
+  real :: sum_sq       ! 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) [T-2 ~> s-2]
+  real :: vort_sh      ! vort_xy*sh_xy [T-2 ~> s-2]
+
+  integer :: Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+
+  call cpu_clock_begin(CS%id_clock_stress)
 
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB; nz = GV%ke
 
@@ -427,6 +549,8 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
 
   enddo ! end of k loop
 
+  call cpu_clock_end(CS%id_clock_stress)
+
 end subroutine compute_stress
 
 !> Compute the divergence of subgrid stress
@@ -470,6 +594,8 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
+
+  call cpu_clock_begin(CS%id_clock_divergence)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -527,6 +653,8 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
 
   enddo ! end of k loop
 
+  call cpu_clock_end(CS%id_clock_divergence)
+
 end subroutine compute_stress_divergence
 
 !> Computes the 3D energy source term for the ZB2020 scheme
@@ -572,6 +700,8 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
+  call cpu_clock_begin(CS%id_clock_source)
+
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
@@ -607,6 +737,8 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
     call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
   endif
+
+  call cpu_clock_end(CS%id_clock_source)
 
 end subroutine compute_energy_source
 
