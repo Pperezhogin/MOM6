@@ -57,9 +57,9 @@ type, public :: ZB2020_CS ; private
           hq         !< Thickness in CORNER points [H ~> m or kg m-2]
   
   real, dimension(:,:,:), allocatable :: &
-          Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
-          Tyy,     & !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
-          Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
+          Txx,     & !< Subgrid stress xx component in h [H L2 T-2 ~> m3 s-2 or kg s-2]
+          Tyy,     & !< Subgrid stress yy component in h [H L2 T-2 ~> m3 s-2 or kg s-2]
+          Txy        !< Subgrid stress xy component in q [H L2 T-2 ~> m3 s-2 or kg s-2]
 
   real, dimension(:,:), allocatable :: &
           kappa_h, & !< Scaling coefficient in h points [L2 ~> m2]
@@ -76,6 +76,10 @@ type, public :: ZB2020_CS ; private
   integer :: id_Txx = -1
   integer :: id_Tyy = -1
   integer :: id_Txy = -1
+  integer :: id_cdiss = -1
+  ! Debug fields
+  integer :: id_sh_xx = -1, id_sh_xy = -1, id_vort_xy = -1
+  integer :: id_h_u = -1, id_h_v = -1, id_hq = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -196,15 +200,34 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
       'Kinetic Energy Source from Horizontal Viscosity', &
       'm3 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2)*US%s_to_T)
 
-  ! action of filter on momentum flux
   CS%id_Txx = register_diag_field('ocean_model', 'Txx', diag%axesTL, Time, &
-      'Diagonal term (Txx) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
+      'Diagonal term (Txx) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
 
   CS%id_Tyy = register_diag_field('ocean_model', 'Tyy', diag%axesTL, Time, &
-      'Diagonal term (Tyy) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
+      'Diagonal term (Tyy) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
 
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
-      'Off-diagonal term (Txy) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
+      'Off-diagonal term (Txy) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
+
+  CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
+      'Klower (2018) attenuation coefficient', '1', conversion=1.)
+
+  ! These fields are used for debug only
+  CS%id_sh_xx = register_diag_field('ocean_model', 'sh_xx', diag%axesTL, Time, &
+      'Horizontal tension (du/dx - dv/dy) in h (CENTER) points including metric terms', &
+      's-1', conversion=US%s_to_T)
+  CS%id_sh_xy = register_diag_field('ocean_model', 'sh_xy', diag%axesBL, Time, &
+      'Horizontal shearing strain (du/dy + dv/dx) in q (CORNER) points including metric terms', &
+      's-1', conversion=US%s_to_T)
+  CS%id_vort_xy = register_diag_field('ocean_model', 'vort_xy', diag%axesBL, Time, &
+      'Vertical vorticity (dv/dx - du/dy) in q (CORNER) points including metric terms', &
+      's-1', conversion=US%s_to_T)
+  CS%id_h_u = register_diag_field('ocean_model', 'h_u', diag%axesCuL, Time, &
+      'Thickness interpolated to u points', 'm', conversion=GV%H_to_m)
+  CS%id_h_v = register_diag_field('ocean_model', 'h_v', diag%axesCvL, Time, &
+      'Thickness interpolated to v points', 'm', conversion=GV%H_to_m)
+  CS%id_hq = register_diag_field('ocean_model', 'hq', diag%axesBL, Time, &
+      'Thickness in CORNER points', 'm', conversion=GV%H_to_m)
 
   ! Clock IDs
   CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE)
@@ -378,14 +401,22 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
   call cpu_clock_end(CS%id_clock_upd)
 
   call cpu_clock_begin(CS%id_clock_post)
+  ! Acceleration
   if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, ZB2020u, CS%diag)
   if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, ZB2020v, CS%diag)
 
+  ! Stress tensor
   if (CS%id_Txx>0)     call post_data(CS%id_Txx, CS%Txx, CS%diag)
-
   if (CS%id_Tyy>0)     call post_data(CS%id_Tyy, CS%Tyy, CS%diag)
-
   if (CS%id_Txy>0)     call post_data(CS%id_Txy, CS%Txy, CS%diag)
+
+  ! Debug fields
+  if (CS%id_sh_xx>0)   call post_data(CS%id_sh_xx, CS%sh_xx, CS%diag)
+  if (CS%id_sh_xy>0)   call post_data(CS%id_sh_xy, CS%sh_xy, CS%diag)
+  if (CS%id_vort_xy>0) call post_data(CS%id_vort_xy, CS%vort_xy, CS%diag)
+  if (CS%id_h_u>0)     call post_data(CS%id_h_u, CS%h_u, CS%diag)
+  if (CS%id_h_v>0)     call post_data(CS%id_h_v, CS%h_v, CS%diag)
+  if (CS%id_hq>0)      call post_data(CS%id_hq, CS%hq, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
 
   call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS)
@@ -567,7 +598,10 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
   type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),     &
-        intent(inout) :: Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
+        intent(inout) :: Txx,     & !< Subgrid stress xx component in h;
+                                    !! Input:[L2 T-2 ~> m2 s-2], Output: 
+                                    !!       [H L2 T-2 ~> m3 s-2 or kg s-2]
+                                    !! And same for tensors Tyy, Txy below
                          Tyy        !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
   
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
