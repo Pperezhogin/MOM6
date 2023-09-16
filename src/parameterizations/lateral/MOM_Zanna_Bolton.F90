@@ -273,6 +273,7 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   integer :: i, j
 
   call cpu_clock_begin(CS%id_clock_pass)
+  call cpu_clock_begin(CS%id_clock_module)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -302,6 +303,7 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   enddo; enddo
 
   call cpu_clock_end(CS%id_clock_pass)
+  call cpu_clock_end(CS%id_clock_module)
 
 end subroutine ZB_pass_gradient_and_thickness
 
