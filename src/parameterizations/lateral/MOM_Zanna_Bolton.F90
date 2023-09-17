@@ -276,6 +276,10 @@ end subroutine ZB_2020_end
 
 !> Save precomputed velocity gradients and thicknesses
 !! from the horizontal eddy viscosity module
+!! We save sh_xx with halo 2 (is-2:ie+2,js-2:je+2)
+!! sh_xy and vort_xy with halo 1 (Isq-1:Ieq+1,Jsq-1:Jeq+1)
+!! These are maximum halo sizes possible with halo 2 
+!! used for velocities u, v in RK2 stepping routine
 subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
@@ -309,28 +313,34 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-  do J=js-1,Jeq ; do I=is-1,Ieq
+  do J=Jsq,Jeq ; do I=Isq,Ieq
     CS%hq(I,J,k) = hq(I,J)
   enddo; enddo
 
-  do j=js-2,je+2 ; do I=Isq-1,Ieq+1
+  do j=js,je ; do I=Isq,Ieq
     CS%h_u(I,j,k) = h_u(I,j)
   enddo; enddo
 
-  do J=Jsq-1,Jeq+1 ; do i=is-2,ie+2
+  do J=Jsq,Jeq ; do i=is,ie
     CS%h_v(i,J,k) = h_v(i,J)
   enddo; enddo
 
-  do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+  ! No physical B.C. is required for
+  ! sh_xx in ZB2020. However, filtering
+  ! may require BC
+  do j=js-2,je+2 ; do i=is-2,ie+2
     CS%sh_xx(i,j,k) = sh_xx(i,j)
   enddo ; enddo
   
-  do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-    CS%sh_xy(I,J,k) = sh_xy(I,J)
+  ! We multiply by mask to remove 
+  ! implicit dependence on CS%no_slip
+  ! flag in hor_visc module
+  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+    CS%sh_xy(I,J,k) = sh_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
-  do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
-    CS%vort_xy(I,J,k) = vort_xy(I,J)
+  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+    CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
   call cpu_clock_end(CS%id_clock_pass)
@@ -440,6 +450,10 @@ end subroutine Zanna_Bolton_2020
 !! c_diss = 1/(1+(shear/(abs(f)*R_diss)))
 !! where shear = sqrt(sh_xx**2 + sh_xy**2)
 !! or shear = sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+!! The arrays sh_xx, sh_xy, vort_xy should have halo 1, i.e.
+!! (is-1:ie+1,js-1:je+1) and (Isq-1:Ieq+1,Jsq-1:Jeq+1)
+!! B.C. is required for sh_xy and vort_xy (for interpolation)
+!! B.C. for sh_xx is not needed
 subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
@@ -458,18 +472,18 @@ subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
         intent(inout) :: c_diss !< Attenuation parameter in h points
                                 !! (Klower 2018, Juricke2019,2020) [nondim]
 
-  integer :: Isq, Ieq, Jsq, Jeq, nz
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
 
   real :: shear ! Shear in Klower2018 formula at h points [L-1 ~> s-1]
 
   call cpu_clock_begin(CS%id_clock_cdiss)
 
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB; nz = GV%ke
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   do k=1,nz
-
-    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+    do j=js-1,je+1 ; do i=is-1,ie+1
       ! sqrt(sh_xx**2 + sh_xy**2)
       if (CS%Klower_shear == 0) then
         shear = sqrt(sh_xx(i,j,k)**2 + 0.25 * (          &
@@ -507,6 +521,20 @@ end subroutine compute_c_diss
 !! T -> T * kappa
 !! Update of the governing equations:
 !! (du/dt, dv/dt) = div(T)
+!! The input arrays vort_xy and sh_xy should have zero boundary
+!! condtions. 
+!! B.C. for sh_xx is not required
+!! Arrays vort_xy and sh_xy should have 1 halo,
+!! i.e. (Isq-1:Ieq+1, Jsq-1:Jeq+1).
+!! Arrays sh_xx also should have 1 halo,
+!! i.e. (is-1:ie+1, js-1:je+1)
+!! If conditions are satisfied, the output arrays Txx, Tyy
+!! will have halo 1 (is-1:is+1, js-1:js+1) and Txy
+!! will have halo 0 (Isq:Ieq, Jsq:Jeq), while
+!! Txy will have applied B.C. 
+!! B.C. for Txx, Tyy is not applied.
+!! B.C. for Txx, Tyy is not needed for ZB2020,
+!! but may be needed for filtering.
 subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
@@ -540,36 +568,32 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
   real :: sum_sq       ! 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) [T-2 ~> s-2]
   real :: vort_sh      ! vort_xy*sh_xy [T-2 ~> s-2]
 
-  integer :: Isq, Ieq, Jsq, Jeq, nz
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
 
   call cpu_clock_begin(CS%id_clock_stress)
 
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB; nz = GV%ke
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   sum_sq = 0.
   vort_sh = 0.
 
   do k=1,nz
 
-    ! interpolation
-    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+    ! It is assumed that B.C. is applied to sh_xy and vort_xy
+    do j=js-1,je+1 ; do i=is-1,ie+1
       sh_xy_center(i,j) = 0.25 * ( (sh_xy(I-1,J-1,k) + sh_xy(I,J,k)) &
                                  + (sh_xy(I-1,J,k) + sh_xy(I,J-1,k)) )
     enddo ; enddo
 
-    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+    do j=js-1,je+1 ; do i=is-1,ie+1
       vort_xy_center(i,j) = 0.25 * ( (vort_xy(I-1,J-1,k) + vort_xy(I,J,k)) &
                                    + (vort_xy(I-1,J,k) + vort_xy(I,J-1,k)) )
     enddo ; enddo
 
-    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-      sh_xx_corner(I,J) = 0.25 * ( (sh_xx(i+1,j+1,k) + sh_xx(i,j,k)) &
-                                 + (sh_xx(i+1,j,k) + sh_xx(i,j+1,k)))
-    enddo ; enddo
-
     ! compute Txx, Tyy tensor
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do j=js-1,je+1 ; do i=is-1,ie+1
       if (CS%ZB_type .NE. 1) then
         sum_sq = 0.5 * &
           (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j,k)**2)
@@ -585,8 +609,15 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
 
     ! Here we assume that Txy is initialized to zero
     if (CS%ZB_type .NE. 2) then
-      do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
-        Txy(I,J,k) = CS%kappa_q(i,j) * (vort_xy(I,J,k) * sh_xx_corner(I,J))
+      do J=Jsq,Jeq ; do I=Isq,Ieq
+        sh_xx_corner(I,J) = 0.25 * ( (sh_xx(i+1,j+1,k) + sh_xx(i,j,k)) &
+                                   + (sh_xx(i+1,j,k) + sh_xx(i,j+1,k)))
+      enddo ; enddo
+
+      do J=Jsq,Jeq ; do I=Isq,Ieq
+        ! We assume that vort_xy has zero B.C.. So,
+        ! no additional masking is required
+        Txy(I,J,k) = CS%kappa_q(I,J) * (vort_xy(I,J,k) * sh_xx_corner(I,J))
       enddo ; enddo
     endif
 
@@ -601,6 +632,9 @@ end subroutine compute_stress
 !! (fx,fy) = 1/h Div(h * [Txx, Txy; Txy, Tyy])
 !! Optionally, before the divergence, we attenuate the stress 
 !! according to the Klower formula
+!! Txx, Tyy, c_diss should have halo 1 (is-1:is+1, js-1:js+1)
+!! Txy should be in q points with halo 0 (Isq:Ieq, Jsq:Jeq)
+!! B.C. are NOT required for all tensors: Txx, Tyy, Txy, c_diss
 subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                                      dx2h, dy2h, dx2q, dy2q)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
@@ -655,25 +689,34 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
     ! Attenuation of the stress
     ! According to Klower
     if (CS%Klower_R_diss > 0.) then
-      do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        Txx(i,j,k) = Txx(i,j,k) * CS%c_diss(i,j,k)
-        Tyy(i,j,k) = Tyy(i,j,k) * CS%c_diss(i,j,k)
+      ! B.C. for this interpolation is not
+      ! required because boundary q points 
+      ! will be set to 0 with masking Txy below
+      do J=Jsq,Jeq ; do I=Isq,Ieq
+        Txy(I,J,k) = Txy(I,J,k) * &
+        0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k)) &
+              + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))
       enddo ; enddo
 
-      do J=js-1,Jeq ; do I=is-1,Ieq
-        Txy(I,J,k) = Txy(I,J,k) * &
-        0.25 * ((CS%c_diss(I,J  ,k) + CS%c_diss(I+1,J+1,k)) &
-              + (CS%c_diss(I,J+1,k) + CS%c_diss(I+1,J  ,k)))
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        Txx(i,j,k) = Txx(i,j,k) * CS%c_diss(i,j,k)
+        Tyy(i,j,k) = Tyy(i,j,k) * CS%c_diss(i,j,k)
       enddo ; enddo
     endif
 
     ! Accounting for the varying thickness
-    do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    ! B.C. is not required here, 
+    ! because only inner points are used
+    ! due to no-normal-flow condition on velocity
+    do j=js-1,je+1 ; do i=is-1,ie+1
       Txx(i,j,k) = Txx(i,j,k) * h(i,j,k)
       Tyy(i,j,k) = Tyy(i,j,k) * h(i,j,k)
     enddo ; enddo
 
-    do J=js-1,Jeq ; do I=is-1,Ieq
+    ! Free slip boundary condition is applied here
+    ! So, input tensor Txy is not 
+    ! required to have B.C.
+    do J=Jsq,Jeq ; do I=Isq,Ieq
       Txy(I,J,k) = Txy(I,J,k) * (CS%hq(I,J,k) * G%mask2dBu(I,J))
     enddo ; enddo
 
