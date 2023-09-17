@@ -89,6 +89,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_S_22 = -1
   integer :: id_S_12 = -1
   integer :: id_c_diss = -1
+  integer :: id_h = -1, id_u = -1, id_v = -1
   !>@}
 
 end type ZB2020_CS
@@ -254,6 +255,14 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   CS%id_c_diss  = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
       'Klower (2018) attenuation coefficient', '1', conversion=1.)
+
+  ! For debug only
+  CS%id_h = register_diag_field('ocean_model', 'h_ZB', diag%axesTL, Time, &
+      'Thickness in ZB module', 'm', conversion=GV%H_to_m)
+  CS%id_u = register_diag_field('ocean_model', 'u_ZB', diag%axesCuL, Time, &
+      'Zonal velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
+  CS%id_v = register_diag_field('ocean_model', 'v_ZB', diag%axesCvL, Time, &
+      'Meridional velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
 
 end subroutine ZB_2020_init
 
@@ -742,6 +751,10 @@ subroutine Zanna_Bolton_2020(u, v, h, fx, fy, G, GV, CS)
   if (CS%id_S_12>0)     call post_data(CS%id_S_12, S_12_3d, CS%diag)
 
   if (CS%id_c_diss>0)   call post_data(CS%id_c_diss, c_diss_3d, CS%diag)
+
+  if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
+  if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
+  if (CS%id_v>0)       call post_data(CS%id_v, v, CS%diag)
 
   call compute_energy_source(u, v, h, fx, fy, G, GV, CS)
 
