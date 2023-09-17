@@ -115,9 +115,19 @@ def optimal_amplitude(ZBx,ZBy,Smagx,Smagy,SGSx,SGSy,u,v,amp_Eng):
     corr = (xr.corr(ZBx.chunk({'zl':1,'Time':1}),SGSx,dim=dim_u)+xr.corr(ZBy.chunk({'zl':1,'Time':1}),SGSy,dim=dim_v))/2
     return amp_MSE, MSE, MSE_Eng, corr
 
-def filter_apply(q):
-    x = x_coord(q)
-    y = y_coord(q)
+def filter_apply(_q,x_periodic=False):
+    x = x_coord(_q)
+    y = y_coord(_q)
+
+    q = _q
+    if x_periodic:
+        if x.name == 'xh':
+            q = _q.pad({x.name: (1,1)}, mode='wrap')
+        if x.name == 'xq':
+            q = _q.pad({x.name: (1,1)}, mode='wrap')
+            q[{x.name: 0}] = _q[{x.name: -2}]
+            q[{x.name: -1}] = _q[{x.name: 1}]
+
     def sel(i,j):
         qsel = q.isel({x.name: slice(1+i,-1+i if i<1 else None), y.name: slice(1+j,-1+j if j<1 else None)})
         qsel[x.name] = q[x.name][1:-1]
@@ -137,7 +147,8 @@ def filter_apply(q):
         + wside   * sel(0,-1)  \
         + wside   * sel(0,1)
     
-    return remesh(qf,q)
+    
+    return remesh(qf,_q)
 
 def filter_AD(q, nwidth=1, norder=0):
     '''

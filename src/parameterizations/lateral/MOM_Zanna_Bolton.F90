@@ -7,10 +7,11 @@ use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
-use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
+use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type, &
+                              start_group_pass, complete_group_pass
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
-use MOM_error_handler, only : MOM_error, WARNING
+use MOM_error_handler, only : MOM_error, WARNING, FATAL
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
 
@@ -403,6 +404,8 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                       CS%Txx, CS%Tyy, CS%Txy,           &
                       G, GV, CS)
 
+  call filter_stress(CS%Txx, CS%Tyy, CS%Txy, G, GV, CS, CS%Stress_iter)
+
   call compute_stress_divergence(CS%Txx, CS%Tyy, CS%Txy, h, &
                                  ZB2020u, ZB2020v, G, GV, CS, &
                                  dx2h, dy2h, dx2q, dy2q)
@@ -745,6 +748,178 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
   call cpu_clock_end(CS%id_clock_divergence)
 
 end subroutine compute_stress_divergence
+
+!> This function iteratively applied
+!! filter to the stress tensor
+!! We assume that the stress tensor
+!! satisfies the conditions from compute_stress
+!! Routine, i.e.
+!! Txx, Tyy have halo 1 but have no B.C.
+!! Txy has halo 0 and but has B.C.
+subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
+  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
+  
+  integer, intent(in) :: niter !< number of iterations to be applied
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),     &
+        intent(inout) :: Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
+                         Tyy        !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
+  
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
+        intent(inout) :: Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
+
+  
+  type(group_pass_type) :: pass_Tq  ! A handle for halo pass of Txy
+  type(group_pass_type) :: pass_Th  ! A handle for halo pass of Txx, Tyy
+
+  integer :: max_halo ! maximum availabe halo
+  integer :: halo     ! dummy variable for halo update
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: isd, ied, jsd, jed, Isdq, Iedq, Jsdq, Jedq
+  integer :: i, j, k, n, iter
+
+  if (niter == 0) then
+    return
+  endif
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  Isdq = G%IsdB ; Iedq = G%IedB ; Jsdq = G%JsdB ; Jedq = G%JedB
+  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+
+  max_halo = min(ied-ie, jed-je)
+  if (niter > max_halo) then
+    call MOM_error(FATAL, "MOM_Zanna_Bolton.F90, Use smaller number of filters")
+  endif
+
+  call create_group_pass(pass_Tq, Txy, G%Domain, halo=niter, position=CORNER)
+  ! Halo is the same for Txx, Tyy because we need halo 1 for output
+  call create_group_pass(pass_Th, Txx, G%Domain, halo=niter)
+  call create_group_pass(pass_Th, Tyy, G%Domain, halo=niter)
+  
+  call start_group_pass(pass_Tq, G%Domain)
+
+  do k=1,nz
+    call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
+                   isd,ied,jsd,jed,       & ! array size
+                   is,ie,js,je,           & ! owned points
+                   0,                     & ! zero halo of output
+                   .true., .true.)          ! apply B.C. to input/output arrays
+
+    call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
+                   isd,ied,jsd,jed,       & ! array size
+                   is,ie,js,je,           & ! owned points
+                   0,                     & ! zero halo of output
+                   .true., .true.)          ! apply B.C. to input/output arrays
+  enddo
+
+  call start_group_pass(pass_Th, G%Domain)
+  call complete_group_pass(pass_Tq, G%Domain)
+
+  do k=1,nz
+    halo = niter-1
+    do iter=1,niter
+      call filter_2D(Txy(:,:,k), G%mask2dBu, & ! array and mask
+                    Isdq,Iedq,Jsdq,Jedq,     & ! array size     
+                    Isq,Ieq,Jsq,Jeq,         & ! owned points       
+                    halo,                    & ! halo of output array
+                    .false., .true.)           ! apply B.C. to output arrays
+      halo = halo - 1
+    enddo
+    ! filtered array does not have halo
+  enddo
+
+  call complete_group_pass(pass_Th, G%Domain)
+
+  do k=1,nz
+    halo = niter-1 
+    do iter=1,niter-1
+      call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
+                     isd,ied,jsd,jed,       & ! array size
+                     is,ie,js,je,           & ! owned points
+                     halo,                  & ! halo of output array
+                     .false., .true.)         ! apply B.C. to output arrays
+      halo = halo - 1
+    enddo
+    ! filtered array has halo 1
+
+    halo = niter-1 
+    do iter=1,niter-1
+      call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
+                     isd,ied,jsd,jed,       & ! array size
+                     is,ie,js,je,           & ! owned points
+                     halo,                  & ! halo of output array
+                     .false., .true.)         ! apply B.C. to output arrays
+      halo = halo - 1
+    enddo
+    ! filtered array has halo 1
+  enddo
+
+end subroutine filter_stress
+
+!> One iteration of 3x3 filter
+!! [1 2 1;
+!!  2 4 2;
+!!  1 2 1]/16
+!! removing chess-harmonic.
+!! The input array should have update halo.
+!! B.C. can be applied optionally
+!! to input and/or output arrays
+!! The filter is in-place,
+!! i.e. we modify the inpay array
+subroutine filter_2D(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, BC_out)
+  real, dimension(isd:ied,jsd:jed), &
+        intent(inout) :: x            !< Input/output array [dim arbitrary]
+  real, dimension(isd:ied,jsd:jed), &
+        intent(in)    :: mask         !< Mask array for placing B.C. [nondim]  
+  integer, intent(in) :: &
+                         isd, ied,  & !< Indices of array size
+                         jsd, jed,  & !< Indices of array size
+                         is,  ie,   & !< Indices of owned points
+                         js,  je,   & !< Indices of owned points
+                         halo         !< Required halo of the output array
+                        
+  logical :: BC_in, BC_out            !< Apply B.C. to input/output arrays
+
+  real :: wside        ! weights for side points [nondim]
+  real :: wcorner      ! weights for corner points [nondim]
+  real :: wcenter      ! weight for the center points [nondim]
+
+  integer :: i, j
+
+  real :: tmp(isd:ied,jsd:jed) ! temporary array for filtering [dim arbitrary]
+
+  wside = 1. / 8.
+  wcorner = 1. / 16.
+  wcenter = 1. - (wside*4. + wcorner*4.)
+
+  do j = js-halo-1, je+halo+1; do i = is-halo-1, ie+halo+1
+    if (BC_in) then
+      tmp(i,j) = x(i,j) * mask(i,j)
+    else
+      tmp(i,j) = x(i,j)
+    endif
+  enddo; enddo
+
+  do j = js-halo, je+halo; do i = is-halo, ie+halo
+    x(i,j) =  wcenter * tmp(i,j)               &
+            + wcorner * (                      &
+              (tmp(i-1,j-1)+tmp(i+1,j+1))      &
+            + (tmp(i-1,j+1)+tmp(i+1,j-1))      &
+            )                                  &
+            + wside * (                        &
+              (tmp(i-1,j)+tmp(i+1,j))          &
+            + (tmp(i,j-1)+tmp(i,j+1))          &
+            )
+    if (BC_out) then
+      x(i,j) = x(i,j) * mask(i,j)
+    endif
+  enddo; enddo
+
+end subroutine filter_2D
 
 !> Computes the 3D energy source term for the ZB2020 scheme
 !! similarly to MOM_diagnostics.F90, specifically 1125 line.
