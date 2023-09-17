@@ -11,8 +11,8 @@ use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_error_handler, only : MOM_error, WARNING
-use MOM_cpu_clock,             only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
-use MOM_cpu_clock,             only : CLOCK_MODULE, CLOCK_ROUTINE
+use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
+use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
 
 implicit none ; private
 
@@ -237,14 +237,16 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
       'Meridional velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
 
   ! Clock IDs
-  CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE)
-  CS%id_clock_pass = cpu_clock_id('(ZB2020 pass fields)', grain=CLOCK_ROUTINE)
-  CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE)
-  CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE)
-  CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE)
-  CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE)
-  CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE)
-  CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE)
+  ! Only module is measured with syncronization. While smaller 
+  ! parts are measured without -- because these are nested clocks.
+  CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE, sync=.true.)
+  CS%id_clock_pass = cpu_clock_id('(ZB2020 pass fields)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
 
 end subroutine ZB_2020_init
 
@@ -303,7 +305,6 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   integer :: i, j
 
   call cpu_clock_begin(CS%id_clock_pass)
-  call cpu_clock_begin(CS%id_clock_module)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -333,7 +334,6 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   enddo; enddo
 
   call cpu_clock_end(CS%id_clock_pass)
-  call cpu_clock_end(CS%id_clock_module)
 
 end subroutine ZB_pass_gradient_and_thickness
 
