@@ -945,20 +945,20 @@ subroutine filter_LR(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, B
 
   integer :: i, j
 
-  real :: tmp(jsd:jed, isd:ied) ! temporary array for filtering [dim arbitrary]
+  real :: tmp(isd:ied, jsd:jed) ! temporary array for filtering [dim arbitrary]
 
   wside = 1. / 4.
   wcenter = 1. - (2. * wside)
 
   do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
     if (BC_in) then
-      tmp(j,i) = wcenter * x(i,j) * mask(i,j) &
+      tmp(i,j) = wcenter * x(i,j) * mask(i,j) &
                + wside * (                    &
                   x(i,j-1) * mask(i,j-1)      &
                 + x(i,j+1) * mask(i,j+1)      &
                )
     else
-      tmp(j,i) = wcenter * x(i,j) &
+      tmp(i,j) = wcenter * x(i,j) &
                + wside * (        &
                   x(i,j-1)        &
                 + x(i,j+1)        &
@@ -966,11 +966,11 @@ subroutine filter_LR(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, B
     endif
   enddo; enddo
 
-  do i = is-halo, ie+halo; do j = js-halo, je+halo;
-    x(i,j) = wcenter * tmp(j,i) &
+  do j = js-halo, je+halo; do i = is-halo, ie+halo;
+    x(i,j) = wcenter * tmp(i,j) &
                + wside * (      &
-                  tmp(j,i-1)    &
-                + tmp(j,i+1)    &
+                  tmp(i-1,j)    &
+                + tmp(i+1,j)    &
                )
     if (BC_out) then
       x(i,j) = x(i,j) * mask(i,j)
