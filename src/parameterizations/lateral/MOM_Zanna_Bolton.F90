@@ -798,13 +798,13 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
   call cpu_clock_begin(CS%id_clock_filter)
 
     do k=1,nz
-      call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
+      call filter_LR(Txx(:,:,k), G%mask2dT, & ! array and mask
                     isd,ied,jsd,jed,       & ! array size
                     is,ie,js,je,           & ! owned points
                     0,                     & ! zero halo of output
                     .true., .true.)          ! apply B.C. to input/output arrays
 
-      call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
+      call filter_LR(Tyy(:,:,k), G%mask2dT, & ! array and mask
                     isd,ied,jsd,jed,       & ! array size
                     is,ie,js,je,           & ! owned points
                     0,                     & ! zero halo of output
@@ -822,7 +822,7 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
     do k=1,nz
       halo = niter-1
       do iter=1,niter
-        call filter_2D(Txy(:,:,k), G%mask2dBu, & ! array and mask
+        call filter_LR(Txy(:,:,k), G%mask2dBu, & ! array and mask
                       Isdq,Iedq,Jsdq,Jedq,     & ! array size     
                       Isq,Ieq,Jsq,Jeq,         & ! owned points       
                       halo,                    & ! halo of output array
@@ -841,7 +841,7 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
     do k=1,nz
       halo = niter-1 
       do iter=1,niter-1
-        call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
+        call filter_LR(Txx(:,:,k), G%mask2dT, & ! array and mask
                       isd,ied,jsd,jed,       & ! array size
                       is,ie,js,je,           & ! owned points
                       halo,                  & ! halo of output array
@@ -852,7 +852,7 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
 
       halo = niter-1 
       do iter=1,niter-1
-        call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
+        call filter_LR(Tyy(:,:,k), G%mask2dT, & ! array and mask
                       isd,ied,jsd,jed,       & ! array size
                       is,ie,js,je,           & ! owned points
                       halo,                  & ! halo of output array
@@ -925,6 +925,59 @@ subroutine filter_2D(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, B
   enddo; enddo
 
 end subroutine filter_2D
+
+subroutine filter_LR(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, BC_out)
+  real, dimension(isd:ied,jsd:jed), &
+        intent(inout) :: x            !< Input/output array [dim arbitrary]
+  real, dimension(isd:ied,jsd:jed), &
+        intent(in)    :: mask         !< Mask array for placing B.C. [nondim]  
+  integer, intent(in) :: &
+                         isd, ied,  & !< Indices of array size
+                         jsd, jed,  & !< Indices of array size
+                         is,  ie,   & !< Indices of owned points
+                         js,  je,   & !< Indices of owned points
+                         halo         !< Required halo of the output array
+                        
+  logical :: BC_in, BC_out            !< Apply B.C. to input/output arrays
+
+  real :: wside        ! weights for side points [nondim]
+  real :: wcenter      ! weight for the center points [nondim]
+
+  integer :: i, j
+
+  real :: tmp(jsd:jed, isd:ied) ! temporary array for filtering [dim arbitrary]
+
+  wside = 1. / 4.
+  wcenter = 1. - (2. * wside)
+
+  do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
+    if (BC_in) then
+      tmp(j,i) = wcenter * x(i,j) * mask(i,j) &
+               + wside * (                    &
+                  x(i,j-1) * mask(i,j-1)      &
+                + x(i,j+1) * mask(i,j+1)      &
+               )
+    else
+      tmp(j,i) = wcenter * x(i,j) &
+               + wside * (        &
+                  x(i,j-1)        &
+                + x(i,j+1)        &
+               )
+    endif
+  enddo; enddo
+
+  do i = is-halo, ie+halo; do j = js-halo, je+halo;
+    x(i,j) = wcenter * tmp(j,i) &
+               + wside * (      &
+                  tmp(j,i-1)    &
+                + tmp(j,i+1)    &
+               )
+    if (BC_out) then
+      x(i,j) = x(i,j) * mask(i,j)
+    endif
+  enddo; enddo
+
+end subroutine filter_LR
 
 !> Computes the 3D energy source term for the ZB2020 scheme
 !! similarly to MOM_diagnostics.F90, specifically 1125 line.
