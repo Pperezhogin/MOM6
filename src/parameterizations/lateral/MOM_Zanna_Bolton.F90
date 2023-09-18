@@ -95,6 +95,11 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_source
   !>@}
 
+  !>@{ MPI exchange handles
+  type(group_pass_type) :: pass_Tq  ! A handle for halo pass of Txy
+  type(group_pass_type) :: pass_Th  ! A handle for halo pass of Txx, Tyy
+  !>@}
+
 end type ZB2020_CS
 
 contains
@@ -187,6 +192,17 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                           + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff) &
                           * CS%Klower_R_diss)
     enddo; enddo
+  endif
+
+  if (CS%Stress_iter > 0) then
+    if (CS%Stress_iter > min(G%ied-G%iec, G%jed-G%jec)) then
+      call MOM_error(FATAL, "MOM_Zanna_Bolton.F90, Use smaller number of filters")
+    endif
+
+    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_iter, position=CORNER)
+      ! Halo is the same for Txx, Tyy because we need halo 1 for output
+    call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_iter)
+    call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_iter)
   endif
 
   ! Register fields for output from this module.
@@ -387,7 +403,7 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                       CS%Txx, CS%Tyy, CS%Txy,           &
                       G, GV, CS)
 
-  call filter_stress(CS%Txx, CS%Tyy, CS%Txy, G, GV, CS, CS%Stress_iter)
+  call filter_stress(G, GV, CS)
 
   call compute_stress_divergence(CS%Txx, CS%Tyy, CS%Txy, h, &
                                  ZB2020u, ZB2020v, G, GV, CS, &
@@ -730,30 +746,19 @@ end subroutine compute_stress_divergence
 !! Routine, i.e.
 !! Txx, Tyy have halo 1 but have no B.C.
 !! Txy has halo 0 and but has B.C.
-subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
-  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
-  type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
-  type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
+subroutine filter_stress(G, GV, CS)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
   
-  integer, intent(in) :: niter !< number of iterations to be applied
-
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),     &
-        intent(inout) :: Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
-                         Tyy        !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
-  
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
-        intent(inout) :: Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
-
-  
-  type(group_pass_type) :: pass_Tq  ! A handle for halo pass of Txy
-  type(group_pass_type) :: pass_Th  ! A handle for halo pass of Txx, Tyy
-
   integer :: max_halo ! maximum availabe halo
   integer :: halo     ! dummy variable for halo update
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: isd, ied, jsd, jed, Isdq, Iedq, Jsdq, Jedq
-  integer :: i, j, k, n, iter
+  integer :: i, j, k, n, iter, niter
+
+  niter = CS%Stress_iter
 
   if (niter == 0) then
     return
@@ -764,54 +769,42 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
   Isdq = G%IsdB ; Iedq = G%IedB ; Jsdq = G%JsdB ; Jedq = G%JedB
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
-  max_halo = min(ied-ie, jed-je)
-  if (niter > max_halo) then
-    call MOM_error(FATAL, "MOM_Zanna_Bolton.F90, Use smaller number of filters")
-  endif
-
   call cpu_clock_begin(CS%id_clock_mpi)
-
-    call create_group_pass(pass_Tq, Txy, G%Domain, halo=niter, position=CORNER)
-    ! Halo is the same for Txx, Tyy because we need halo 1 for output
-    call create_group_pass(pass_Th, Txx, G%Domain, halo=niter)
-    call create_group_pass(pass_Th, Tyy, G%Domain, halo=niter)
-  
-    call start_group_pass(pass_Tq, G%Domain)
-  
+    call start_group_pass(CS%pass_Tq, G%Domain)  
   call cpu_clock_end(CS%id_clock_mpi)
 
   call cpu_clock_begin(CS%id_clock_filter)
 
     do k=1,nz
-      call filter_LR(Txx(:,:,k), G%mask2dT, & ! array and mask
-                    isd,ied,jsd,jed,       & ! array size
-                    is,ie,js,je,           & ! owned points
-                    0,                     & ! zero halo of output
-                    .true., .true.)          ! apply B.C. to input/output arrays
+      call filter_LR(CS%Txx(:,:,k), G%mask2dT, & ! array and mask
+                     isd,ied,jsd,jed,          & ! array size
+                     is,ie,js,je,              & ! owned points
+                     0,                        & ! zero halo of output
+                     .true., .true.)             ! apply B.C. to input/output arrays
 
-      call filter_LR(Tyy(:,:,k), G%mask2dT, & ! array and mask
-                    isd,ied,jsd,jed,       & ! array size
-                    is,ie,js,je,           & ! owned points
-                    0,                     & ! zero halo of output
-                    .true., .true.)          ! apply B.C. to input/output arrays
+      call filter_LR(CS%Tyy(:,:,k), G%mask2dT, & ! array and mask
+                     isd,ied,jsd,jed,          & ! array size
+                     is,ie,js,je,              & ! owned points
+                     0,                        & ! zero halo of output
+                     .true., .true.)             ! apply B.C. to input/output arrays
     enddo
   
   call cpu_clock_end(CS%id_clock_filter)
   
   call cpu_clock_begin(CS%id_clock_mpi)
-    call start_group_pass(pass_Th, G%Domain)
-    call complete_group_pass(pass_Tq, G%Domain)
+    call start_group_pass(CS%pass_Th, G%Domain)
+    call complete_group_pass(CS%pass_Tq, G%Domain)
   call cpu_clock_end(CS%id_clock_mpi)
 
   call cpu_clock_begin(CS%id_clock_filter)
     do k=1,nz
       halo = niter-1
       do iter=1,niter
-        call filter_LR(Txy(:,:,k), G%mask2dBu, & ! array and mask
-                      Isdq,Iedq,Jsdq,Jedq,     & ! array size     
-                      Isq,Ieq,Jsq,Jeq,         & ! owned points       
-                      halo,                    & ! halo of output array
-                      .false., .true.)           ! apply B.C. to output arrays
+        call filter_LR(CS%Txy(:,:,k), G%mask2dBu, & ! array and mask
+                       Isdq,Iedq,Jsdq,Jedq,       & ! array size     
+                       Isq,Ieq,Jsq,Jeq,           & ! owned points       
+                       halo,                      & ! halo of output array
+                       .false., .true.)             ! apply B.C. to output arrays
         halo = halo - 1
       enddo
       ! filtered array does not have halo
@@ -819,29 +812,29 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
   call cpu_clock_end(CS%id_clock_filter)
 
   call cpu_clock_begin(CS%id_clock_mpi)
-    call complete_group_pass(pass_Th, G%Domain)
+    call complete_group_pass(CS%pass_Th, G%Domain)
   call cpu_clock_end(CS%id_clock_mpi)
 
   call cpu_clock_begin(CS%id_clock_filter)
     do k=1,nz
       halo = niter-1 
       do iter=1,niter-1
-        call filter_LR(Txx(:,:,k), G%mask2dT, & ! array and mask
-                      isd,ied,jsd,jed,       & ! array size
-                      is,ie,js,je,           & ! owned points
-                      halo,                  & ! halo of output array
-                      .false., .true.)         ! apply B.C. to output arrays
+        call filter_LR(CS%Txx(:,:,k), G%mask2dT, & ! array and mask
+                       isd,ied,jsd,jed,          & ! array size
+                       is,ie,js,je,              & ! owned points
+                       halo,                     & ! halo of output array
+                       .false., .true.)            ! apply B.C. to output arrays
         halo = halo - 1
       enddo
       ! filtered array has halo 1
 
       halo = niter-1 
       do iter=1,niter-1
-        call filter_LR(Tyy(:,:,k), G%mask2dT, & ! array and mask
-                      isd,ied,jsd,jed,       & ! array size
-                      is,ie,js,je,           & ! owned points
-                      halo,                  & ! halo of output array
-                      .false., .true.)         ! apply B.C. to output arrays
+        call filter_LR(CS%Tyy(:,:,k), G%mask2dT, & ! array and mask
+                       isd,ied,jsd,jed,          & ! array size
+                       is,ie,js,je,              & ! owned points
+                       halo,                     & ! halo of output array
+                       .false., .true.)            ! apply B.C. to output arrays
         halo = halo - 1
       enddo
       ! filtered array has halo 1
