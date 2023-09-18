@@ -53,8 +53,6 @@ type, public :: ZB2020_CS ; private
                      !! points including metric terms [T-1 ~> s-1]
           vort_xy, & !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
                      !! points including metric terms [T-1 ~> s-1]
-          h_u,     & !< Thickness interpolated to u points [H ~> m or kg m-2]
-          h_v,     & !< Thickness interpolated to v points [H ~> m or kg m-2]
           hq         !< Thickness in CORNER points [H ~> m or kg m-2]
   
   real, dimension(:,:,:), allocatable :: &
@@ -80,7 +78,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_cdiss = -1
   ! Debug fields
   integer :: id_sh_xx = -1, id_sh_xy = -1, id_vort_xy = -1
-  integer :: id_h_u = -1, id_h_v = -1, id_hq = -1
+  integer :: id_hq = -1
   integer :: id_h = -1, id_u = -1, id_v = -1
   !>@}
 
@@ -164,8 +162,6 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
-  allocate(CS%h_u(SZIB_(G),SZJ_(G),SZK_(GV))); CS%h_u(:,:,:) = 0.
-  allocate(CS%h_v(SZI_(G),SZJB_(G),SZK_(GV))); CS%h_v(:,:,:) = 0.
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV))); CS%hq(:,:,:) = 0.
 
   allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV))); CS%Txx(:,:,:) = 0.
@@ -228,10 +224,6 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_vort_xy = register_diag_field('ocean_model', 'vort_xy', diag%axesBL, Time, &
       'Vertical vorticity (dv/dx - du/dy) in q (CORNER) points including metric terms', &
       's-1', conversion=US%s_to_T)
-  CS%id_h_u = register_diag_field('ocean_model', 'h_u', diag%axesCuL, Time, &
-      'Thickness interpolated to u points', 'm', conversion=GV%H_to_m)
-  CS%id_h_v = register_diag_field('ocean_model', 'h_v', diag%axesCvL, Time, &
-      'Thickness interpolated to v points', 'm', conversion=GV%H_to_m)
   CS%id_hq = register_diag_field('ocean_model', 'hq', diag%axesBL, Time, &
       'Thickness in CORNER points', 'm', conversion=GV%H_to_m)
   CS%id_h = register_diag_field('ocean_model', 'h_ZB', diag%axesTL, Time, &
@@ -264,8 +256,6 @@ subroutine ZB_2020_end(CS)
   deallocate(CS%sh_xx)
   deallocate(CS%sh_xy)
   deallocate(CS%vort_xy)
-  deallocate(CS%h_u)
-  deallocate(CS%h_v)
   deallocate(CS%hq)
 
   deallocate(CS%Txx)
@@ -287,7 +277,7 @@ end subroutine ZB_2020_end
 !! sh_xy and vort_xy with halo 1 (Isq-1:Ieq+1,Jsq-1:Jeq+1)
 !! These are maximum halo sizes possible with halo 2 
 !! used for velocities u, v in RK2 stepping routine
-subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
+subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
@@ -304,11 +294,6 @@ subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   real, dimension(SZI_(G),SZJ_(G)), &
     intent(in) :: sh_xx       !< horizontal tension (du/dx - dv/dy) 
                               !! including metric terms [T-1 ~> s-1]
-  
-  real, dimension(SZIB_(G),SZJ_(G)), &
-    intent(in) :: h_u         !< Thickness interpolated to u points [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZJB_(G)), &
-    intent(in) :: h_v         !< Thickness interpolated to v points [H ~> m or kg m-2].
 
   integer, intent(in) :: k    !< The vertical index of the layer to be passed.
 
@@ -322,14 +307,6 @@ subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
 
   do J=Jsq,Jeq ; do I=Isq,Ieq
     CS%hq(I,J,k) = hq(I,J)
-  enddo; enddo
-
-  do j=js,je ; do I=Isq,Ieq
-    CS%h_u(I,j,k) = h_u(I,j)
-  enddo; enddo
-
-  do J=Jsq,Jeq ; do i=is,ie
-    CS%h_v(i,J,k) = h_v(i,J)
   enddo; enddo
 
   ! No physical B.C. is required for
@@ -443,8 +420,6 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
   if (CS%id_sh_xx>0)   call post_data(CS%id_sh_xx, CS%sh_xx, CS%diag)
   if (CS%id_sh_xy>0)   call post_data(CS%id_sh_xy, CS%sh_xy, CS%diag)
   if (CS%id_vort_xy>0) call post_data(CS%id_vort_xy, CS%vort_xy, CS%diag)
-  if (CS%id_h_u>0)     call post_data(CS%id_h_u, CS%h_u, CS%diag)
-  if (CS%id_h_v>0)     call post_data(CS%id_h_v, CS%h_v, CS%diag)
   if (CS%id_hq>0)      call post_data(CS%id_hq, CS%hq, CS%diag)
   if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
   if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
@@ -681,6 +656,9 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
         intent(in) :: dx2q, &       !< dx^2 at q points [L2 ~> m2]
                       dy2q          !< dy^2 at q points [L2 ~> m2]
 
+  real :: h_u !< Thickness interpolated to u points [H ~> m or kg m-2].
+  real :: h_v !< Thickness interpolated to v points [H ~> m or kg m-2].
+
   real :: h_neglect    ! Thickness so small it can be lost in 
                        ! roundoff and so neglected [H ~> m or kg m-2]
 
@@ -736,20 +714,22 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
     ! Minus occurs because in original file (du/dt) = - div(S),
     ! but here is the discretization of div(S)
     do j=js,je ; do I=Isq,Ieq
+      h_u = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) + h_neglect
       fx(I,j,k) = - ((G%IdyCu(I,j)*(dy2h(i,j)  *Txx(i,j,k)    - &
                                     dy2h(i+1,j)*Txx(i+1,j,k)) + &
                       G%IdxCu(I,j)*(dx2q(I,J-1)*Txy(I,J-1,k)  - &
                                     dx2q(I,J)  *Txy(I,J,k)))  * &
-                      G%IareaCu(I,j)) / (CS%h_u(I,j,k) + h_neglect)
+                      G%IareaCu(I,j)) / h_u
     enddo ; enddo
 
     ! Evaluate 1/h y.Div(h S) (Line 1517 of MOM_hor_visc.F90)
     do J=Jsq,Jeq ; do i=is,ie
+      h_v = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) + h_neglect
       fy(i,J,k) = - ((G%IdyCv(i,J)*(dy2q(I-1,J)*Txy(I-1,J,k)   - &
                                     dy2q(I,J)  *Txy(I,J,k))    + & ! NOTE this plus
                       G%IdxCv(i,J)*(dx2h(i,j)  *Tyy(i,j,k)     - &
                                     dx2h(i,j+1)*Tyy(i,j+1,k))) * &
-                      G%IareaCv(i,J)) / (CS%h_v(i,J,k) + h_neglect)
+                      G%IareaCv(i,J)) / h_v
     enddo ; enddo
 
   enddo ! end of k loop

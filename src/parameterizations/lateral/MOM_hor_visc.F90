@@ -1212,7 +1212,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     if (CS%use_ZB2020) then
       call ZB_copy_gradient_and_thickness( &
            sh_xx, sh_xy, vort_xy,          &
-           hq, h_u, h_v,                   &
+           hq,                             &
            G, GV, CS%ZB2020, k)
     endif
 
