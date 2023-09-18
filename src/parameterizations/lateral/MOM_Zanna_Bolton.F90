@@ -543,14 +543,12 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
         intent(inout) :: Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
 
-  ! Arrays defined in h (CENTER) points
-  real, dimension(SZI_(G),SZJ_(G)) :: &
-    vort_xy_center, &  ! Vorticity interpolated to the center [T-1 ~> s-1]
-    sh_xy_center       ! Shearing strain interpolated to the center [T-1 ~> s-1]
+  real :: &
+    vort_xy_h, &  ! Vorticity interpolated to the h point [T-1 ~> s-1]
+    sh_xy_h       ! Shearing strain interpolated to the h point [T-1 ~> s-1]
 
-  ! Arrays defined in q (CORNER) points
-  real, dimension(SZIB_(G),SZJB_(G)) :: &
-    sh_xx_corner       ! Horizontal tension interpolated to the corner [T-1 ~> s-1]
+  real :: &
+    sh_xx_q       ! Horizontal tension interpolated to the q point [T-1 ~> s-1]
 
   real :: sum_sq       ! 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) [T-2 ~> s-2]
   real :: vort_sh      ! vort_xy*sh_xy [T-2 ~> s-2]
@@ -568,26 +566,25 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
 
   do k=1,nz
 
-    ! It is assumed that B.C. is applied to sh_xy and vort_xy
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      sh_xy_center(i,j) = 0.25 * ( (sh_xy(I-1,J-1,k) + sh_xy(I,J,k)) &
-                                 + (sh_xy(I-1,J,k) + sh_xy(I,J-1,k)) )
-    enddo ; enddo
-
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      vort_xy_center(i,j) = 0.25 * ( (vort_xy(I-1,J-1,k) + vort_xy(I,J,k)) &
-                                   + (vort_xy(I-1,J,k) + vort_xy(I,J-1,k)) )
-    enddo ; enddo
-
     ! compute Txx, Tyy tensor
     do j=js-1,je+1 ; do i=is-1,ie+1
+      ! It is assumed that B.C. is applied to sh_xy and vort_xy
+      sh_xy_h = 0.25 * ( (sh_xy(I-1,J-1,k) + sh_xy(I,J,k)) &
+                       + (sh_xy(I-1,J,k) + sh_xy(I,J-1,k)) )
+
+      vort_xy_h = 0.25 * ( (vort_xy(I-1,J-1,k) + vort_xy(I,J,k)) &
+                         + (vort_xy(I-1,J,k) + vort_xy(I,J-1,k)) ) 
+
       if (CS%ZB_type .NE. 1) then
-        sum_sq = 0.5 * &
-          (vort_xy_center(i,j)**2 + sh_xy_center(i,j)**2 + sh_xx(i,j,k)**2)
+        sum_sq = 0.5 *                    &
+          (vort_xy_h * vort_xy_h          &
+           + sh_xy_h * sh_xy_h            &
+           + sh_xx(i,j,k) * sh_xx(i,j,k)  &
+            )
       endif
 
       if (CS%ZB_type .NE. 2) then
-        vort_sh = vort_xy_center(i,j) * sh_xy_center(i,j)
+        vort_sh = vort_xy_h * sh_xy_h
       endif
       
       Txx(i,j,k) = CS%kappa_h(i,j) * (- vort_sh + sum_sq)
@@ -597,14 +594,11 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
     ! Here we assume that Txy is initialized to zero
     if (CS%ZB_type .NE. 2) then
       do J=Jsq,Jeq ; do I=Isq,Ieq
-        sh_xx_corner(I,J) = 0.25 * ( (sh_xx(i+1,j+1,k) + sh_xx(i,j,k)) &
-                                   + (sh_xx(i+1,j,k) + sh_xx(i,j+1,k)))
-      enddo ; enddo
-
-      do J=Jsq,Jeq ; do I=Isq,Ieq
+        sh_xx_q = 0.25 * ( (sh_xx(i+1,j+1,k) + sh_xx(i,j,k)) &
+                         + (sh_xx(i+1,j,k) + sh_xx(i,j+1,k)))
         ! We assume that vort_xy has zero B.C.. So,
         ! no additional masking is required
-        Txy(I,J,k) = CS%kappa_q(I,J) * (vort_xy(I,J,k) * sh_xx_corner(I,J))
+        Txy(I,J,k) = CS%kappa_q(I,J) * (vort_xy(I,J,k) * sh_xx_q)
       enddo ; enddo
     endif
 
@@ -671,9 +665,6 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   h_neglect  = GV%H_subroundoff ! Line 410 on MOM_hor_visc.F90
-
-  fx(:,:,:) = 0.
-  fy(:,:,:) = 0.
 
   do k=1,nz
     ! Attenuation of the stress
