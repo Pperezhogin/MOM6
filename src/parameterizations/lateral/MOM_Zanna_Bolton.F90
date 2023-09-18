@@ -650,6 +650,13 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
         intent(in) :: dx2q, &       !< dx^2 at q points [L2 ~> m2]
                       dy2q          !< dy^2 at q points [L2 ~> m2]
 
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        Mxx, & !< Subgrid stress xx component in h
+        Myy    !< Subgrid stress yy component in h
+
+  real, dimension(SZIB_(G),SZJB_(G)) :: &
+        Mxy    !< Subgrid stress xy component in q
+
   real :: h_u !< Thickness interpolated to u points [H ~> m or kg m-2].
   real :: h_v !< Thickness interpolated to v points [H ~> m or kg m-2].
 
@@ -667,59 +674,46 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
   h_neglect  = GV%H_subroundoff ! Line 410 on MOM_hor_visc.F90
 
   do k=1,nz
-    ! Attenuation of the stress
-    ! According to Klower
-    if (CS%Klower_R_diss > 0.) then
-      ! B.C. for this interpolation is not
-      ! required because boundary q points 
-      ! will be set to 0 with masking Txy below
       do J=Jsq,Jeq ; do I=Isq,Ieq
-        Txy(I,J,k) = Txy(I,J,k) * &
-        0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k)) &
-              + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))
+        if (CS%Klower_R_diss > 0.) then
+          Mxy(I,J) = (Txy(I,J,k) * &
+                      0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
+                            + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
+                      * (CS%hq(I,J,k) * G%mask2dBu(I,J))
+        else
+          Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k) * G%mask2dBu(I,J))
+        endif
       enddo ; enddo
 
       do j=js-1,je+1 ; do i=is-1,ie+1
-        Txx(i,j,k) = Txx(i,j,k) * CS%c_diss(i,j,k)
-        Tyy(i,j,k) = Tyy(i,j,k) * CS%c_diss(i,j,k)
+        if (CS%Klower_R_diss > 0.) then
+          Mxx(i,j) = ((Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+          Myy(i,j) = ((Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+        else
+          Mxx(i,j) = ((Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+          Myy(i,j) = ((Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+        endif
       enddo ; enddo
-    endif
-
-    ! Accounting for the varying thickness
-    ! B.C. is not required here, 
-    ! because only inner points are used
-    ! due to no-normal-flow condition on velocity
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      Txx(i,j,k) = Txx(i,j,k) * h(i,j,k)
-      Tyy(i,j,k) = Tyy(i,j,k) * h(i,j,k)
-    enddo ; enddo
-
-    ! Free slip boundary condition is applied here
-    ! So, input tensor Txy is not 
-    ! required to have B.C.
-    do J=Jsq,Jeq ; do I=Isq,Ieq
-      Txy(I,J,k) = Txy(I,J,k) * (CS%hq(I,J,k) * G%mask2dBu(I,J))
-    enddo ; enddo
 
     ! Evaluate 1/h x.Div(h S) (Line 1495 of MOM_hor_visc.F90)
     ! Minus occurs because in original file (du/dt) = - div(S),
     ! but here is the discretization of div(S)
     do j=js,je ; do I=Isq,Ieq
       h_u = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) + h_neglect
-      fx(I,j,k) = - ((G%IdyCu(I,j)*(dy2h(i,j)  *Txx(i,j,k)    - &
-                                    dy2h(i+1,j)*Txx(i+1,j,k)) + &
-                      G%IdxCu(I,j)*(dx2q(I,J-1)*Txy(I,J-1,k)  - &
-                                    dx2q(I,J)  *Txy(I,J,k)))  * &
+      fx(I,j,k) = - ((G%IdyCu(I,j)*(Mxx(i,j)                - &
+                                    Mxx(i+1,j))             + &
+                      G%IdxCu(I,j)*(dx2q(I,J-1)*Mxy(I,J-1)  - &
+                                    dx2q(I,J)  *Mxy(I,J)))  * &
                       G%IareaCu(I,j)) / h_u
     enddo ; enddo
 
     ! Evaluate 1/h y.Div(h S) (Line 1517 of MOM_hor_visc.F90)
     do J=Jsq,Jeq ; do i=is,ie
       h_v = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) + h_neglect
-      fy(i,J,k) = - ((G%IdyCv(i,J)*(dy2q(I-1,J)*Txy(I-1,J,k)   - &
-                                    dy2q(I,J)  *Txy(I,J,k))    + & ! NOTE this plus
-                      G%IdxCv(i,J)*(dx2h(i,j)  *Tyy(i,j,k)     - &
-                                    dx2h(i,j+1)*Tyy(i,j+1,k))) * &
+      fy(i,J,k) = - ((G%IdyCv(i,J)*(dy2q(I-1,J)*Mxy(I-1,J)   - &
+                                    dy2q(I,J)  *Mxy(I,J))    + & ! NOTE this plus
+                      G%IdxCv(i,J)*(Myy(i,j)                 - &
+                                    Myy(i,j+1)))             * &
                       G%IareaCv(i,J)) / h_v
     enddo ; enddo
 
