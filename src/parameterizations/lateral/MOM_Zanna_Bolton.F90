@@ -19,7 +19,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public Zanna_Bolton_2020, ZB_2020_init, ZB_2020_end, ZB_pass_gradient_and_thickness
+public Zanna_Bolton_2020, ZB_2020_init, ZB_2020_end, ZB_copy_gradient_and_thickness
 
 !> Control structure for Zanna-Bolton-2020 parameterization.
 type, public :: ZB2020_CS ; private
@@ -86,10 +86,12 @@ type, public :: ZB2020_CS ; private
 
   !>@{ CPU time clock IDs
   integer :: id_clock_module
-  integer :: id_clock_pass
+  integer :: id_clock_copy
   integer :: id_clock_cdiss
   integer :: id_clock_stress
   integer :: id_clock_divergence
+  integer :: id_clock_mpi
+  integer :: id_clock_filter
   integer :: id_clock_upd
   integer :: id_clock_post
   integer :: id_clock_source
@@ -211,8 +213,10 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
 
-  CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
-      'Klower (2018) attenuation coefficient', '1', conversion=1.)
+  if (CS%Klower_R_diss > 0) then
+    CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
+        'Klower (2018) attenuation coefficient', '1', conversion=1.)
+  endif
 
   ! These fields are used for debug only
   CS%id_sh_xx = register_diag_field('ocean_model', 'sh_xx', diag%axesTL, Time, &
@@ -241,10 +245,12 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   ! Only module is measured with syncronization. While smaller 
   ! parts are measured without -- because these are nested clocks.
   CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE, sync=.true.)
-  CS%id_clock_pass = cpu_clock_id('(ZB2020 pass fields)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_copy = cpu_clock_id('(ZB2020 copy fields)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_mpi = cpu_clock_id('(ZB2020 MPI)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_filter = cpu_clock_id('(ZB2020 filter no MPI)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
@@ -281,7 +287,7 @@ end subroutine ZB_2020_end
 !! sh_xy and vort_xy with halo 1 (Isq-1:Ieq+1,Jsq-1:Jeq+1)
 !! These are maximum halo sizes possible with halo 2 
 !! used for velocities u, v in RK2 stepping routine
-subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
+subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
@@ -309,7 +315,7 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
 
-  call cpu_clock_begin(CS%id_clock_pass)
+  call cpu_clock_begin(CS%id_clock_copy)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -344,9 +350,9 @@ subroutine ZB_pass_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, h_u, h_v, &
     CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
-  call cpu_clock_end(CS%id_clock_pass)
+  call cpu_clock_end(CS%id_clock_copy)
 
-end subroutine ZB_pass_gradient_and_thickness
+end subroutine ZB_copy_gradient_and_thickness
 
 !> Baroclinic Zanna-Bolton-2020 parameterization, see
 !! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
@@ -429,6 +435,9 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
   if (CS%id_Txx>0)     call post_data(CS%id_Txx, CS%Txx, CS%diag)
   if (CS%id_Tyy>0)     call post_data(CS%id_Tyy, CS%Tyy, CS%diag)
   if (CS%id_Txy>0)     call post_data(CS%id_Txy, CS%Txy, CS%diag)
+
+  ! Klower attenuation
+  if (CS%id_cdiss>0)     call post_data(CS%id_cdiss, CS%c_diss, CS%diag)
 
   ! Debug fields
   if (CS%id_sh_xx>0)   call post_data(CS%id_sh_xx, CS%sh_xx, CS%diag)
@@ -795,68 +804,84 @@ subroutine filter_stress(Txx, Tyy, Txy, G, GV, CS, niter)
     call MOM_error(FATAL, "MOM_Zanna_Bolton.F90, Use smaller number of filters")
   endif
 
-  call create_group_pass(pass_Tq, Txy, G%Domain, halo=niter, position=CORNER)
-  ! Halo is the same for Txx, Tyy because we need halo 1 for output
-  call create_group_pass(pass_Th, Txx, G%Domain, halo=niter)
-  call create_group_pass(pass_Th, Tyy, G%Domain, halo=niter)
+  call cpu_clock_begin(CS%id_clock_mpi)
+
+    call create_group_pass(pass_Tq, Txy, G%Domain, halo=niter, position=CORNER)
+    ! Halo is the same for Txx, Tyy because we need halo 1 for output
+    call create_group_pass(pass_Th, Txx, G%Domain, halo=niter)
+    call create_group_pass(pass_Th, Tyy, G%Domain, halo=niter)
   
-  call start_group_pass(pass_Tq, G%Domain)
+    call start_group_pass(pass_Tq, G%Domain)
+  
+  call cpu_clock_end(CS%id_clock_mpi)
 
-  do k=1,nz
-    call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
-                   isd,ied,jsd,jed,       & ! array size
-                   is,ie,js,je,           & ! owned points
-                   0,                     & ! zero halo of output
-                   .true., .true.)          ! apply B.C. to input/output arrays
+  call cpu_clock_begin(CS%id_clock_filter)
 
-    call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
-                   isd,ied,jsd,jed,       & ! array size
-                   is,ie,js,je,           & ! owned points
-                   0,                     & ! zero halo of output
-                   .true., .true.)          ! apply B.C. to input/output arrays
-  enddo
-
-  call start_group_pass(pass_Th, G%Domain)
-  call complete_group_pass(pass_Tq, G%Domain)
-
-  do k=1,nz
-    halo = niter-1
-    do iter=1,niter
-      call filter_2D(Txy(:,:,k), G%mask2dBu, & ! array and mask
-                    Isdq,Iedq,Jsdq,Jedq,     & ! array size     
-                    Isq,Ieq,Jsq,Jeq,         & ! owned points       
-                    halo,                    & ! halo of output array
-                    .false., .true.)           ! apply B.C. to output arrays
-      halo = halo - 1
-    enddo
-    ! filtered array does not have halo
-  enddo
-
-  call complete_group_pass(pass_Th, G%Domain)
-
-  do k=1,nz
-    halo = niter-1 
-    do iter=1,niter-1
+    do k=1,nz
       call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
-                     isd,ied,jsd,jed,       & ! array size
-                     is,ie,js,je,           & ! owned points
-                     halo,                  & ! halo of output array
-                     .false., .true.)         ! apply B.C. to output arrays
-      halo = halo - 1
-    enddo
-    ! filtered array has halo 1
+                    isd,ied,jsd,jed,       & ! array size
+                    is,ie,js,je,           & ! owned points
+                    0,                     & ! zero halo of output
+                    .true., .true.)          ! apply B.C. to input/output arrays
 
-    halo = niter-1 
-    do iter=1,niter-1
       call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
-                     isd,ied,jsd,jed,       & ! array size
-                     is,ie,js,je,           & ! owned points
-                     halo,                  & ! halo of output array
-                     .false., .true.)         ! apply B.C. to output arrays
-      halo = halo - 1
+                    isd,ied,jsd,jed,       & ! array size
+                    is,ie,js,je,           & ! owned points
+                    0,                     & ! zero halo of output
+                    .true., .true.)          ! apply B.C. to input/output arrays
     enddo
-    ! filtered array has halo 1
-  enddo
+  
+  call cpu_clock_end(CS%id_clock_filter)
+  
+  call cpu_clock_begin(CS%id_clock_mpi)
+    call start_group_pass(pass_Th, G%Domain)
+    call complete_group_pass(pass_Tq, G%Domain)
+  call cpu_clock_end(CS%id_clock_mpi)
+
+  call cpu_clock_begin(CS%id_clock_filter)
+    do k=1,nz
+      halo = niter-1
+      do iter=1,niter
+        call filter_2D(Txy(:,:,k), G%mask2dBu, & ! array and mask
+                      Isdq,Iedq,Jsdq,Jedq,     & ! array size     
+                      Isq,Ieq,Jsq,Jeq,         & ! owned points       
+                      halo,                    & ! halo of output array
+                      .false., .true.)           ! apply B.C. to output arrays
+        halo = halo - 1
+      enddo
+      ! filtered array does not have halo
+    enddo
+  call cpu_clock_end(CS%id_clock_filter)
+
+  call cpu_clock_begin(CS%id_clock_mpi)
+    call complete_group_pass(pass_Th, G%Domain)
+  call cpu_clock_end(CS%id_clock_mpi)
+
+  call cpu_clock_begin(CS%id_clock_filter)
+    do k=1,nz
+      halo = niter-1 
+      do iter=1,niter-1
+        call filter_2D(Txx(:,:,k), G%mask2dT, & ! array and mask
+                      isd,ied,jsd,jed,       & ! array size
+                      is,ie,js,je,           & ! owned points
+                      halo,                  & ! halo of output array
+                      .false., .true.)         ! apply B.C. to output arrays
+        halo = halo - 1
+      enddo
+      ! filtered array has halo 1
+
+      halo = niter-1 
+      do iter=1,niter-1
+        call filter_2D(Tyy(:,:,k), G%mask2dT, & ! array and mask
+                      isd,ied,jsd,jed,       & ! array size
+                      is,ie,js,je,           & ! owned points
+                      halo,                  & ! halo of output array
+                      .false., .true.)         ! apply B.C. to output arrays
+        halo = halo - 1
+      enddo
+      ! filtered array has halo 1
+    enddo
+  call cpu_clock_end(CS%id_clock_filter)
 
 end subroutine filter_stress
 
