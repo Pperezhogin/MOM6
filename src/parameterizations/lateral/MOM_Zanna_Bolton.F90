@@ -98,6 +98,7 @@ type, public :: ZB2020_CS ; private
   !>@{ MPI exchange handles
   type(group_pass_type) :: pass_Tq  ! A handle for halo pass of Txy
   type(group_pass_type) :: pass_Th  ! A handle for halo pass of Txx, Tyy
+  type(group_pass_type) :: pass_T2  ! A handle for halo pass of Txx, Tyy
   !>@}
 
 end type ZB2020_CS
