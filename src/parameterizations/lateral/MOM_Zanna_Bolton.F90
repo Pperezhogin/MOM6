@@ -786,7 +786,7 @@ subroutine filter_stress(G, GV, CS)
       Txx_halo = CS%Marching_halo
     endif
 
-    call filter_h(CS%Txx, G, GV, CS, Txx_halo, Txx_iter)
+    call filter_hq(G, GV, CS, Txx_halo, Txx_iter, h=CS%Txx)
 
     if (Txx_halo == 0) &
       call start_group_pass(pass_Txx, G%Domain)
@@ -799,7 +799,7 @@ subroutine filter_stress(G, GV, CS)
       Tyy_halo = CS%Marching_halo
     endif
 
-    call filter_h(CS%Tyy, G, GV, CS, Tyy_halo, Tyy_iter)
+    call filter_hq(G, GV, CS, Tyy_halo, Tyy_iter, h=CS%Tyy)
 
     if (Tyy_halo == 0) &
       call start_group_pass(pass_Tyy, G%Domain)
@@ -812,45 +812,39 @@ subroutine filter_stress(G, GV, CS)
       Txy_halo = CS%Marching_halo
     endif
 
-    call filter_q(CS%Txy, G, GV, CS, Txy_halo, Txy_iter)
+    call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
     ! ------------------------------------
   enddo
 
 end subroutine filter_stress
 
-subroutine filter_h(x, G, GV, CS, current_halo, remaining_iterations)
+subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
 
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-           intent(inout) :: x !< Input/output array in h points [dim arbitrary]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional,   &
+           intent(inout) :: h !< Input/output array in h points [dim arbitrary]
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), optional, &
+           intent(inout) :: q !< Input/output array in q points [dim arbitrary
   integer, intent(inout) :: current_halo, remaining_iterations
 
   if (remaining_iterations == 0) return
 
-  call filter_3D(x, CS%maskw_h,                &
-            G%isd, G%ied, G%jsd, G%jed,        &
-            G%isc, G%iec, G%jsc, G%jec, GV%ke, &
-            current_halo, remaining_iterations)
-end subroutine filter_h
+  if (present(h)) then
+    call filter_3D(h, CS%maskw_h,                  &
+              G%isd, G%ied, G%jsd, G%jed,          &
+              G%isc, G%iec, G%jsc, G%jec, GV%ke,   &
+              current_halo, remaining_iterations)
+  endif
 
-subroutine filter_q(x, G, GV, CS, current_halo, remaining_iterations)
-  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
-  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
-  type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
-
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), &
-           intent(inout) :: x !< Input/output array in q points [dim arbitrary]
-  integer, intent(inout) :: current_halo, remaining_iterations
-
-  if (remaining_iterations == 0) return
-
-  call filter_3D(x, CS%maskw_q,                    &
+  if (present(q)) then
+    call filter_3D(q, CS%maskw_q,                  &
             G%IsdB, G%IedB, G%JsdB, G%JedB,        &
             G%IscB, G%IecB, G%JscB, G%JecB, GV%ke, &
             current_halo, remaining_iterations)
-end subroutine filter_q
+  endif
+end subroutine filter_hq
 
 subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_halo, remaining_iterations)
   real, dimension(isd:ied,jsd:jed,nz), &
