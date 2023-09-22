@@ -71,6 +71,10 @@ type, public :: ZB2020_CS ; private
         c_diss(:,:,:)        !< Attenuation parameter at h points 
                              !! (Klower 2018, Juricke2019,2020) [nondim]
 
+  real, dimension(:,:), allocatable ::    &
+        maskw_h,  & !< Mask of land point at h points multiplied by filter weight
+        maskw_q     !< Same mask but for q points
+
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1
@@ -95,12 +99,6 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_upd
   integer :: id_clock_post
   integer :: id_clock_source
-  !>@}
-
-  !>@{ MPI exchange handles
-  type(group_pass_type) :: pass_Tq  ! A handle for halo pass of Txy
-  type(group_pass_type) :: pass_Tx
-  type(group_pass_type) :: pass_Ty  ! A handle for halo pass of Txx, Tyy
   !>@}
 
 end type ZB2020_CS
@@ -205,14 +203,9 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   endif
 
   if (CS%Stress_iter > 0) then
-    if (CS%Stress_iter > min(G%ied-G%iec, G%jed-G%jec)) then
-      call MOM_error(FATAL, "MOM_Zanna_Bolton.F90, Use smaller number of filters")
-    endif
-
-    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Marching_halo, position=CORNER)
-      ! Halo is the same for Txx, Tyy because we need halo 1 for output
-    call create_group_pass(CS%pass_Tx, CS%Txx, G%Domain, halo=CS%Marching_halo)
-    call create_group_pass(CS%pass_Tx, CS%Tyy, G%Domain, halo=CS%Marching_halo)
+    ! 0.0625 is the filter weight
+    allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
+    allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
   endif
 
   ! Register fields for output from this module.
@@ -293,6 +286,11 @@ subroutine ZB_2020_end(CS)
   if (CS%Klower_R_diss > 0) then
     deallocate(CS%ICoriolis_h)
     deallocate(CS%c_diss)
+  endif
+
+  if (CS%Stress_iter > 0) then
+    deallocate(CS%maskw_h)
+    deallocate(CS%maskw_q)
   endif
 
 end subroutine ZB_2020_end
@@ -749,97 +747,116 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
 
 end subroutine compute_stress_divergence
 
-!> This function iteratively applied
-!! filter to the stress tensor
-!! We assume that the stress tensor
-!! satisfies the conditions from compute_stress
-!! Routine, i.e.
-!! Txx, Tyy have halo 1 but have no B.C.
-!! Txy has halo 0 and but has B.C.
+!> Filtering of the stress tensor 
+!! with overlapping computations and exchanges
+!! and flexible marching halo
 subroutine filter_stress(G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
   
-  integer :: max_halo ! maximum availabe halo
-  integer :: halo     ! dummy variable for halo update
-
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: isd, ied, jsd, jed, Isdq, Iedq, Jsdq, Jedq
-  integer :: i, j, k, n, iter, niter
   integer :: Txx_halo, Tyy_halo, Txy_halo ! currently available halo
   integer :: Txx_iter, Tyy_iter, Txy_iter ! remaining number of iterations
-  integer :: num_iter 
+  integer :: niter                        ! number of iterations
 
+  type(group_pass_type) :: &
+      pass_Txy, pass_Txx, pass_Tyy ! handles for halo passes of Txy, Txx, Tyy
+  
   niter = CS%Stress_iter
 
-  if (niter == 0) then
-    return
-  endif
+  if (niter == 0) return
 
-  ! is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
-  ! Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  ! Isdq = G%IsdB ; Iedq = G%IedB ; Jsdq = G%JsdB ; Jedq = G%JedB
-  ! isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+  call create_group_pass(pass_Txy, CS%Txy, G%Domain, halo=CS%Marching_halo, position=CORNER)
+  call create_group_pass(pass_Txx, CS%Txx, G%Domain, halo=CS%Marching_halo)
+  call create_group_pass(pass_Tyy, CS%Tyy, G%Domain, halo=CS%Marching_halo)
 
-  ! Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0;
-  ! Txx_iter = niter; Tyy_iter = niter; Txy_iter = niter;
+  Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0; ! these are required halo for Txx, Tyy, Txy
+  Txx_iter = niter; Tyy_iter = niter; Txy_iter = niter;
 
-  ! do while (Txx_iter > 0 .or. Tyy_iter > 0 .or. Txy_iter > 0 & ! filter iterations remain to be done
-  !      .or. Txx_halo == 0 .or. Tyy_halo == 0) ! there is no halo for Txx or Tyy
-       
-  !   ! There is no initial or remaining halo in Txy
-  !   ! So, we do exchange only if we need to iterate
-  !   if (Txy_iter > 0) &
-  !     call start_group_pass(CS%pass_Tq, G%Domain)
+  do while &
+      (Txx_iter > 0 .or. Tyy_iter > 0 .or. Txy_iter > 0 & ! filter iterations remain to be done
+       .or. Txx_halo == 0 .or. Tyy_halo == 0)             ! there is no halo for Txx or Tyy
     
-  !   ! It is nice condition in all cases
-  !   ! - omit first iteration
-  !   ! - intermediate and last iterations
-  !   if (Txx_halo == 0) then
-  !     call complete_group_pass(CS%pass_Tx, G%Domain)
-  !     Txx_halo = CS%Marching_halo
-  !   endif
+    if (Txy_iter > 0) &
+      call start_group_pass(pass_Txy, G%Domain)
+    
+    ! ---------- filtering Txx -----------
+    if (Txx_halo == 0) then
+      call complete_group_pass(pass_Txx, G%Domain)
+      Txx_halo = CS%Marching_halo
+    endif
 
-  !     call filter_3D(CS%Txx, G%mask2dT, & ! array and mask
-  !                   isd,ied,jsd,jed,   & ! array size
-  !                   is,ie,js,je,       & ! owned points
-  !                   nz,                &
-  !                   Txx_halo, Txx_iter)
+    call filter_h(CS%Txx, G, GV, CS, Txx_halo, Txx_iter)
 
-  !   if (Txx_halo == 0) &
-  !     call start_group_pass(CS%pass_Tx, G%Domain)
+    if (Txx_halo == 0) &
+      call start_group_pass(pass_Txx, G%Domain)
 
-  !   if (Tyy_halo == 0) then
-  !     call complete_group_pass(CS%pass_Ty, G%Domain)
-  !     Tyy_halo = CS%Marching_halo
-  !   endif
+    ! ------------------------------------
 
-  !     call filter_3D(CS%Tyy, G%mask2dT, & ! array and mask
-  !                   isd,ied,jsd,jed,   & ! array size
-  !                   is,ie,js,je,       & ! owned points
-  !                   nz, Tyy_halo, Tyy_iter)
+    ! ---------- filtering Tyy -----------
+    if (Tyy_halo == 0) then
+      call complete_group_pass(pass_Tyy, G%Domain)
+      Tyy_halo = CS%Marching_halo
+    endif
 
-  !   if (Tyy_halo == 0) &
-  !     call start_group_pass(CS%pass_Ty, G%Domain)
+    call filter_h(CS%Tyy, G, GV, CS, Tyy_halo, Tyy_iter)
 
-  !   if (Txy_iter > 0) then
-  !     call complete_group_pass(CS%pass_Tq, G%Domain)
-  !     Txy_halo = CS%Marching_halo
-  !   endif
-  !   call filter_3D(CS%Txy, G%mask2dBu, & ! array and mask
-  !                 Isdq,Iedq,Jsdq,Jedq,      & ! array size     
-  !                 Isq,Ieq,Jsq,Jeq,           & ! owned points       
-  !                 nz, Txy_halo, Txy_iter)
-  ! enddo
+    if (Tyy_halo == 0) &
+      call start_group_pass(pass_Tyy, G%Domain)
+
+    ! ------------------------------------
+
+    ! ---------- filtering Txy -----------
+    if (Txy_iter > 0) then
+      call complete_group_pass(pass_Txy, G%Domain)
+      Txy_halo = CS%Marching_halo
+    endif
+
+    call filter_q(CS%Txy, G, GV, CS, Txy_halo, Txy_iter)
+    ! ------------------------------------
+  enddo
 
 end subroutine filter_stress
 
-subroutine filter_3D(x, mask, isd, ied, jsd, jed, is, ie, js, je, nz, current_halo, remaining_iterations)
+subroutine filter_h(x, G, GV, CS, current_halo, remaining_iterations)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+           intent(inout) :: x !< Input/output array in h points [dim arbitrary]
+  integer, intent(inout) :: current_halo, remaining_iterations
+
+  if (remaining_iterations == 0) return
+
+  call filter_3D(x, CS%maskw_h,                &
+            G%isd, G%ied, G%jsd, G%jed,        &
+            G%isc, G%iec, G%jsc, G%jec, GV%ke, &
+            current_halo, remaining_iterations)
+end subroutine filter_h
+
+subroutine filter_q(x, G, GV, CS, current_halo, remaining_iterations)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
+
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), &
+           intent(inout) :: x !< Input/output array in q points [dim arbitrary]
+  integer, intent(inout) :: current_halo, remaining_iterations
+
+  if (remaining_iterations == 0) return
+
+  call filter_3D(x, CS%maskw_q,                    &
+            G%IsdB, G%IedB, G%JsdB, G%JedB,        &
+            G%IscB, G%IecB, G%JscB, G%JecB, GV%ke, &
+            current_halo, remaining_iterations)
+end subroutine filter_q
+
+subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_halo, remaining_iterations)
   real, dimension(isd:ied,jsd:jed,nz), &
         intent(inout) :: x            !< Input/output array [dim arbitrary]
   real, dimension(isd:ied,jsd:jed), &
-        intent(in)    :: mask         !< Mask array for placing B.C. [nondim]  
+        intent(in)    :: maskw         !< Mask array of land points divded by 16 [nondim]  
   integer, intent(in) :: &
                          isd, ied,  & !< Indices of array size
                          jsd, jed,  & !< Indices of array size
@@ -848,17 +865,13 @@ subroutine filter_3D(x, mask, isd, ied, jsd, jed, is, ie, js, je, nz, current_ha
                          nz
   integer, intent(inout) :: current_halo, remaining_iterations
                         
-  real, parameter :: weight = 0.0625
   real, parameter :: two = 2.
   
   integer :: i, j, k, iter, niter, halo
 
   real :: tmp(isd:ied, jsd:jed)
-  real :: maskw(isd:ied, jsd:jed)
 
-  maskw = mask * weight
-
-  ! Do as many iterations as needed as possible
+  ! Do as many iterations as needed and possible
   niter = min(current_halo, remaining_iterations)
   ! Update remaining iterations
   remaining_iterations = remaining_iterations - niter
