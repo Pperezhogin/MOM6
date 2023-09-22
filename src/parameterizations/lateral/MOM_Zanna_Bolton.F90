@@ -761,6 +761,7 @@ subroutine filter_stress(G, GV, CS)
   integer :: Txx_halo, Tyy_halo, Txy_halo ! currently available halo
   integer :: Txx_iter, Tyy_iter, Txy_iter ! remaining number of iterations
   integer :: niter                        ! number of iterations
+  integer :: halo                         ! halo size for MPI exchanges
 
   type(group_pass_type) :: &
       pass_Txy, pass_Txx, pass_Tyy ! handles for halo passes of Txy, Txx, Tyy
@@ -769,11 +770,17 @@ subroutine filter_stress(G, GV, CS)
 
   if (niter == 0) return
 
-  call create_group_pass(pass_Txy, CS%Txy, G%Domain, halo=CS%Marching_halo, &
+  ! reduce size of halo exchange accrodingly to
+  ! Marching halo, number of filter iterations of 
+  ! halo of the array
+  ! But let exchange width be at least 1
+  halo = max(min(CS%Marching_halo, niter, G%ied-G%iec, G%jed-G%jec), 1)
+
+  call create_group_pass(pass_Txy, CS%Txy, G%Domain, halo=halo, &
     position=CORNER, clock=CS%id_clock_mpi_init)
-  call create_group_pass(pass_Txx, CS%Txx, G%Domain, halo=CS%Marching_halo, &
+  call create_group_pass(pass_Txx, CS%Txx, G%Domain, halo=halo, &
     clock=CS%id_clock_mpi_init)
-  call create_group_pass(pass_Tyy, CS%Tyy, G%Domain, halo=CS%Marching_halo, &
+  call create_group_pass(pass_Tyy, CS%Tyy, G%Domain, halo=halo, &
     clock=CS%id_clock_mpi_init)
 
   Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0; ! these are required halo for Txx, Tyy, Txy
@@ -789,7 +796,7 @@ subroutine filter_stress(G, GV, CS)
     ! ---------- filtering Txx -----------
     if (Txx_halo == 0) then
       call complete_group_pass(pass_Txx, G%Domain, clock=CS%id_clock_mpi)
-      Txx_halo = CS%Marching_halo
+      Txx_halo = halo
     endif
 
     call filter_hq(G, GV, CS, Txx_halo, Txx_iter, h=CS%Txx)
@@ -802,7 +809,7 @@ subroutine filter_stress(G, GV, CS)
     ! ---------- filtering Tyy -----------
     if (Tyy_halo == 0) then
       call complete_group_pass(pass_Tyy, G%Domain, clock=CS%id_clock_mpi)
-      Tyy_halo = CS%Marching_halo
+      Tyy_halo = halo
     endif
 
     call filter_hq(G, GV, CS, Tyy_halo, Tyy_iter, h=CS%Tyy)
@@ -815,7 +822,7 @@ subroutine filter_stress(G, GV, CS)
     ! ---------- filtering Txy -----------
     if (Txy_iter > 0) then
       call complete_group_pass(pass_Txy, G%Domain, clock=CS%id_clock_mpi)
-      Txy_halo = CS%Marching_halo
+      Txy_halo = halo
     endif
 
     call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
