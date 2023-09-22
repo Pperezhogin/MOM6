@@ -95,6 +95,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_stress
   integer :: id_clock_divergence
   integer :: id_clock_mpi
+  integer :: id_clock_mpi_init
   integer :: id_clock_filter
   integer :: id_clock_upd
   integer :: id_clock_post
@@ -167,8 +168,8 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  default=0)
 
   call get_param(param_file, mdl, "ZB_MARCHING_HALO", CS%Marching_halo, &
-                 "The number of filter iterations per a single MPI " //&
-                 " exchange", default=1)
+                 "The number of filter iterations per single MPI " //&
+                 " exchange", default=2)
 
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
@@ -260,7 +261,8 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
-  CS%id_clock_mpi = cpu_clock_id('(ZB2020 MPI)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_mpi = cpu_clock_id('(ZB2020 filter MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_mpi_init = cpu_clock_id('(ZB2020 filter MPI init)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(ZB2020 filter no MPI)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
@@ -639,7 +641,8 @@ end subroutine compute_stress
 !! according to the Klower formula
 !! Txx, Tyy, c_diss should have halo 1 (is-1:is+1, js-1:js+1)
 !! Txy should be in q points with halo 0 (Isq:Ieq, Jsq:Jeq)
-!! B.C. are NOT required for all tensors: Txx, Tyy, Txy, c_diss
+!! B.C. for Txy is required, while for 
+!! Txx, Tyy, c_diss is not required
 subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                                      dx2h, dy2h, dx2q, dy2q)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
@@ -703,9 +706,9 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
           Mxy(I,J) = (Txy(I,J,k) * &
                       0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
                             + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
-                      * (CS%hq(I,J,k) * G%mask2dBu(I,J))
+                      * (CS%hq(I,J,k))
         else
-          Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k) * G%mask2dBu(I,J))
+          Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k))
         endif
       enddo ; enddo
 
@@ -766,9 +769,12 @@ subroutine filter_stress(G, GV, CS)
 
   if (niter == 0) return
 
-  call create_group_pass(pass_Txy, CS%Txy, G%Domain, halo=CS%Marching_halo, position=CORNER)
-  call create_group_pass(pass_Txx, CS%Txx, G%Domain, halo=CS%Marching_halo)
-  call create_group_pass(pass_Tyy, CS%Tyy, G%Domain, halo=CS%Marching_halo)
+  call create_group_pass(pass_Txy, CS%Txy, G%Domain, halo=CS%Marching_halo, &
+    position=CORNER, clock=CS%id_clock_mpi_init)
+  call create_group_pass(pass_Txx, CS%Txx, G%Domain, halo=CS%Marching_halo, &
+    clock=CS%id_clock_mpi_init)
+  call create_group_pass(pass_Tyy, CS%Tyy, G%Domain, halo=CS%Marching_halo, &
+    clock=CS%id_clock_mpi_init)
 
   Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0; ! these are required halo for Txx, Tyy, Txy
   Txx_iter = niter; Tyy_iter = niter; Txy_iter = niter;
@@ -778,37 +784,37 @@ subroutine filter_stress(G, GV, CS)
        .or. Txx_halo == 0 .or. Tyy_halo == 0)             ! there is no halo for Txx or Tyy
     
     if (Txy_iter > 0) &
-      call start_group_pass(pass_Txy, G%Domain)
+      call start_group_pass(pass_Txy, G%Domain, clock=CS%id_clock_mpi)
     
     ! ---------- filtering Txx -----------
     if (Txx_halo == 0) then
-      call complete_group_pass(pass_Txx, G%Domain)
+      call complete_group_pass(pass_Txx, G%Domain, clock=CS%id_clock_mpi)
       Txx_halo = CS%Marching_halo
     endif
 
     call filter_hq(G, GV, CS, Txx_halo, Txx_iter, h=CS%Txx)
 
     if (Txx_halo == 0) &
-      call start_group_pass(pass_Txx, G%Domain)
+      call start_group_pass(pass_Txx, G%Domain, clock=CS%id_clock_mpi)
 
     ! ------------------------------------
 
     ! ---------- filtering Tyy -----------
     if (Tyy_halo == 0) then
-      call complete_group_pass(pass_Tyy, G%Domain)
+      call complete_group_pass(pass_Tyy, G%Domain, clock=CS%id_clock_mpi)
       Tyy_halo = CS%Marching_halo
     endif
 
     call filter_hq(G, GV, CS, Tyy_halo, Tyy_iter, h=CS%Tyy)
 
     if (Tyy_halo == 0) &
-      call start_group_pass(pass_Tyy, G%Domain)
+      call start_group_pass(pass_Tyy, G%Domain, clock=CS%id_clock_mpi)
 
     ! ------------------------------------
 
     ! ---------- filtering Txy -----------
     if (Txy_iter > 0) then
-      call complete_group_pass(pass_Txy, G%Domain)
+      call complete_group_pass(pass_Txy, G%Domain, clock=CS%id_clock_mpi)
       Txy_halo = CS%Marching_halo
     endif
 
@@ -831,6 +837,8 @@ subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
 
   if (remaining_iterations == 0) return
 
+  call cpu_clock_begin(CS%id_clock_filter)
+
   if (present(h)) then
     call filter_3D(h, CS%maskw_h,                  &
               G%isd, G%ied, G%jsd, G%jed,          &
@@ -844,6 +852,8 @@ subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
             G%IscB, G%IecB, G%JscB, G%JecB, GV%ke, &
             current_halo, remaining_iterations)
   endif
+
+  call cpu_clock_end(CS%id_clock_filter)
 end subroutine filter_hq
 
 subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_halo, remaining_iterations)
