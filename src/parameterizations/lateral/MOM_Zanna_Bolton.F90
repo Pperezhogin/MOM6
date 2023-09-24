@@ -95,11 +95,16 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_stress
   integer :: id_clock_divergence
   integer :: id_clock_mpi
-  integer :: id_clock_mpi_init
   integer :: id_clock_filter
   integer :: id_clock_upd
   integer :: id_clock_post
   integer :: id_clock_source
+  !>@}
+
+  !>@{ MPI group passes
+  type(group_pass_type) :: &
+      pass_Tq, pass_Th        !< handles for halo passes of Txy, Txx, Tyy
+  integer :: Stress_halo = -1 !< The halo size in filter of the stress tensor
   !>@}
 
 end type ZB2020_CS
@@ -169,7 +174,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "ZB_MARCHING_HALO", CS%Marching_halo, &
                  "The number of filter iterations per single MPI " //&
-                 " exchange", default=2)
+                 " exchange", default=4)
 
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
@@ -207,6 +212,16 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     ! 0.0625 is the filter weight
     allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
     allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
+
+    ! reduce size of halo exchange accrodingly to
+    ! Marching halo, number of iterations and the array size
+    ! But let exchange width be at least 1
+    CS%Stress_halo = max(min(CS%Marching_halo, CS%Stress_iter, G%ied-G%iec, G%jed-G%jec), 1)
+
+    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_halo, &
+      position=CORNER)
+    call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_halo)
+    call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_halo)
   endif
 
   ! Register fields for output from this module.
@@ -263,7 +278,6 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_mpi = cpu_clock_id('(ZB2020 filter MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(ZB2020 filter no MPI)', grain=CLOCK_ROUTINE, sync=.false.)
-  CS%id_clock_mpi_init = cpu_clock_id('(ZB2020 filter MPI init)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
@@ -760,69 +774,40 @@ subroutine filter_stress(G, GV, CS)
   
   integer :: Txx_halo, Tyy_halo, Txy_halo ! currently available halo
   integer :: Txx_iter, Tyy_iter, Txy_iter ! remaining number of iterations
-  integer :: niter                        ! number of iterations
-  integer :: halo                         ! halo size for MPI exchanges
-
-  type(group_pass_type) :: &
-      pass_Txy, pass_Txx, pass_Tyy ! handles for halo passes of Txy, Txx, Tyy
+  integer :: niter                        ! required number of iterations
   
   niter = CS%Stress_iter
 
   if (niter == 0) return
 
-  ! reduce size of halo exchange accrodingly to
-  ! Marching halo, number of filter iterations of 
-  ! halo of the array
-  ! But let exchange width be at least 1
-  halo = max(min(CS%Marching_halo, niter, G%ied-G%iec, G%jed-G%jec), 1)
-
-  call create_group_pass(pass_Txy, CS%Txy, G%Domain, halo=halo, &
-    position=CORNER, clock=CS%id_clock_mpi_init)
-  call create_group_pass(pass_Txx, CS%Txx, G%Domain, halo=halo, &
-    clock=CS%id_clock_mpi_init)
-  call create_group_pass(pass_Tyy, CS%Tyy, G%Domain, halo=halo, &
-    clock=CS%id_clock_mpi_init)
-
   Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0; ! these are required halo for Txx, Tyy, Txy
   Txx_iter = niter; Tyy_iter = niter; Txy_iter = niter;
 
   do while &
-      (Txx_iter > 0 .or. Tyy_iter > 0 .or. Txy_iter > 0 & ! filter iterations remain to be done
-       .or. Txx_halo == 0 .or. Tyy_halo == 0)             ! there is no halo for Txx or Tyy
+      (Txx_iter > 0 .or. Txy_iter > 0 & ! filter iterations remain to be done
+       .or. Txx_halo == 0)              ! there is no halo for Txx or Tyy
     
     if (Txy_iter > 0) &
-      call start_group_pass(pass_Txy, G%Domain, clock=CS%id_clock_mpi)
+      call start_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
     
-    ! ---------- filtering Txx -----------
+    ! ------- filtering Txx, Tyy ---------
     if (Txx_halo == 0) then
-      call complete_group_pass(pass_Txx, G%Domain, clock=CS%id_clock_mpi)
-      Txx_halo = halo
+      call complete_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
+      Txx_halo = CS%Stress_halo; Tyy_halo = CS%Stress_halo
     endif
 
     call filter_hq(G, GV, CS, Txx_halo, Txx_iter, h=CS%Txx)
-
-    if (Txx_halo == 0) &
-      call start_group_pass(pass_Txx, G%Domain, clock=CS%id_clock_mpi)
-
-    ! ------------------------------------
-
-    ! ---------- filtering Tyy -----------
-    if (Tyy_halo == 0) then
-      call complete_group_pass(pass_Tyy, G%Domain, clock=CS%id_clock_mpi)
-      Tyy_halo = halo
-    endif
-
     call filter_hq(G, GV, CS, Tyy_halo, Tyy_iter, h=CS%Tyy)
 
-    if (Tyy_halo == 0) &
-      call start_group_pass(pass_Tyy, G%Domain, clock=CS%id_clock_mpi)
+    if (Txx_halo == 0) &
+      call start_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
 
     ! ------------------------------------
 
     ! ---------- filtering Txy -----------
     if (Txy_iter > 0) then
-      call complete_group_pass(pass_Txy, G%Domain, clock=CS%id_clock_mpi)
-      Txy_halo = halo
+      call complete_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
+      Txy_halo = CS%Stress_halo
     endif
 
     call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
