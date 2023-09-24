@@ -42,6 +42,8 @@ type, public :: ZB2020_CS ; private
   integer   :: Klower_shear   !< Type of expression for shear in Klower formula
                               !! 0: sqrt(sh_xx**2 + sh_xy**2)
                               !! 1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+  integer   :: Marching_halo  !< The number of filter iterations per a single MPI
+                              !! exchange
 
   real :: subroundoff = 1e-30 !> A negligible parameter which avoids division by zero, but is too small to
                               !! modify physical values. [nondim]
@@ -69,6 +71,10 @@ type, public :: ZB2020_CS ; private
         c_diss(:,:,:)        !< Attenuation parameter at h points 
                              !! (Klower 2018, Juricke2019,2020) [nondim]
 
+  real, dimension(:,:), allocatable ::    &
+        maskw_h,  & !< Mask of land point at h points multiplied by filter weight
+        maskw_q     !< Same mask but for q points
+
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1
@@ -95,10 +101,10 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_source
   !>@}
 
-  !>@{ MPI exchange handles
-  type(group_pass_type) :: pass_Tq  ! A handle for halo pass of Txy
-  type(group_pass_type) :: pass_Th  ! A handle for halo pass of Txx, Tyy
-  type(group_pass_type) :: pass_T2  ! A handle for halo pass of Txx, Tyy
+  !>@{ MPI group passes
+  type(group_pass_type) :: &
+      pass_Tq, pass_Th        !< handles for halo passes of Txy, Txx, Tyy
+  integer :: Stress_halo = -1 !< The halo size in filter of the stress tensor
   !>@}
 
 end type ZB2020_CS
@@ -117,14 +123,15 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
   logical,                 intent(out)   :: use_ZB2020 !< If true, turns on ZB scheme.
 
-  integer :: Isq, Ieq, Jsq, Jeq
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
 
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_Zanna_Bolton" ! This module's name.
 
-  Isq  = G%IscB ; Ieq  = G%IecB ; Jsq  = G%JscB ; Jeq  = G%JecB
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   call log_version(param_file, mdl, version, "")
 
@@ -165,6 +172,10 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)", &
                  default=0)
 
+  call get_param(param_file, mdl, "ZB_MARCHING_HALO", CS%Marching_halo, &
+                 "The number of filter iterations per single MPI " //&
+                 " exchange", default=4)
+
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
@@ -176,12 +187,14 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%kappa_h(SZI_(G),SZJ_(G))); CS%kappa_h(:,:) = 0.
   allocate(CS%kappa_q(SZIB_(G),SZJB_(G))); CS%kappa_q(:,:) = 0.
 
-  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-    CS%kappa_h(i,j) = - CS%amplitude * G%areaT(i,j)
+  ! The scaling coefficient is multiplied to mask
+  ! to provide boundary conditions
+  do j=js-1,je+1 ; do i=is-1,ie+1
+    CS%kappa_h(i,j) = - CS%amplitude * G%areaT(i,j) * G%mask2dT(i,j)
   enddo; enddo
 
-  do J=Jsq-1,Jeq ; do I=Isq-1,Ieq
-    CS%kappa_q(I,J) = - CS%amplitude * G%areaBu(i,j)
+  do J=Jsq,Jeq ; do I=Isq,Ieq
+    CS%kappa_q(I,J) = - CS%amplitude * G%areaBu(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
   if (CS%Klower_R_diss > 0) then
@@ -196,14 +209,19 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   endif
 
   if (CS%Stress_iter > 0) then
-    if (CS%Stress_iter > min(G%ied-G%iec, G%jed-G%jec)) then
-      call MOM_error(FATAL, "MOM_Zanna_Bolton.F90, Use smaller number of filters")
-    endif
+    ! 0.0625 is the filter weight
+    allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
+    allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
 
-    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_iter, position=CORNER)
-      ! Halo is the same for Txx, Tyy because we need halo 1 for output
-    call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_iter)
-    call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_iter)
+    ! reduce size of halo exchange accrodingly to
+    ! Marching halo, number of iterations and the array size
+    ! But let exchange width be at least 1
+    CS%Stress_halo = max(min(CS%Marching_halo, CS%Stress_iter, G%ied-G%iec, G%jed-G%jec), 1)
+
+    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_halo, &
+      position=CORNER)
+    call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_halo)
+    call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_halo)
   endif
 
   ! Register fields for output from this module.
@@ -258,7 +276,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
-  CS%id_clock_mpi = cpu_clock_id('(ZB2020 MPI)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_mpi = cpu_clock_id('(ZB2020 filter MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(ZB2020 filter no MPI)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_upd = cpu_clock_id('(ZB2020 update diffu, diffv)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
@@ -284,6 +302,11 @@ subroutine ZB_2020_end(CS)
   if (CS%Klower_R_diss > 0) then
     deallocate(CS%ICoriolis_h)
     deallocate(CS%c_diss)
+  endif
+
+  if (CS%Stress_iter > 0) then
+    deallocate(CS%maskw_h)
+    deallocate(CS%maskw_q)
   endif
 
 end subroutine ZB_2020_end
@@ -632,7 +655,8 @@ end subroutine compute_stress
 !! according to the Klower formula
 !! Txx, Tyy, c_diss should have halo 1 (is-1:is+1, js-1:js+1)
 !! Txy should be in q points with halo 0 (Isq:Ieq, Jsq:Jeq)
-!! B.C. are NOT required for all tensors: Txx, Tyy, Txy, c_diss
+!! B.C. for Txy is required, while for 
+!! Txx, Tyy, c_diss is not required
 subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                                      dx2h, dy2h, dx2q, dy2q)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
@@ -696,9 +720,9 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
           Mxy(I,J) = (Txy(I,J,k) * &
                       0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
                             + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
-                      * (CS%hq(I,J,k) * G%mask2dBu(I,J))
+                      * (CS%hq(I,J,k))
         else
-          Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k) * G%mask2dBu(I,J))
+          Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k))
         endif
       enddo ; enddo
 
@@ -740,223 +764,134 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
 
 end subroutine compute_stress_divergence
 
-!> This function iteratively applied
-!! filter to the stress tensor
-!! We assume that the stress tensor
-!! satisfies the conditions from compute_stress
-!! Routine, i.e.
-!! Txx, Tyy have halo 1 but have no B.C.
-!! Txy has halo 0 and but has B.C.
+!> Filtering of the stress tensor 
+!! with overlapping computations and exchanges
+!! and flexible marching halo
 subroutine filter_stress(G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
   
-  integer :: max_halo ! maximum availabe halo
-  integer :: halo     ! dummy variable for halo update
-
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: isd, ied, jsd, jed, Isdq, Iedq, Jsdq, Jedq
-  integer :: i, j, k, n, iter, niter
-
+  integer :: Txx_halo, Tyy_halo, Txy_halo ! currently available halo
+  integer :: Txx_iter, Tyy_iter, Txy_iter ! remaining number of iterations
+  integer :: niter                        ! required number of iterations
+  
   niter = CS%Stress_iter
 
-  if (niter == 0) then
-    return
-  endif
+  if (niter == 0) return
 
-  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  Isdq = G%IsdB ; Iedq = G%IedB ; Jsdq = G%JsdB ; Jedq = G%JedB
-  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+  Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0; ! these are required halo for Txx, Tyy, Txy
+  Txx_iter = niter; Tyy_iter = niter; Txy_iter = niter;
 
-  call cpu_clock_begin(CS%id_clock_mpi)
-    call start_group_pass(CS%pass_Tq, G%Domain)  
-  call cpu_clock_end(CS%id_clock_mpi)
+  do while &
+      (Txx_iter > 0 .or. Txy_iter > 0 & ! filter iterations remain to be done
+       .or. Txx_halo == 0)              ! there is no halo for Txx or Tyy
+    
+    if (Txy_iter > 0) &
+      call start_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
+    
+    ! ------- filtering Txx, Tyy ---------
+    if (Txx_halo == 0) then
+      call complete_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
+      Txx_halo = CS%Stress_halo; Tyy_halo = CS%Stress_halo
+    endif
 
-  call cpu_clock_begin(CS%id_clock_filter)
+    call filter_hq(G, GV, CS, Txx_halo, Txx_iter, h=CS%Txx)
+    call filter_hq(G, GV, CS, Tyy_halo, Tyy_iter, h=CS%Tyy)
 
-    do k=1,nz
-      call filter_LR(CS%Txx(:,:,k), G%mask2dT, & ! array and mask
-                     isd,ied,jsd,jed,          & ! array size
-                     is,ie,js,je,              & ! owned points
-                     0,                        & ! zero halo of output
-                     .true., .true.)             ! apply B.C. to input/output arrays
+    if (Txx_halo == 0) &
+      call start_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
 
-      call filter_LR(CS%Tyy(:,:,k), G%mask2dT, & ! array and mask
-                     isd,ied,jsd,jed,          & ! array size
-                     is,ie,js,je,              & ! owned points
-                     0,                        & ! zero halo of output
-                     .true., .true.)             ! apply B.C. to input/output arrays
-    enddo
-  
-  call cpu_clock_end(CS%id_clock_filter)
-  
-  call cpu_clock_begin(CS%id_clock_mpi)
-    call start_group_pass(CS%pass_Th, G%Domain)
-    call complete_group_pass(CS%pass_Tq, G%Domain)
-  call cpu_clock_end(CS%id_clock_mpi)
+    ! ------------------------------------
 
-  call cpu_clock_begin(CS%id_clock_filter)
-    do k=1,nz
-      halo = niter-1
-      do iter=1,niter
-        call filter_LR(CS%Txy(:,:,k), G%mask2dBu, & ! array and mask
-                       Isdq,Iedq,Jsdq,Jedq,       & ! array size     
-                       Isq,Ieq,Jsq,Jeq,           & ! owned points       
-                       halo,                      & ! halo of output array
-                       .false., .true.)             ! apply B.C. to output arrays
-        halo = halo - 1
-      enddo
-      ! filtered array does not have halo
-    enddo
-  call cpu_clock_end(CS%id_clock_filter)
+    ! ---------- filtering Txy -----------
+    if (Txy_iter > 0) then
+      call complete_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
+      Txy_halo = CS%Stress_halo
+    endif
 
-  call cpu_clock_begin(CS%id_clock_mpi)
-    call complete_group_pass(CS%pass_Th, G%Domain)
-  call cpu_clock_end(CS%id_clock_mpi)
-
-  call cpu_clock_begin(CS%id_clock_filter)
-    do k=1,nz
-      halo = niter-1 
-      do iter=1,niter-1
-        call filter_LR(CS%Txx(:,:,k), G%mask2dT, & ! array and mask
-                       isd,ied,jsd,jed,          & ! array size
-                       is,ie,js,je,              & ! owned points
-                       halo,                     & ! halo of output array
-                       .false., .true.)            ! apply B.C. to output arrays
-        halo = halo - 1
-      enddo
-      ! filtered array has halo 1
-
-      halo = niter-1 
-      do iter=1,niter-1
-        call filter_LR(CS%Tyy(:,:,k), G%mask2dT, & ! array and mask
-                       isd,ied,jsd,jed,          & ! array size
-                       is,ie,js,je,              & ! owned points
-                       halo,                     & ! halo of output array
-                       .false., .true.)            ! apply B.C. to output arrays
-        halo = halo - 1
-      enddo
-      ! filtered array has halo 1
-    enddo
-  call cpu_clock_end(CS%id_clock_filter)
+    call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
+    ! ------------------------------------
+  enddo
 
 end subroutine filter_stress
 
-!> One iteration of 3x3 filter
-!! [1 2 1;
-!!  2 4 2;
-!!  1 2 1]/16
-!! removing chess-harmonic.
-!! The input array should have update halo.
-!! B.C. can be applied optionally
-!! to input and/or output arrays
-!! The filter is in-place,
-!! i.e. we modify the inpay array
-subroutine filter_2D(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, BC_out)
-  real, dimension(isd:ied,jsd:jed), &
+subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional,   &
+           intent(inout) :: h !< Input/output array in h points [dim arbitrary]
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), optional, &
+           intent(inout) :: q !< Input/output array in q points [dim arbitrary
+  integer, intent(inout) :: current_halo, remaining_iterations
+
+  if (remaining_iterations == 0) return
+
+  call cpu_clock_begin(CS%id_clock_filter)
+
+  if (present(h)) then
+    call filter_3D(h, CS%maskw_h,                  &
+              G%isd, G%ied, G%jsd, G%jed,          &
+              G%isc, G%iec, G%jsc, G%jec, GV%ke,   &
+              current_halo, remaining_iterations)
+  endif
+
+  if (present(q)) then
+    call filter_3D(q, CS%maskw_q,                  &
+            G%IsdB, G%IedB, G%JsdB, G%JedB,        &
+            G%IscB, G%IecB, G%JscB, G%JecB, GV%ke, &
+            current_halo, remaining_iterations)
+  endif
+
+  call cpu_clock_end(CS%id_clock_filter)
+end subroutine filter_hq
+
+subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_halo, remaining_iterations)
+  real, dimension(isd:ied,jsd:jed,nz), &
         intent(inout) :: x            !< Input/output array [dim arbitrary]
   real, dimension(isd:ied,jsd:jed), &
-        intent(in)    :: mask         !< Mask array for placing B.C. [nondim]  
+        intent(in)    :: maskw         !< Mask array of land points divded by 16 [nondim]  
   integer, intent(in) :: &
                          isd, ied,  & !< Indices of array size
                          jsd, jed,  & !< Indices of array size
                          is,  ie,   & !< Indices of owned points
-                         js,  je,   & !< Indices of owned points
-                         halo         !< Required halo of the output array
+                         js,  je,   &   !< Indices of owned points
+                         nz
+  integer, intent(inout) :: current_halo, remaining_iterations
                         
-  logical :: BC_in, BC_out            !< Apply B.C. to input/output arrays
+  real, parameter :: two = 2.
+  
+  integer :: i, j, k, iter, niter, halo
 
-  real :: wside        ! weights for side points [nondim]
-  real :: wcorner      ! weights for corner points [nondim]
-  real :: wcenter      ! weight for the center points [nondim]
+  real :: tmp(isd:ied, jsd:jed)
 
-  integer :: i, j
+  ! Do as many iterations as needed and possible
+  niter = min(current_halo, remaining_iterations)
+  ! Update remaining iterations
+  remaining_iterations = remaining_iterations - niter
+  ! Update halo information
+  current_halo = current_halo - niter 
 
-  real :: tmp(isd:ied,jsd:jed) ! temporary array for filtering [dim arbitrary]
+  do k=1,Nz
+    halo = niter-1 + &
+      current_halo ! Save as many halo points as possible
+    do iter=1,niter
 
-  wside = 1. / 8.
-  wcorner = 1. / 16.
-  wcenter = 1. - (wside*4. + wcorner*4.)
+      do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
+        tmp(i,j) = two * x(i,j,k) + (x(i,j-1,k) + x(i,j+1,k))
+      enddo; enddo
+      
+      do j = js-halo, je+halo; do i = is-halo, ie+halo;
+        x(i,j,k) = (two * tmp(i,j) + (tmp(i-1,j) + tmp(i+1,j))) * maskw(i,j)
+      enddo; enddo
 
-  do j = js-halo-1, je+halo+1; do i = is-halo-1, ie+halo+1
-    if (BC_in) then
-      tmp(i,j) = x(i,j) * mask(i,j)
-    else
-      tmp(i,j) = x(i,j)
-    endif
-  enddo; enddo
+      halo = halo - 1
+    enddo
+  enddo
 
-  do j = js-halo, je+halo; do i = is-halo, ie+halo
-    x(i,j) =  wcenter * tmp(i,j)               &
-            + wcorner * (                      &
-              (tmp(i-1,j-1)+tmp(i+1,j+1))      &
-            + (tmp(i-1,j+1)+tmp(i+1,j-1))      &
-            )                                  &
-            + wside * (                        &
-              (tmp(i-1,j)+tmp(i+1,j))          &
-            + (tmp(i,j-1)+tmp(i,j+1))          &
-            )
-    if (BC_out) then
-      x(i,j) = x(i,j) * mask(i,j)
-    endif
-  enddo; enddo
-
-end subroutine filter_2D
-
-subroutine filter_LR(x, mask, isd, ied, jsd, jed, is, ie, js, je, halo, BC_in, BC_out)
-  real, dimension(isd:ied,jsd:jed), &
-        intent(inout) :: x            !< Input/output array [dim arbitrary]
-  real, dimension(isd:ied,jsd:jed), &
-        intent(in)    :: mask         !< Mask array for placing B.C. [nondim]  
-  integer, intent(in) :: &
-                         isd, ied,  & !< Indices of array size
-                         jsd, jed,  & !< Indices of array size
-                         is,  ie,   & !< Indices of owned points
-                         js,  je,   & !< Indices of owned points
-                         halo         !< Required halo of the output array
-                        
-  logical :: BC_in, BC_out            !< Apply B.C. to input/output arrays
-
-  real :: wside        ! weights for side points [nondim]
-  real :: wcenter      ! weight for the center points [nondim]
-
-  integer :: i, j
-
-  real :: tmp(isd:ied, jsd:jed) ! temporary array for filtering [dim arbitrary]
-
-  wside = 1. / 4.
-  wcenter = 1. - (2. * wside)
-
-  do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
-    if (BC_in) then
-      tmp(i,j) = wcenter * x(i,j) * mask(i,j) &
-               + wside * (                    &
-                  x(i,j-1) * mask(i,j-1)      &
-                + x(i,j+1) * mask(i,j+1)      &
-               )
-    else
-      tmp(i,j) = wcenter * x(i,j) &
-               + wside * (        &
-                  x(i,j-1)        &
-                + x(i,j+1)        &
-               )
-    endif
-  enddo; enddo
-
-  do j = js-halo, je+halo; do i = is-halo, ie+halo;
-    x(i,j) = wcenter * tmp(i,j) &
-               + wside * (      &
-                  tmp(i-1,j)    &
-                + tmp(i+1,j)    &
-               )
-    if (BC_out) then
-      x(i,j) = x(i,j) * mask(i,j)
-    endif
-  enddo; enddo
-
-end subroutine filter_LR
+end subroutine filter_3D
 
 !> Computes the 3D energy source term for the ZB2020 scheme
 !! similarly to MOM_diagnostics.F90, specifically 1125 line.
