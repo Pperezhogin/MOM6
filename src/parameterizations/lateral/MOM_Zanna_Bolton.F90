@@ -236,13 +236,13 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
       'm3 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2)*US%s_to_T)
 
   CS%id_Txx = register_diag_field('ocean_model', 'Txx', diag%axesTL, Time, &
-      'Diagonal term (Txx) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
+      'Diagonal term (Txx) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
   CS%id_Tyy = register_diag_field('ocean_model', 'Tyy', diag%axesTL, Time, &
-      'Diagonal term (Tyy) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
+      'Diagonal term (Tyy) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
-      'Off-diagonal term (Txy) in the ZB stress tensor', 'm3s-2', conversion=GV%H_to_m*US%L_T_to_m_s**2)
+      'Off-diagonal term (Txy) in the ZB stress tensor', 'm2s-2', conversion=US%L_T_to_m_s**2)
 
   if (CS%Klower_R_diss > 0) then
     CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
