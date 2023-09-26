@@ -781,16 +781,24 @@ subroutine filter_stress(G, GV, CS)
 
   if (niter == 0) return
 
-  Txx_halo = 1; Tyy_halo = 1; Txy_halo = 0; ! these are required halo for Txx, Tyy, Txy
+  Txx_halo = 1; Tyy_halo = 1; Txy_halo = 1; ! these are required halo for Txx, Tyy, Txy
   Txx_iter = niter; Tyy_iter = niter; Txy_iter = niter;
 
   do while &
-      (Txx_iter > 0 .or. Txy_iter > 0 & ! filter iterations remain to be done
-       .or. Txx_halo == 0)              ! there is no halo for Txx or Tyy
+      (Txx_iter >  0 .or. Txy_iter >  0 .or. & ! filter iterations remain to be done
+       Txx_halo == 0 .or. Txy_halo == 0)       ! there is no halo for Txx or Txy
+
+    ! ---------- filtering Txy -----------
+    if (Txy_halo == 0) then
+      call complete_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
+      Txy_halo = CS%Stress_halo
+    endif
+  
+      call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
     
-    if (Txy_iter > 0) &
-      call start_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
-    
+    if (Txy_halo == 0) &
+       call start_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
+
     ! ------- filtering Txx, Tyy ---------
     if (Txx_halo == 0) then
       call complete_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
@@ -803,16 +811,6 @@ subroutine filter_stress(G, GV, CS)
     if (Txx_halo == 0) &
       call start_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
 
-    ! ------------------------------------
-
-    ! ---------- filtering Txy -----------
-    if (Txy_iter > 0) then
-      call complete_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
-      Txy_halo = CS%Stress_halo
-    endif
-
-    call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
-    ! ------------------------------------
   enddo
 
 end subroutine filter_stress
@@ -827,8 +825,6 @@ subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), optional, &
            intent(inout) :: q !< Input/output array in q points [dim arbitrary
   integer, intent(inout) :: current_halo, remaining_iterations
-
-  if (remaining_iterations == 0) return
 
   call cpu_clock_begin(CS%id_clock_filter)
 
@@ -870,6 +866,8 @@ subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_h
 
   ! Do as many iterations as needed and possible
   niter = min(current_halo, remaining_iterations)
+  if (niter == 0) return ! nothing to do
+
   ! Update remaining iterations
   remaining_iterations = remaining_iterations - niter
   ! Update halo information
