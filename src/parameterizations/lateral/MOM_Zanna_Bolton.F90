@@ -826,26 +826,34 @@ subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
            intent(inout) :: q !< Input/output array in q points [dim arbitrary
   integer, intent(inout) :: current_halo, remaining_iterations
 
+  logical :: direction
+
+  direction = (MOD(G%first_direction,2) == 0)
+
   call cpu_clock_begin(CS%id_clock_filter)
 
   if (present(h)) then
     call filter_3D(h, CS%maskw_h,                  &
               G%isd, G%ied, G%jsd, G%jed,          &
               G%isc, G%iec, G%jsc, G%jec, GV%ke,   &
-              current_halo, remaining_iterations)
+              current_halo, remaining_iterations,  &
+              direction)
   endif
 
   if (present(q)) then
     call filter_3D(q, CS%maskw_q,                  &
             G%IsdB, G%IedB, G%JsdB, G%JedB,        &
             G%IscB, G%IecB, G%JscB, G%JecB, GV%ke, &
-            current_halo, remaining_iterations)
+            current_halo, remaining_iterations,    &
+            direction)
   endif
 
   call cpu_clock_end(CS%id_clock_filter)
 end subroutine filter_hq
 
-subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_halo, remaining_iterations)
+subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, &
+                     current_halo, remaining_iterations,               &
+                     direction)
   real, dimension(isd:ied,jsd:jed,nz), &
         intent(inout) :: x            !< Input/output array [dim arbitrary]
   real, dimension(isd:ied,jsd:jed), &
@@ -857,6 +865,7 @@ subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_h
                          js,  je,   &   !< Indices of owned points
                          nz
   integer, intent(inout) :: current_halo, remaining_iterations
+  logical, intent(in)    :: direction
                         
   real, parameter :: two = 2.
   
@@ -878,13 +887,23 @@ subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, current_h
       current_halo ! Save as many halo points as possible
     do iter=1,niter
 
-      do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
-        tmp(i,j) = two * x(i,j,k) + (x(i,j-1,k) + x(i,j+1,k))
-      enddo; enddo
-      
-      do j = js-halo, je+halo; do i = is-halo, ie+halo;
-        x(i,j,k) = (two * tmp(i,j) + (tmp(i-1,j) + tmp(i+1,j))) * maskw(i,j)
-      enddo; enddo
+      if (direction) then
+        do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
+          tmp(i,j) = two * x(i,j,k) + (x(i,j-1,k) + x(i,j+1,k))
+        enddo; enddo
+        
+        do j = js-halo, je+halo; do i = is-halo, ie+halo;
+          x(i,j,k) = (two * tmp(i,j) + (tmp(i-1,j) + tmp(i+1,j))) * maskw(i,j)
+        enddo; enddo
+      else
+        do j = js-halo-1, je+halo+1; do i = is-halo, ie+halo
+          tmp(i,j) = two * x(i,j,k) + (x(i-1,j,k) + x(i+1,j,k))
+        enddo; enddo
+        
+        do j = js-halo, je+halo; do i = is-halo, ie+halo;
+          x(i,j,k) = (two * tmp(i,j) + (tmp(i,j-1) + tmp(i,j+1))) * maskw(i,j)
+        enddo; enddo
+      endif
 
       halo = halo - 1
     enddo
