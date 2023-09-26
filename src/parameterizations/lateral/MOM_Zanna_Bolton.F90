@@ -45,9 +45,6 @@ type, public :: ZB2020_CS ; private
   integer   :: Marching_halo  !< The number of filter iterations per a single MPI
                               !! exchange
 
-  real :: subroundoff_Cor     !> A negligible parameter which avoids division by zero 
-                              !! but small compared to Coriolis parameter [T-1 ~> s-1]
-
   real, dimension(:,:,:), allocatable :: &
           sh_xx,   & !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
                      !! points including metric terms [T-1 ~> s-1]
@@ -123,6 +120,9 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
   logical,                 intent(out)   :: use_ZB2020 !< If true, turns on ZB scheme.
 
+  real :: subroundoff_Cor     !> A negligible parameter which avoids division by zero 
+                              !! but small compared to Coriolis parameter [T-1 ~> s-1]
+
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
 
@@ -176,8 +176,6 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "The number of filter iterations per single MPI " //&
                  " exchange", default=4)
 
-  CS%subroundoff_Cor = 1e-30 * US%T_to_s
-
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
@@ -203,9 +201,10 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     allocate(CS%ICoriolis_h(SZI_(G),SZJ_(G))); CS%ICoriolis_h(:,:) = 0.
     allocate(CS%c_diss(SZI_(G),SZJ_(G),SZK_(GV))); CS%c_diss(:,:,:) = 0.
 
+    subroundoff_Cor = 1e-30 * US%T_to_s
     do j=js-1,je+1 ; do i=is-1,ie+1
       CS%ICoriolis_h(i,j) = 1. / ((abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
-                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff_Cor) &
+                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + subroundoff_Cor) &
                           * CS%Klower_R_diss)
     enddo; enddo
   endif
