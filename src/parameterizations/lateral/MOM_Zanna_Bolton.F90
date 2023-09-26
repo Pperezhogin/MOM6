@@ -170,7 +170,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "Type of expression for shear in Klower formula: " //&
                  "0: sqrt(sh_xx**2 + sh_xy**2) " //&
                  "1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)", &
-                 default=0)
+                 default=1)
 
   call get_param(param_file, mdl, "ZB_MARCHING_HALO", CS%Marching_halo, &
                  "The number of filter iterations per single MPI " //&
@@ -193,7 +193,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     CS%kappa_h(i,j) = - CS%amplitude * G%areaT(i,j) * G%mask2dT(i,j)
   enddo; enddo
 
-  do J=Jsq,Jeq ; do I=Isq,Ieq
+  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
     CS%kappa_q(I,J) = - CS%amplitude * G%areaBu(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
@@ -201,7 +201,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     allocate(CS%ICoriolis_h(SZI_(G),SZJ_(G))); CS%ICoriolis_h(:,:) = 0.
     allocate(CS%c_diss(SZI_(G),SZJ_(G),SZK_(GV))); CS%c_diss(:,:,:) = 0.
 
-    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+    do j=js-1,je+1 ; do i=is-1,ie+1
       CS%ICoriolis_h(i,j) = 1. / ((abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
                           + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + CS%subroundoff) &
                           * CS%Klower_R_diss)
@@ -345,25 +345,25 @@ subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-  do J=Jsq,Jeq ; do I=Isq,Ieq
+  do J=js-1,Jeq ; do I=is-1,Ieq
     CS%hq(I,J,k) = hq(I,J)
   enddo; enddo
 
   ! No physical B.C. is required for
   ! sh_xx in ZB2020. However, filtering
   ! may require BC
-  do j=js-2,je+2 ; do i=is-2,ie+2
+  do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
     CS%sh_xx(i,j,k) = sh_xx(i,j)
   enddo ; enddo
   
   ! We multiply by mask to remove 
   ! implicit dependence on CS%no_slip
   ! flag in hor_visc module
-  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+  do J=Jsq-2,Jeq+1 ; do I=Isq-2,Ieq+1
     CS%sh_xy(I,J,k) = sh_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
-  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+  do J=Jsq-2,Jeq+1 ; do I=Isq-2,Ieq+1
     CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
@@ -633,7 +633,7 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
 
     ! Here we assume that Txy is initialized to zero
     if (CS%ZB_type .NE. 2) then
-      do J=Jsq,Jeq ; do I=Isq,Ieq
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
         sh_xx_q = 0.25 * ( (sh_xx(i+1,j+1,k) + sh_xx(i,j,k)) &
                          + (sh_xx(i+1,j,k) + sh_xx(i,j+1,k)))
         ! We assume that vort_xy has zero B.C.. So,
@@ -715,26 +715,26 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
   h_neglect  = GV%H_subroundoff ! Line 410 on MOM_hor_visc.F90
 
   do k=1,nz
-      do J=Jsq,Jeq ; do I=Isq,Ieq
-        if (CS%Klower_R_diss > 0.) then
-          Mxy(I,J) = (Txy(I,J,k) * &
-                      0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
-                            + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
-                      * (CS%hq(I,J,k))
-        else
-          Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k))
-        endif
-      enddo ; enddo
+    do J=js-1,Jeq ; do I=is-1,Ieq
+      if (CS%Klower_R_diss > 0.) then
+        Mxy(I,J) = (Txy(I,J,k) * &
+                    0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
+                          + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
+                    * (CS%hq(I,J,k))
+      else
+        Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k))
+      endif
+    enddo ; enddo
 
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        if (CS%Klower_R_diss > 0.) then
-          Mxx(i,j) = ((Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
-          Myy(i,j) = ((Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
-        else
-          Mxx(i,j) = ((Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
-          Myy(i,j) = ((Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
-        endif
-      enddo ; enddo
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      if (CS%Klower_R_diss > 0.) then
+        Mxx(i,j) = ((Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+        Myy(i,j) = ((Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+      else
+        Mxx(i,j) = ((Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+        Myy(i,j) = ((Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+      endif
+    enddo ; enddo
 
     ! Evaluate 1/h x.Div(h S) (Line 1495 of MOM_hor_visc.F90)
     ! Minus occurs because in original file (du/dt) = - div(S),
