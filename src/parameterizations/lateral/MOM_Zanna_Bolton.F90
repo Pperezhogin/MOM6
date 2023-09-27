@@ -348,24 +348,32 @@ subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
 
   do J=js-1,Jeq ; do I=is-1,Ieq
     CS%hq(I,J,k) = hq(I,J)
+    if (isnan(CS%hq(i,j,k))) &
+      call MOM_error(FATAL, "NAN in hq")
   enddo; enddo
 
   ! No physical B.C. is required for
   ! sh_xx in ZB2020. However, filtering
   ! may require BC
   do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
-    CS%sh_xx(i,j,k) = sh_xx(i,j)
+    CS%sh_xx(i,j,k) = sh_xx(i,j) * G%mask2dT(i,j)
+    if (isnan(CS%sh_xx(i,j,k))) &
+      call MOM_error(FATAL, "NAN in sh_xx")
   enddo ; enddo
   
   ! We multiply by mask to remove 
   ! implicit dependence on CS%no_slip
   ! flag in hor_visc module
-  do J=Jsq-2,Jeq+1 ; do I=Isq-2,Ieq+1
+  do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     CS%sh_xy(I,J,k) = sh_xy(I,J) * G%mask2dBu(I,J)
+    if (isnan(CS%sh_xy(i,j,k))) &
+      call MOM_error(FATAL, "NAN in sh_xy")
   enddo; enddo
 
-  do J=Jsq-2,Jeq+1 ; do I=Isq-2,Ieq+1
+  do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
+    if (isnan(CS%vort_xy(i,j,k))) &
+      call MOM_error(FATAL, "NAN in vort_xy")
   enddo; enddo
 
   call cpu_clock_end(CS%id_clock_copy)
@@ -529,6 +537,9 @@ subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
       endif
       
       c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
+
+      if (isnan(CS%c_diss(i,j,k))) &
+        call MOM_error(FATAL, "NAN in c_diss")
     enddo; enddo
 
   enddo ! end of k loop
@@ -630,6 +641,11 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
       
       Txx(i,j,k) = CS%kappa_h(i,j) * (- vort_sh + sum_sq)
       Tyy(i,j,k) = CS%kappa_h(i,j) * (+ vort_sh + sum_sq)
+
+      if (isnan(Txx(i,j,k))) &
+        call MOM_error(FATAL, "NAN in Txx")
+      if (isnan(Tyy(i,j,k))) &
+        call MOM_error(FATAL, "NAN in Tyy")
     enddo ; enddo
 
     ! Here we assume that Txy is initialized to zero
@@ -640,6 +656,8 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
         ! We assume that vort_xy has zero B.C.. So,
         ! no additional masking is required
         Txy(I,J,k) = CS%kappa_q(I,J) * (vort_xy(I,J,k) * sh_xx_q)
+        if (isnan(Txy(i,j,k))) &
+          call MOM_error(FATAL, "NAN in Txy")
       enddo ; enddo
     endif
 
@@ -747,6 +765,8 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                       G%IdxCu(I,j)*(dx2q(I,J-1)*Mxy(I,J-1)  - &
                                     dx2q(I,J)  *Mxy(I,J)))  * &
                       G%IareaCu(I,j)) / h_u
+      if (isnan(fx(i,j,k))) &
+          call MOM_error(FATAL, "NAN in fx")
     enddo ; enddo
 
     ! Evaluate 1/h y.Div(h S) (Line 1517 of MOM_hor_visc.F90)
@@ -757,6 +777,8 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                       G%IdxCv(i,J)*(Myy(i,j)                 - &
                                     Myy(i,j+1)))             * &
                       G%IareaCv(i,J)) / h_v
+      if (isnan(fy(i,j,k))) &
+                      call MOM_error(FATAL, "NAN in fy")
     enddo ; enddo
 
   enddo ! end of k loop
