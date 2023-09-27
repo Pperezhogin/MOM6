@@ -100,8 +100,10 @@ type, public :: ZB2020_CS ; private
 
   !>@{ MPI group passes
   type(group_pass_type) :: &
-      pass_Tq, pass_Th        !< handles for halo passes of Txy, Txx, Tyy
-  integer :: Stress_halo = -1 !< The halo size in filter of the stress tensor
+      pass_Tq, pass_Th, &        !< handles for halo passes of Txy and Txx, Tyy
+      pass_xx, pass_xy           !< handles for halo passes of sh_xx and sh_xy, vort_xy 
+  integer :: Stress_halo = -1, & !< The halo size in filter of the stress tensor
+             HPF_halo = -1       !< The halo size in filter of the velocity gradient
   !>@}
 
 end type ZB2020_CS
@@ -209,20 +211,36 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     enddo; enddo
   endif
 
-  if (CS%Stress_iter > 0) then
+  if (CS%Stress_iter > 0 .or. CS%HPF_iter > 0) then
     ! 0.0625 is the filter weight
     allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
     allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
+  endif
 
+  if (CS%Stress_iter > 0) then
     ! reduce size of halo exchange accrodingly to
     ! Marching halo, number of iterations and the array size
     ! But let exchange width be at least 1
-    CS%Stress_halo = max(min(CS%Marching_halo, CS%Stress_iter, G%ied-G%iec, G%jed-G%jec), 1)
+    CS%Stress_halo = max(min(CS%Marching_halo, CS%Stress_iter, &
+                             G%Domain%nihalo, G%Domain%njhalo), 1)
 
     call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_halo, &
       position=CORNER)
     call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_halo)
     call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_halo)
+  endif
+
+  if (CS%HPF_iter > 0) then
+    ! The minimum halo size is 2 because it is requirement for the 
+    ! inputs of function compute_stress
+    CS%HPF_halo = max(min(CS%Marching_halo, CS%HPF_iter, &
+                          G%Domain%nihalo, G%Domain%njhalo), 2)
+
+    call create_group_pass(CS%pass_xx, CS%sh_xx, G%Domain, halo=CS%HPF_halo)
+    call create_group_pass(CS%pass_xy, CS%sh_xy, G%Domain, halo=CS%HPF_halo, &
+      position=CORNER)
+    call create_group_pass(CS%pass_xy, CS%vort_xy, G%Domain, halo=CS%HPF_halo, &
+      position=CORNER)
   endif
 
   ! Register fields for output from this module.
@@ -305,7 +323,7 @@ subroutine ZB_2020_end(CS)
     deallocate(CS%c_diss)
   endif
 
-  if (CS%Stress_iter > 0) then
+  if (CS%Stress_iter > 0 .or. CS%HPF_iter) then
     deallocate(CS%maskw_h)
     deallocate(CS%maskw_q)
   endif
@@ -431,6 +449,8 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
     call compute_c_diss(CS%sh_xx, CS%sh_xy, CS%vort_xy, &
                         CS%c_diss, G, GV, CS)
   endif
+
+  call filter_velocity_gradients(G, GV, CS)
 
   call compute_stress(CS%sh_xx, CS%sh_xy, CS%vort_xy,   & 
                       CS%Txx, CS%Tyy, CS%Txy,           &
@@ -787,6 +807,82 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
 
 end subroutine compute_stress_divergence
 
+!> Filtering of the velocity gradients (VG)
+subroutine filter_velocity_gradients(G, GV, CS)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+
+  real, dimension(SZI_(G), SZJ_(G), SZK_(GV)) :: &
+        sh_xx          !< Copy of CS%sh_xx
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
+        sh_xy, vort_xy !< Copy of CS%sh_xy and CS%vort_xy
+
+  integer :: xx_halo, xy_halo, vort_halo ! currently available halo
+  integer :: xx_iter, xy_iter, vort_iter ! remaining number of iterations
+  integer :: niter                       ! required number of iterations
+
+  niter = CS%HPF_iter
+
+  if (niter == 0) return
+
+  if (.not. G%symmetric) &
+    call do_group_pass(CS%pass_xx, G%Domain, &
+      clock=CS%id_clock_mpi)
+  
+  ! This is just copy of the array
+  ! no need to worry about halo
+  call cpu_clock_begin(CS%id_clock_filter)
+    sh_xx(:,:,:) = CS%sh_xx(:,:,:)
+    sh_xy(:,:,:) = CS%sh_xy(:,:,:)
+    vort_xy(:,:,:) = CS%vort_xy(:,:,:)
+  call cpu_clock_end(CS%id_clock_filter)
+
+  xx_halo = 2; xy_halo = 1; vort_halo = 1;
+  xx_iter = niter; xy_iter = niter; vort_iter = niter;
+
+  do while &
+    (xx_iter >  0 .or. xy_iter >  0 .or. & ! filter iterations remain to be done
+    xx_halo < 2 .or. xy_halo < 1)        ! there is no halo for VG tensor
+
+    ! ---------- filtering sh_xx ---------
+    if (xx_halo < 2) then
+      call complete_group_pass(CS%pass_xx, G%Domain, clock=CS%id_clock_mpi)
+      xx_halo = CS%HPF_halo
+    endif
+
+      call filter_hq(G, GV, CS, xx_halo, xx_iter, h=CS%sh_xx)
+    
+    if (xx_halo < 2) &
+      call start_group_pass(CS%pass_xx, G%Domain, clock=CS%id_clock_mpi)
+    
+    ! ------ filtering sh_xy, vort_xy ----
+    if (xy_halo < 1) then
+      call complete_group_pass(CS%pass_xy, G%Domain, clock=CS%id_clock_mpi)
+      xy_halo = CS%HPF_halo; vort_halo = CS%HPF_halo
+    endif
+
+      call filter_hq(G, GV, CS, xy_halo, xy_iter, q=CS%sh_xy)
+      call filter_hq(G, GV, CS, vort_halo, vort_iter, q=CS%vort_xy)
+
+    if (xy_halo < 1) &
+      call start_group_pass(CS%pass_xy, G%Domain, clock=CS%id_clock_mpi)
+  
+  enddo
+
+  ! We implement sharpening by computing residual
+  call cpu_clock_begin(CS%id_clock_filter)
+    CS%sh_xx(:,:,:) = sh_xx(:,:,:) - CS%sh_xx(:,:,:)
+    CS%sh_xy(:,:,:) = sh_xy(:,:,:) - CS%sh_xy(:,:,:)
+    CS%vort_xy(:,:,:) = vort_xy(:,:,:) - CS%vort_xy(:,:,:) 
+  call cpu_clock_end(CS%id_clock_filter)
+
+  if (.not. G%symmetric) &
+    call do_group_pass(CS%pass_xy, G%Domain, &
+      clock=CS%id_clock_mpi)
+    
+end subroutine filter_velocity_gradients
+
 !> Filtering of the stress tensor 
 !! with overlapping computations and exchanges
 !! and flexible marching halo
@@ -808,21 +904,21 @@ subroutine filter_stress(G, GV, CS)
 
   do while &
       (Txx_iter >  0 .or. Txy_iter >  0 .or. & ! filter iterations remain to be done
-       Txx_halo == 0 .or. Txy_halo == 0)       ! there is no halo for Txx or Txy
+       Txx_halo < 1 .or. Txy_halo < 1)         ! there is no halo for Txx or Txy
 
     ! ---------- filtering Txy -----------
-    if (Txy_halo == 0) then
+    if (Txy_halo < 1) then
       call complete_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
       Txy_halo = CS%Stress_halo
     endif
   
       call filter_hq(G, GV, CS, Txy_halo, Txy_iter, q=CS%Txy)
     
-    if (Txy_halo == 0) &
+    if (Txy_halo < 1) &
        call start_group_pass(CS%pass_Tq, G%Domain, clock=CS%id_clock_mpi)
 
     ! ------- filtering Txx, Tyy ---------
-    if (Txx_halo == 0) then
+    if (Txx_halo < 1) then
       call complete_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
       Txx_halo = CS%Stress_halo; Tyy_halo = CS%Stress_halo
     endif
@@ -830,7 +926,7 @@ subroutine filter_stress(G, GV, CS)
     call filter_hq(G, GV, CS, Txx_halo, Txx_iter, h=CS%Txx)
     call filter_hq(G, GV, CS, Tyy_halo, Tyy_iter, h=CS%Tyy)
 
-    if (Txx_halo == 0) &
+    if (Txx_halo < 1) &
       call start_group_pass(CS%pass_Th, G%Domain, clock=CS%id_clock_mpi)
 
   enddo
