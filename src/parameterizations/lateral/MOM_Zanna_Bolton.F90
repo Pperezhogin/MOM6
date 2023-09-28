@@ -821,20 +821,33 @@ subroutine filter_velocity_gradients(G, GV, CS)
   integer :: xx_iter, xy_iter, vort_iter ! remaining number of iterations
   integer :: niter                       ! required number of iterations
 
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+
   niter = CS%HPF_iter
 
   if (niter == 0) return
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   if (.not. G%symmetric) &
     call do_group_pass(CS%pass_xx, G%Domain, &
       clock=CS%id_clock_mpi)
   
   ! This is just copy of the array
-  ! no need to worry about halo
   call cpu_clock_begin(CS%id_clock_filter)
-    sh_xx(:,:,:) = CS%sh_xx(:,:,:)
-    sh_xy(:,:,:) = CS%sh_xy(:,:,:)
-    vort_xy(:,:,:) = CS%vort_xy(:,:,:)
+    do k=1,nz
+      ! Halo of size 2 is valid
+      do j=js-2,je+2; do i=is-2,ie+2
+        sh_xx(i,j,k) = CS%sh_xx(i,j,k)
+      enddo; enddo
+      ! Only halo of size 1 is valid
+      do J=Jsq-1,Jeq+1; do I=Isq-1,Ieq+1
+        sh_xy(I,J,k) = CS%sh_xy(I,J,k)
+        vort_xy(I,J,k) = CS%vort_xy(I,J,k)
+      enddo; enddo
+    enddo
   call cpu_clock_end(CS%id_clock_filter)
 
   xx_halo = 2; xy_halo = 1; vort_halo = 1;
@@ -870,10 +883,17 @@ subroutine filter_velocity_gradients(G, GV, CS)
   enddo
 
   ! We implement sharpening by computing residual
+  ! B.C. are already applied to all fields
   call cpu_clock_begin(CS%id_clock_filter)
-    CS%sh_xx(:,:,:) = sh_xx(:,:,:) - CS%sh_xx(:,:,:)
-    CS%sh_xy(:,:,:) = sh_xy(:,:,:) - CS%sh_xy(:,:,:)
-    CS%vort_xy(:,:,:) = vort_xy(:,:,:) - CS%vort_xy(:,:,:) 
+    do k=1,nz
+      do j=js-2,je+2; do i=is-2,ie+2
+        CS%sh_xx(i,j,k) = sh_xx(i,j,k) - CS%sh_xx(i,j,k)
+      enddo; enddo
+      do J=Jsq-1,Jeq+1; do I=Isq-1,Ieq+1
+        CS%sh_xy(I,J,k) = sh_xy(I,J,k) - CS%sh_xy(I,J,k)
+        CS%vort_xy(I,J,k) = vort_xy(I,J,k) - CS%vort_xy(I,J,k)
+      enddo; enddo
+    enddo
   call cpu_clock_end(CS%id_clock_filter)
 
   if (.not. G%symmetric) &
