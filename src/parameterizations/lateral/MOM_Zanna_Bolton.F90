@@ -81,10 +81,6 @@ type, public :: ZB2020_CS ; private
   integer :: id_Tyy = -1
   integer :: id_Txy = -1
   integer :: id_cdiss = -1
-  ! Debug fields
-  integer :: id_sh_xx = -1, id_sh_xy = -1, id_vort_xy = -1
-  integer :: id_hq = -1
-  integer :: id_h = -1, id_u = -1, id_v = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -275,25 +271,6 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
         'Klower (2018) attenuation coefficient', '1', conversion=1.)
   endif
 
-  ! These fields are used for debug only
-  CS%id_sh_xx = register_diag_field('ocean_model', 'sh_xx', diag%axesTL, Time, &
-      'Horizontal tension (du/dx - dv/dy) in h (CENTER) points including metric terms', &
-      's-1', conversion=US%s_to_T)
-  CS%id_sh_xy = register_diag_field('ocean_model', 'sh_xy', diag%axesBL, Time, &
-      'Horizontal shearing strain (du/dy + dv/dx) in q (CORNER) points including metric terms', &
-      's-1', conversion=US%s_to_T)
-  CS%id_vort_xy = register_diag_field('ocean_model', 'vort_xy', diag%axesBL, Time, &
-      'Vertical vorticity (dv/dx - du/dy) in q (CORNER) points including metric terms', &
-      's-1', conversion=US%s_to_T)
-  CS%id_hq = register_diag_field('ocean_model', 'hq', diag%axesBL, Time, &
-      'Thickness in CORNER points', 'm', conversion=GV%H_to_m)
-  CS%id_h = register_diag_field('ocean_model', 'h_ZB', diag%axesTL, Time, &
-      'Thickness in ZB module', 'm', conversion=GV%H_to_m)
-  CS%id_u = register_diag_field('ocean_model', 'u_ZB', diag%axesCuL, Time, &
-      'Zonal velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
-  CS%id_v = register_diag_field('ocean_model', 'v_ZB', diag%axesCvL, Time, &
-      'Meridional velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
-
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
   ! parts are measured without -- because these are nested clocks.
@@ -462,36 +439,27 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                                  dx2h, dy2h, dx2q, dy2q)
 
   call cpu_clock_begin(CS%id_clock_upd)
-  do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-    diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
-  enddo ; enddo ; enddo
+    do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
+    enddo ; enddo ; enddo
 
-  do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-    diffv(i,J,k) = diffv(i,J,k) + ZB2020v(i,J,k)
-  enddo ; enddo ; enddo
+    do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      diffv(i,J,k) = diffv(i,J,k) + ZB2020v(i,J,k)
+    enddo ; enddo ; enddo
   call cpu_clock_end(CS%id_clock_upd)
 
   call cpu_clock_begin(CS%id_clock_post)
-  ! Acceleration
-  if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, ZB2020u, CS%diag)
-  if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, ZB2020v, CS%diag)
+    ! Acceleration
+    if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, ZB2020u, CS%diag)
+    if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, ZB2020v, CS%diag)
 
-  ! Stress tensor
-  if (CS%id_Txx>0)     call post_data(CS%id_Txx, CS%Txx, CS%diag)
-  if (CS%id_Tyy>0)     call post_data(CS%id_Tyy, CS%Tyy, CS%diag)
-  if (CS%id_Txy>0)     call post_data(CS%id_Txy, CS%Txy, CS%diag)
+    ! Stress tensor
+    if (CS%id_Txx>0)     call post_data(CS%id_Txx, CS%Txx, CS%diag)
+    if (CS%id_Tyy>0)     call post_data(CS%id_Tyy, CS%Tyy, CS%diag)
+    if (CS%id_Txy>0)     call post_data(CS%id_Txy, CS%Txy, CS%diag)
 
-  ! Klower attenuation
-  if (CS%id_cdiss>0)     call post_data(CS%id_cdiss, CS%c_diss, CS%diag)
-
-  ! Debug fields
-  if (CS%id_sh_xx>0)   call post_data(CS%id_sh_xx, CS%sh_xx, CS%diag)
-  if (CS%id_sh_xy>0)   call post_data(CS%id_sh_xy, CS%sh_xy, CS%diag)
-  if (CS%id_vort_xy>0) call post_data(CS%id_vort_xy, CS%vort_xy, CS%diag)
-  if (CS%id_hq>0)      call post_data(CS%id_hq, CS%hq, CS%diag)
-  if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
-  if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
-  if (CS%id_v>0)       call post_data(CS%id_v, v, CS%diag)
+    ! Klower attenuation
+    if (CS%id_cdiss>0)     call post_data(CS%id_cdiss, CS%c_diss, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
 
   call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS)
