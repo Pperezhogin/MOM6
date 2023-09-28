@@ -1,4 +1,5 @@
-! > Calculates Zanna and Bolton 2020 parameterization
+!> Calculates Zanna and Bolton 2020 parameterization
+!! Implemented by Perezhogin P.A. Contact: pperezhogin@gmail.com
 module MOM_Zanna_Bolton
 
 use MOM_grid,          only : ocean_grid_type
@@ -57,9 +58,9 @@ type, public :: ZB2020_CS ; private
           hq         !< Thickness in CORNER points [H ~> m or kg m-2]
 
   real, dimension(:,:,:), allocatable :: &
-          Txx,     & !< Subgrid stress xx component in h [H L2 T-2 ~> m3 s-2 or kg s-2]
-          Tyy,     & !< Subgrid stress yy component in h [H L2 T-2 ~> m3 s-2 or kg s-2]
-          Txy        !< Subgrid stress xy component in q [H L2 T-2 ~> m3 s-2 or kg s-2]
+          Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
+          Tyy,     & !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
+          Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
 
   real, dimension(:,:), allocatable :: &
           kappa_h, & !< Scaling coefficient in h points [L2 ~> m2]
@@ -71,8 +72,8 @@ type, public :: ZB2020_CS ; private
                              !! (Klower 2018, Juricke2019,2020) [nondim]
 
   real, dimension(:,:), allocatable ::    &
-        maskw_h,  & !< Mask of land point at h points multiplied by filter weight
-        maskw_q     !< Same mask but for q points
+        maskw_h,  & !< Mask of land point at h points multiplied by filter weight [nondim]
+        maskw_q     !< Same mask but for q points [nondim]
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -108,8 +109,8 @@ end type ZB2020_CS
 
 contains
 
-!> Read parameters and register output fields
-!! used in Zanna_Bolton_2020().
+!> Read parameters, allocate and precompute arrays,
+!! register diagnosicts used in Zanna_Bolton_2020().
 subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   type(time_type),         intent(in)    :: Time       !< The current model time.
   type(ocean_grid_type),   intent(in)    :: G          !< The ocean's grid structure.
@@ -175,76 +176,11 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "Type of expression for shear in Klower formula:\n" //&
                  "\t 0: sqrt(sh_xx**2 + sh_xy**2)\n" //&
                  "\t 1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)", &
-                 default=1, do_not_log = CS%Klower_R_diss<0)
+                 default=1, do_not_log = .not. CS%Klower_R_diss>0)
 
   call get_param(param_file, mdl, "ZB_MARCHING_HALO", CS%Marching_halo, &
                  "The number of filter iterations per single MPI " //&
                  "exchange", default=4, do_not_log = CS%Stress_iter==0 .and. CS%HPF_iter==0)
-
-  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
-  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
-  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
-  allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV))); CS%hq(:,:,:) = 0.
-
-  allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV))); CS%Txx(:,:,:) = 0.
-  allocate(CS%Tyy(SZI_(G),SZJ_(G),SZK_(GV))); CS%Tyy(:,:,:) = 0.
-  allocate(CS%Txy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%Txy(:,:,:) = 0.
-  allocate(CS%kappa_h(SZI_(G),SZJ_(G))); CS%kappa_h(:,:) = 0.
-  allocate(CS%kappa_q(SZIB_(G),SZJB_(G))); CS%kappa_q(:,:) = 0.
-
-  ! The scaling coefficient is multiplied to mask
-  ! to provide boundary conditions
-  do j=js-1,je+1 ; do i=is-1,ie+1
-    CS%kappa_h(i,j) = - CS%amplitude * G%areaT(i,j) * G%mask2dT(i,j)
-  enddo; enddo
-
-  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-    CS%kappa_q(I,J) = - CS%amplitude * G%areaBu(I,J) * G%mask2dBu(I,J)
-  enddo; enddo
-
-  if (CS%Klower_R_diss > 0) then
-    allocate(CS%ICoriolis_h(SZI_(G),SZJ_(G))); CS%ICoriolis_h(:,:) = 0.
-    allocate(CS%c_diss(SZI_(G),SZJ_(G),SZK_(GV))); CS%c_diss(:,:,:) = 0.
-
-    subroundoff_Cor = 1e-30 * US%T_to_s
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      CS%ICoriolis_h(i,j) = 1. / ((abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
-                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + subroundoff_Cor) &
-                          * CS%Klower_R_diss)
-    enddo; enddo
-  endif
-
-  if (CS%Stress_iter > 0 .or. CS%HPF_iter > 0) then
-    ! 0.0625 is the filter weight
-    allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
-    allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
-  endif
-
-  if (CS%Stress_iter > 0) then
-    ! reduce size of halo exchange accrodingly to
-    ! Marching halo, number of iterations and the array size
-    ! But let exchange width be at least 1
-    CS%Stress_halo = max(min(CS%Marching_halo, CS%Stress_iter, &
-                             G%Domain%nihalo, G%Domain%njhalo), 1)
-
-    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_halo, &
-      position=CORNER)
-    call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_halo)
-    call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_halo)
-  endif
-
-  if (CS%HPF_iter > 0) then
-    ! The minimum halo size is 2 because it is requirement for the
-    ! inputs of function compute_stress
-    CS%HPF_halo = max(min(CS%Marching_halo, CS%HPF_iter, &
-                          G%Domain%nihalo, G%Domain%njhalo), 2)
-
-    call create_group_pass(CS%pass_xx, CS%sh_xx, G%Domain, halo=CS%HPF_halo)
-    call create_group_pass(CS%pass_xy, CS%sh_xy, G%Domain, halo=CS%HPF_halo, &
-      position=CORNER)
-    call create_group_pass(CS%pass_xy, CS%vort_xy, G%Domain, halo=CS%HPF_halo, &
-      position=CORNER)
-  endif
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -273,7 +209,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
-  ! parts are measured without -- because these are nested clocks.
+  ! parts are measured without - because these are nested clocks.
   CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE, sync=.true.)
   CS%id_clock_copy = cpu_clock_id('(ZB2020 copy fields)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
@@ -285,9 +221,77 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
 
+  ! Allocate memory
+  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV))); CS%sh_xx(:,:,:) = 0.
+  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%sh_xy(:,:,:) = 0.
+  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%vort_xy(:,:,:) = 0.
+  allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV))); CS%hq(:,:,:) = 0.
+
+  allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV))); CS%Txx(:,:,:) = 0.
+  allocate(CS%Tyy(SZI_(G),SZJ_(G),SZK_(GV))); CS%Tyy(:,:,:) = 0.
+  allocate(CS%Txy(SZIB_(G),SZJB_(G),SZK_(GV))); CS%Txy(:,:,:) = 0.
+  allocate(CS%kappa_h(SZI_(G),SZJ_(G))); CS%kappa_h(:,:) = 0.
+  allocate(CS%kappa_q(SZIB_(G),SZJB_(G))); CS%kappa_q(:,:) = 0.
+
+  ! Precomputing the scaling coefficient
+  ! Mask is included to automatically satisfy B.C.
+  do j=js-1,je+1 ; do i=is-1,ie+1
+    CS%kappa_h(i,j) = - CS%amplitude * G%areaT(i,j) * G%mask2dT(i,j)
+  enddo; enddo
+
+  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+    CS%kappa_q(I,J) = - CS%amplitude * G%areaBu(I,J) * G%mask2dBu(I,J)
+  enddo; enddo
+
+  if (CS%Klower_R_diss > 0) then
+    allocate(CS%ICoriolis_h(SZI_(G),SZJ_(G))); CS%ICoriolis_h(:,:) = 0.
+    allocate(CS%c_diss(SZI_(G),SZJ_(G),SZK_(GV))); CS%c_diss(:,:,:) = 0.
+
+    subroundoff_Cor = 1e-30 * US%T_to_s
+    ! Precomputing 1/(f * R_diss)
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      CS%ICoriolis_h(i,j) = 1. / ((abs(0.25 * ((G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1)) &
+                          + (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1)))) + subroundoff_Cor) &
+                          * CS%Klower_R_diss)
+    enddo; enddo
+  endif
+
+  if (CS%Stress_iter > 0 .or. CS%HPF_iter > 0) then
+    ! Include 1/16. factor to the mask for filter implementation
+    allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
+    allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
+  endif
+
+  ! Initialize MPI group passes
+  if (CS%Stress_iter > 0) then
+    ! reduce size of halo exchange accrodingly to
+    ! Marching halo, number of iterations and the array size
+    ! But let exchange width be at least 1
+    CS%Stress_halo = max(min(CS%Marching_halo, CS%Stress_iter, &
+                             G%Domain%nihalo, G%Domain%njhalo), 1)
+
+    call create_group_pass(CS%pass_Tq, CS%Txy, G%Domain, halo=CS%Stress_halo, &
+      position=CORNER)
+    call create_group_pass(CS%pass_Th, CS%Txx, G%Domain, halo=CS%Stress_halo)
+    call create_group_pass(CS%pass_Th, CS%Tyy, G%Domain, halo=CS%Stress_halo)
+  endif
+
+  if (CS%HPF_iter > 0) then
+    ! The minimum halo size is 2 because it is requirement for the
+    ! outputs of function filter_velocity_gradients
+    CS%HPF_halo = max(min(CS%Marching_halo, CS%HPF_iter, &
+                          G%Domain%nihalo, G%Domain%njhalo), 2)
+
+    call create_group_pass(CS%pass_xx, CS%sh_xx, G%Domain, halo=CS%HPF_halo)
+    call create_group_pass(CS%pass_xy, CS%sh_xy, G%Domain, halo=CS%HPF_halo, &
+      position=CORNER)
+    call create_group_pass(CS%pass_xy, CS%vort_xy, G%Domain, halo=CS%HPF_halo, &
+      position=CORNER)
+  endif
+
 end subroutine ZB_2020_init
 
-!> Deallocated any variables allocated in ZB_2020_init
+!> Deallocate any variables allocated in ZB_2020_init
 subroutine ZB_2020_end(CS)
   type(ZB2020_CS), intent(inout) :: CS  !< ZB2020 control structure.
 
@@ -314,12 +318,13 @@ subroutine ZB_2020_end(CS)
 
 end subroutine ZB_2020_end
 
-!> Save precomputed velocity gradients and thicknesses
+!> Save precomputed velocity gradients and thickness
 !! from the horizontal eddy viscosity module
-!! We save sh_xx with halo 2 (is-2:ie+2,js-2:je+2)
-!! sh_xy and vort_xy with halo 1 (Isq-1:Ieq+1,Jsq-1:Jeq+1)
-!! These are maximum halo sizes possible with halo 2
-!! used for velocities u, v in RK2 stepping routine
+!! We save as much halo for velocity gradients as possible
+!! In symmetric (preferable) memory model: halo 2 for sh_xx
+!! and halo 1 for sh_xy and vort_xy
+!! We apply zero boundary conditions to velocity gradients
+!! which is required for filtering operations
 subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
@@ -390,11 +395,11 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                                  intent(in) :: h       !< Layer thicknesses [H ~> m or kg m-2].
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                        intent(inout) :: diffu   !< Zonal acceleration due to convergence of
-                                                 !! along-coordinate stress tensor [L T-2 ~> m s-2]
+                        intent(inout) :: diffu   !< Zonal acceleration due to eddy viscosity.
+                                                 !! It is updated with ZB closure [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                        intent(inout) :: diffv   !< Meridional acceleration due to convergence
-                                                !! of along-coordinate stress tensor [L T-2 ~> m s-2]
+                        intent(inout) :: diffv   !< Meridional acceleration due to eddy viscosity.
+                                                 !! It is updated with ZB closure [L T-2 ~> m s-2]
 
   real, dimension(SZI_(G),SZJ_(G)),           &
                                  intent(in) :: dx2h, & !< dx^2 at h points [L2 ~> m2]
@@ -421,23 +426,25 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-  if (CS%Klower_R_diss > 0.) then
-    call compute_c_diss(CS%sh_xx, CS%sh_xy, CS%vort_xy, &
-                        CS%c_diss, G, GV, CS)
-  endif
+  ! Compute attenuation if specified
+  call compute_c_diss(G, GV, CS)
 
+  ! Sharpen velocity gradients if specified
   call filter_velocity_gradients(G, GV, CS)
 
-  call compute_stress(CS%sh_xx, CS%sh_xy, CS%vort_xy,   &
-                      CS%Txx, CS%Tyy, CS%Txy,           &
-                      G, GV, CS)
+  ! Compute the stress tensor given the
+  ! (optionally sharpened) velocity gradients
+  call compute_stress(G, GV, CS)
 
+  ! Smooth the stress tensor if specified
   call filter_stress(G, GV, CS)
 
-  call compute_stress_divergence(CS%Txx, CS%Tyy, CS%Txy, h, &
-                                 ZB2020u, ZB2020v, G, GV, CS, &
-                                 dx2h, dy2h, dx2q, dy2q)
+  ! Compute acceleration from a given stress tensor
+  call compute_stress_divergence(h, ZB2020u, ZB2020v,    &
+                                 dx2h, dy2h, dx2q, dy2q, &
+                                 G, GV, CS)
 
+  ! Update the eddy viscosity acceleration with ZB model
   call cpu_clock_begin(CS%id_clock_upd)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       diffu(I,j,k) = diffu(I,j,k) + ZB2020u(I,j,k)
@@ -449,16 +456,13 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
   call cpu_clock_end(CS%id_clock_upd)
 
   call cpu_clock_begin(CS%id_clock_post)
-    ! Acceleration
     if (CS%id_ZB2020u>0)   call post_data(CS%id_ZB2020u, ZB2020u, CS%diag)
     if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, ZB2020v, CS%diag)
 
-    ! Stress tensor
     if (CS%id_Txx>0)     call post_data(CS%id_Txx, CS%Txx, CS%diag)
     if (CS%id_Tyy>0)     call post_data(CS%id_Tyy, CS%Tyy, CS%diag)
     if (CS%id_Txy>0)     call post_data(CS%id_Txy, CS%Txy, CS%diag)
 
-    ! Klower attenuation
     if (CS%id_cdiss>0)     call post_data(CS%id_cdiss, CS%c_diss, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
 
@@ -469,36 +473,22 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
 end subroutine Zanna_Bolton_2020
 
 !> Compute the attenuation parameter similarly
-!! in h points as in Klower2018, Juricke2019,2020:
-!! c_diss = 1/(1+(shear/(abs(f)*R_diss)))
-!! where shear = sqrt(sh_xx**2 + sh_xy**2)
-!! or shear = sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
-!! The arrays sh_xx, sh_xy, vort_xy should have halo 1, i.e.
-!! (is-1:ie+1,js-1:je+1) and (Isq-1:Ieq+1,Jsq-1:Jeq+1)
-!! B.C. is required for sh_xy and vort_xy (for interpolation)
-!! B.C. for sh_xx is not needed
-subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
-  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
-  type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
-  type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
-
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   &
-        intent(in) :: sh_xx     !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
-                                !! points including metric terms [T-1 ~> s-1]
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), &
-        intent(in) :: sh_xy, &  !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
-                                !! points including metric terms [T-1 ~> s-1]
-                      vort_xy   !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
-                                !! points including metric terms [T-1 ~> s-1]
-
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   &
-        intent(inout) :: c_diss !< Attenuation parameter in h points
-                                !! (Klower 2018, Juricke2019,2020) [nondim]
+!! to Klower2018, Juricke2019,2020: c_diss = 1/(1+(shear/(f*R_diss)))
+!! where shear = sqrt(sh_xx**2 + sh_xy**2) or shear = sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+!! In symmetric memory model, components of velocity gradient tensor
+!! should have halo 1 and zero boundary conditions. The result: c_diss having halo 1.
+subroutine compute_c_diss(G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
 
-  real :: shear ! Shear in Klower2018 formula at h points [L-1 ~> s-1]
+  real :: shear !< Shear in Klower2018 formula at h points [T-1 ~> s-1]
+
+  if (.not. CS%Klower_R_diss > 0) &
+    return
 
   call cpu_clock_begin(CS%id_clock_cdiss)
 
@@ -509,21 +499,21 @@ subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
     do j=js-1,je+1 ; do i=is-1,ie+1
       ! sqrt(sh_xx**2 + sh_xy**2)
       if (CS%Klower_shear == 0) then
-        shear = sqrt(sh_xx(i,j,k)**2 + 0.25 * (          &
-          (sh_xy(I-1,J-1,k)**2 + sh_xy(I,J  ,k)**2)      &
-        + (sh_xy(I-1,J  ,k)**2 + sh_xy(I,J-1,k)**2)      &
+        shear = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (          &
+          (CS%sh_xy(I-1,J-1,k)**2 + CS%sh_xy(I,J  ,k)**2)   &
+        + (CS%sh_xy(I-1,J  ,k)**2 + CS%sh_xy(I,J-1,k)**2)   &
         ))
       ! sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
       elseif (CS%Klower_shear == 1) then
-        shear = sqrt(sh_xx(i,j,k)**2 + 0.25 * (          &
-          ((sh_xy(I-1,J-1,k)**2+vort_xy(I-1,J-1,k)**2)   &
-         + (sh_xy(I,J,k)**2+vort_xy(I,J,k)**2))          &
-        + ((sh_xy(I-1,J,k)**2+vort_xy(I-1,J,k)**2)       &
-         + (sh_xy(I,J-1,k)**2+vort_xy(I,J-1,k)**2))      &
+        shear = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (             &
+          ((CS%sh_xy(I-1,J-1,k)**2 + CS%vort_xy(I-1,J-1,k)**2) &
+        +  (CS%sh_xy(I,J,k)**2     + CS%vort_xy(I,J,k)**2))    &
+        + ((CS%sh_xy(I-1,J,k)**2   + CS%vort_xy(I-1,J,k)**2)   &
+        +  (CS%sh_xy(I,J-1,k)**2   + CS%vort_xy(I,J-1,k)**2))  &
         ))
       endif
 
-      c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
+      CS%c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
 
     enddo; enddo
 
@@ -533,7 +523,7 @@ subroutine compute_c_diss(sh_xx, sh_xy, vort_xy, c_diss, G, GV, CS)
 
 end subroutine compute_c_diss
 
-!> Compute stress tensor T
+!> Compute stress tensor T =
 !! (Txx, Txy;
 !!  Txy, Tyy)
 !! Which consists of the deviatoric and trace components, respectively:
@@ -541,54 +531,27 @@ end subroutine compute_c_diss
 !!         vort_xy * sh_xx,  vort_xy * sh_xy) +
 !! 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2, 0;
 !!        0, vort_xy^2 + sh_xy^2 + sh_xx^2)
-!! Trace is multiplied by kappa=-ampiltude * grid_cell_area:
+!! This stress tensor is multiplied by precomputed kappa=-CS%amplitude * G%area:
 !! T -> T * kappa
-!! Update of the governing equations:
+!! The sign of the stress tensor is such that (neglecting h):
 !! (du/dt, dv/dt) = div(T)
-!! The input arrays vort_xy and sh_xy should have zero boundary
-!! condtions.
-!! B.C. for sh_xx is not required
-!! Arrays vort_xy and sh_xy should have 1 halo,
-!! i.e. (Isq-1:Ieq+1, Jsq-1:Jeq+1).
-!! Arrays sh_xx also should have 1 halo,
-!! i.e. (is-1:ie+1, js-1:je+1)
-!! If conditions are satisfied, the output arrays Txx, Tyy
-!! will have halo 1 (is-1:is+1, js-1:js+1) and Txy
-!! will have halo 0 (Isq:Ieq, Jsq:Jeq), while
-!! Txy will have applied B.C.
-!! B.C. for Txx, Tyy is not applied.
-!! B.C. for Txx, Tyy is not needed for ZB2020,
-!! but may be needed for filtering.
-subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
-  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
-  type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
-  type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
-
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   &
-        intent(in) :: sh_xx     !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
-                                !! points including metric terms [T-1 ~> s-1]
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), &
-        intent(in) :: sh_xy, &  !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
-                                !! points including metric terms [T-1 ~> s-1]
-                      vort_xy   !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
-                                !! points including metric terms [T-1 ~> s-1]
-
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),     &
-        intent(inout) :: Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
-                         Tyy        !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
-
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
-        intent(inout) :: Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
+!! In symmetric memory model: sh_xy and vort_xy should have halo 1
+!! and zero B.C.; sh_xx should have halo 2 and zero B.C.
+!! Result: Txx, Tyy, Txy with halo 1 and zero B.C.
+subroutine compute_stress(G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
 
   real :: &
-    vort_xy_h, &  ! Vorticity interpolated to the h point [T-1 ~> s-1]
-    sh_xy_h       ! Shearing strain interpolated to the h point [T-1 ~> s-1]
+    vort_xy_h, &  !< Vorticity interpolated to h point [T-1 ~> s-1]
+    sh_xy_h       !< Shearing strain interpolated to h point [T-1 ~> s-1]
 
   real :: &
-    sh_xx_q       ! Horizontal tension interpolated to the q point [T-1 ~> s-1]
+    sh_xx_q       !< Horizontal tension interpolated to q point [T-1 ~> s-1]
 
-  real :: sum_sq       ! 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) [T-2 ~> s-2]
-  real :: vort_sh      ! vort_xy*sh_xy [T-2 ~> s-2]
+  real :: sum_sq  !< 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) in h point [T-2 ~> s-2]
+  real :: vort_sh !< vort_xy*sh_xy in h point [T-2 ~> s-2]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
@@ -606,17 +569,17 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
     ! compute Txx, Tyy tensor
     do j=js-1,je+1 ; do i=is-1,ie+1
       ! It is assumed that B.C. is applied to sh_xy and vort_xy
-      sh_xy_h = 0.25 * ( (sh_xy(I-1,J-1,k) + sh_xy(I,J,k)) &
-                       + (sh_xy(I-1,J,k) + sh_xy(I,J-1,k)) )
+      sh_xy_h = 0.25 * ( (CS%sh_xy(I-1,J-1,k) + CS%sh_xy(I,J,k)) &
+                       + (CS%sh_xy(I-1,J,k) + CS%sh_xy(I,J-1,k)) )
 
-      vort_xy_h = 0.25 * ( (vort_xy(I-1,J-1,k) + vort_xy(I,J,k)) &
-                         + (vort_xy(I-1,J,k) + vort_xy(I,J-1,k)) )
+      vort_xy_h = 0.25 * ( (CS%vort_xy(I-1,J-1,k) + CS%vort_xy(I,J,k)) &
+                         + (CS%vort_xy(I-1,J,k) + CS%vort_xy(I,J-1,k)) )
 
       if (CS%ZB_type .NE. 1) then
-        sum_sq = 0.5 *                    &
-          (vort_xy_h * vort_xy_h          &
-           + sh_xy_h * sh_xy_h            &
-           + sh_xx(i,j,k) * sh_xx(i,j,k)  &
+        sum_sq = 0.5 *                          &
+          (  vort_xy_h * vort_xy_h              &
+           + sh_xy_h * sh_xy_h                  &
+           + CS%sh_xx(i,j,k) * CS%sh_xx(i,j,k)  &
             )
       endif
 
@@ -625,28 +588,28 @@ subroutine compute_stress(sh_xx, sh_xy, vort_xy, Txx, Tyy, Txy, G, GV, CS)
           vort_sh = vort_xy_h * sh_xy_h
         else if (CS%ZB_cons == 1) then
           ! It is assumed that B.C. is applied to sh_xy and vort_xy
-          vort_sh = 0.25 * (                                                  &
-                (G%areaBu(I-1,J-1) * vort_xy(I-1,J-1,k) * sh_xy(I-1,J-1,k)  + &
-                 G%areaBu(I  ,J  ) * vort_xy(I  ,J  ,k) * sh_xy(I  ,J  ,k)) + &
-                (G%areaBu(I-1,J  ) * vort_xy(I-1,J  ,k) * sh_xy(I-1,J  ,k)  + &
-                 G%areaBu(I  ,J-1) * vort_xy(I  ,J-1,k) * sh_xy(I  ,J-1,k))   &
+          vort_sh = 0.25 * (                                                        &
+                (G%areaBu(I-1,J-1) * CS%vort_xy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)  + &
+                 G%areaBu(I  ,J  ) * CS%vort_xy(I  ,J  ,k) * CS%sh_xy(I  ,J  ,k)) + &
+                (G%areaBu(I-1,J  ) * CS%vort_xy(I-1,J  ,k) * CS%sh_xy(I-1,J  ,k)  + &
+                 G%areaBu(I  ,J-1) * CS%vort_xy(I  ,J-1,k) * CS%sh_xy(I  ,J-1,k))   &
                 ) * G%IareaT(i,j)
         endif
       endif
 
-      Txx(i,j,k) = CS%kappa_h(i,j) * (- vort_sh + sum_sq)
-      Tyy(i,j,k) = CS%kappa_h(i,j) * (+ vort_sh + sum_sq)
+      ! B.C. is already applied in kappa_h
+      CS%Txx(i,j,k) = CS%kappa_h(i,j) * (- vort_sh + sum_sq)
+      CS%Tyy(i,j,k) = CS%kappa_h(i,j) * (+ vort_sh + sum_sq)
 
     enddo ; enddo
 
     ! Here we assume that Txy is initialized to zero
     if (CS%ZB_type .NE. 2) then
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-        sh_xx_q = 0.25 * ( (sh_xx(i+1,j+1,k) + sh_xx(i,j,k)) &
-                         + (sh_xx(i+1,j,k) + sh_xx(i,j+1,k)))
-        ! We assume that vort_xy has zero B.C.. So,
-        ! no additional masking is required
-        Txy(I,J,k) = CS%kappa_q(I,J) * (vort_xy(I,J,k) * sh_xx_q)
+        sh_xx_q = 0.25 * ( (CS%sh_xx(i+1,j+1,k) + CS%sh_xx(i,j,k)) &
+                         + (CS%sh_xx(i+1,j,k) + CS%sh_xx(i,j+1,k)))
+        ! B.C. is already applied in kappa_q
+        CS%Txy(I,J,k) = CS%kappa_q(I,J) * (CS%vort_xy(I,J,k) * sh_xx_q)
 
       enddo ; enddo
     endif
@@ -660,27 +623,14 @@ end subroutine compute_stress
 !> Compute the divergence of subgrid stress
 !! weghted with thickness, i.e.
 !! (fx,fy) = 1/h Div(h * [Txx, Txy; Txy, Tyy])
-!! Optionally, before the divergence, we attenuate the stress
-!! according to the Klower formula
-!! Txx, Tyy, c_diss should have halo 1 (is-1:is+1, js-1:js+1)
-!! Txy should be in q points with halo 0 (Isq:Ieq, Jsq:Jeq)
-!! B.C. for Txy is required, while for
-!! Txx, Tyy, c_diss is not required
-subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
-                                     dx2h, dy2h, dx2q, dy2q)
+!! Optionally, before computing the divergence, we attenuate the stress
+!! according to the Klower formula.
+!! In symmetric memory model: Txx, Tyy, Txy, c_diss should have halo 1
+!! with applied zero B.C.
+subroutine compute_stress_divergence(h, fx, fy, dx2h, dy2h, dx2q, dy2q, G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
-
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),     &
-        intent(inout) :: Txx,     & !< Subgrid stress xx component in h;
-                                    !! Input:[L2 T-2 ~> m2 s-2], Output:
-                                    !!       [H L2 T-2 ~> m3 s-2 or kg s-2]
-                                    !! And same for tensors Tyy, Txy below
-                         Tyy        !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
-
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)),   &
-        intent(inout) :: Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
         intent(in) :: h             !< Layer thicknesses [H ~> m or kg m-2].
@@ -701,11 +651,11 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                       dy2q          !< dy^2 at q points [L2 ~> m2]
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
-        Mxx, & !< Subgrid stress xx component in h
-        Myy    !< Subgrid stress yy component in h
+        Mxx, & !< Subgrid stress Txx multiplied by thickness and dy^2 [H L4 T-2 ~> m5 s-2]
+        Myy    !< Subgrid stress Tyy multiplied by thickness and dx^2 [H L4 T-2 ~> m5 s-2]
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
-        Mxy    !< Subgrid stress xy component in q
+        Mxy    !< Subgrid stress Txy multiplied by thickness [H L2 T-2 ~> m3 s-2]
 
   real :: h_u !< Thickness interpolated to u points [H ~> m or kg m-2].
   real :: h_v !< Thickness interpolated to v points [H ~> m or kg m-2].
@@ -714,34 +664,34 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
                        ! roundoff and so neglected [H ~> m or kg m-2]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: i, j, k, n
+  integer :: i, j, k
 
   call cpu_clock_begin(CS%id_clock_divergence)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-  h_neglect  = GV%H_subroundoff ! Line 410 on MOM_hor_visc.F90
+  h_neglect  = GV%H_subroundoff
 
   do k=1,nz
     do J=js-1,Jeq ; do I=is-1,Ieq
-      if (CS%Klower_R_diss > 0.) then
-        Mxy(I,J) = (Txy(I,J,k) * &
-                    0.25 * ((CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
-                          + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
-                    * (CS%hq(I,J,k))
+      if (CS%Klower_R_diss > 0) then
+        Mxy(I,J) = (CS%Txy(I,J,k) * &
+                    0.25 * ( (CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
+                           + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
+                    * CS%hq(I,J,k)
       else
-        Mxy(I,J) = Txy(I,J,k) * (CS%hq(I,J,k))
+        Mxy(I,J) = CS%Txy(I,J,k) * CS%hq(I,J,k)
       endif
     enddo ; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
-      if (CS%Klower_R_diss > 0.) then
-        Mxx(i,j) = ((Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
-        Myy(i,j) = ((Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+      if (CS%Klower_R_diss > 0) then
+        Mxx(i,j) = ((CS%Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+        Myy(i,j) = ((CS%Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
       else
-        Mxx(i,j) = ((Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
-        Myy(i,j) = ((Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+        Mxx(i,j) = ((CS%Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+        Myy(i,j) = ((CS%Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
       endif
     enddo ; enddo
 
@@ -773,20 +723,26 @@ subroutine compute_stress_divergence(Txx, Tyy, Txy, h, fx, fy, G, GV, CS, &
 
 end subroutine compute_stress_divergence
 
-!> Filtering of the velocity gradients (VG)
+!> Filtering of the velocity gradients sh_xx, sh_xy, vort_xy.
+!! Here instead of smoothing we do sharpening, i.e.
+!! return (initial - smoothed) fields.
+!! The algorithm: marching halo with non-blocking grouped MPI
+!! exchanges. The input array sh_xx should have halo 2 with
+!! applied zero B.C. The arrays sh_xy and vort_xy should have
+!! halo 1 with applied B.C. The output have the same halo and B.C.
 subroutine filter_velocity_gradients(G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
 
   real, dimension(SZI_(G), SZJ_(G), SZK_(GV)) :: &
-        sh_xx          !< Copy of CS%sh_xx
+        sh_xx          !< Copy of CS%sh_xx [T-1 ~> s-1]
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
-        sh_xy, vort_xy !< Copy of CS%sh_xy and CS%vort_xy
+        sh_xy, vort_xy !< Copy of CS%sh_xy and CS%vort_xy [T-1 ~> s-1]
 
-  integer :: xx_halo, xy_halo, vort_halo ! currently available halo
-  integer :: xx_iter, xy_iter, vort_iter ! remaining number of iterations
-  integer :: niter                       ! required number of iterations
+  integer :: xx_halo, xy_halo, vort_halo !< currently available halo for gradient components
+  integer :: xx_iter, xy_iter, vort_iter !< remaining number of iterations
+  integer :: niter                       !< required number of iterations
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
@@ -869,17 +825,18 @@ subroutine filter_velocity_gradients(G, GV, CS)
 
 end subroutine filter_velocity_gradients
 
-!> Filtering of the stress tensor
-!! with overlapping computations and exchanges
-!! and flexible marching halo
+!> Filtering of the stress tensor Txx, Tyy, Txy.
+!! The algorithm: marching halo with non-blocking grouped MPI
+!! exchanges. The input arrays (Txx, Tyy, Txy) must have halo 1
+!! with zero B.C. applied. The output have the same halo and B.C.
 subroutine filter_stress(G, GV, CS)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
 
-  integer :: Txx_halo, Tyy_halo, Txy_halo ! currently available halo
-  integer :: Txx_iter, Tyy_iter, Txy_iter ! remaining number of iterations
-  integer :: niter                        ! required number of iterations
+  integer :: Txx_halo, Tyy_halo, Txy_halo !< currently available halo for stress components
+  integer :: Txx_iter, Tyy_iter, Txy_iter !< remaining number of iterations
+  integer :: niter                        !< required number of iterations
 
   niter = CS%Stress_iter
 
@@ -919,18 +876,21 @@ subroutine filter_stress(G, GV, CS)
 
 end subroutine filter_stress
 
+!> Wrapper for filter_3D function. The border indices for q and h
+!! arrays are substituted.
 subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional,   &
-           intent(inout) :: h !< Input/output array in h points [dim arbitrary]
+           intent(inout) :: h !< Input/output array in h points [arbitrary]
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), optional, &
-           intent(inout) :: q !< Input/output array in q points [dim arbitrary
-  integer, intent(inout) :: current_halo, remaining_iterations
+           intent(inout) :: q !< Input/output array in q points [arbitrary]
+  integer, intent(inout) :: current_halo, &      !< Currently available halo points
+                            remaining_iterations !< The number of iterations to perform
 
-  logical :: direction
+  logical :: direction !< The direction of the first 1D filter
 
   direction = (MOD(G%first_direction,2) == 0)
 
@@ -955,27 +915,40 @@ subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
   call cpu_clock_end(CS%id_clock_filter)
 end subroutine filter_hq
 
+!> Spatial lateral filter applied to 3D array. The lateral filter is given
+!! by the convolutional kernel:
+!!     [1 2 1]
+!! C = |2 4 2| * 1/16
+!!     [1 2 1]
+!! The fast algorithm decomposes the 2D filter into two 1D filters as follows:
+!!     [1]
+!! C = |2| * [1 2 1] * 1/16
+!!     [1]
+!! The input array must have zero B.C. applied. B.C. is applied for output array.
+!! Note that maskw contains both land mask and 1/16 factor.
+!! Filter implements marching halo. The available halo is specified and as many
+!! filter iterations as possible and as needed are performed.
 subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, &
                      current_halo, remaining_iterations,               &
                      direction)
   real, dimension(isd:ied,jsd:jed,nz), &
-        intent(inout) :: x            !< Input/output array [dim arbitrary]
+        intent(inout) :: x             !< Input/output array [arbitrary]
   real, dimension(isd:ied,jsd:jed), &
-        intent(in)    :: maskw         !< Mask array of land points divded by 16 [nondim]
+        intent(in)    :: maskw         !< Mask array of land points divided by 16 [nondim]
   integer, intent(in) :: &
                          isd, ied,  & !< Indices of array size
                          jsd, jed,  & !< Indices of array size
                          is,  ie,   & !< Indices of owned points
-                         js,  je,   &   !< Indices of owned points
+                         js,  je,   & !< Indices of owned points
                          nz
-  integer, intent(inout) :: current_halo, remaining_iterations
-  logical, intent(in)    :: direction
+  integer, intent(inout) :: current_halo, &      !< Currently available halo points
+                            remaining_iterations !< The number of iterations to perform
+  logical, intent(in)    :: direction            !< The direction of the first 1D filter
 
-  real, parameter :: two = 2.
-
+  real, parameter :: two = 2. !< Filter weight [nondim]
   integer :: i, j, k, iter, niter, halo
 
-  real :: tmp(isd:ied, jsd:jed)
+  real :: tmp(isd:ied, jsd:jed) !< Array with temporary results [arbitrary]
 
   ! Do as many iterations as needed and possible
   niter = min(current_halo, remaining_iterations)
