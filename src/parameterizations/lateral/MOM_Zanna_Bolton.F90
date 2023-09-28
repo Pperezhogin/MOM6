@@ -676,10 +676,11 @@ subroutine compute_stress_divergence(h, fx, fy, dx2h, dy2h, dx2q, dy2q, G, GV, C
   do k=1,nz
     do J=js-1,Jeq ; do I=is-1,Ieq
       if (CS%Klower_R_diss > 0) then
-        Mxy(I,J) = (CS%Txy(I,J,k) * &
-                    0.25 * ( (CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
-                           + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))) &
-                    * CS%hq(I,J,k)
+        Mxy(I,J) = (CS%Txy(I,J,k) *                                         &
+                    (0.25 * ( (CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
+                            + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))  &
+                    )                                                       &
+                   ) * CS%hq(I,J,k)
       else
         Mxy(I,J) = CS%Txy(I,J,k) * CS%hq(I,J,k)
       endif
