@@ -577,8 +577,8 @@ subroutine compute_stress(G, GV, CS)
 
       if (CS%ZB_type .NE. 1) then
         sum_sq = 0.5 *                          &
-          (  vort_xy_h * vort_xy_h              &
-           + sh_xy_h * sh_xy_h                  &
+          ((vort_xy_h * vort_xy_h               &
+           + sh_xy_h * sh_xy_h)                 &
            + CS%sh_xx(i,j,k) * CS%sh_xx(i,j,k)  &
             )
       endif
@@ -588,11 +588,11 @@ subroutine compute_stress(G, GV, CS)
           vort_sh = vort_xy_h * sh_xy_h
         else if (CS%ZB_cons == 1) then
           ! It is assumed that B.C. is applied to sh_xy and vort_xy
-          vort_sh = 0.25 * (                                                        &
-                (G%areaBu(I-1,J-1) * CS%vort_xy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)  + &
-                 G%areaBu(I  ,J  ) * CS%vort_xy(I  ,J  ,k) * CS%sh_xy(I  ,J  ,k)) + &
-                (G%areaBu(I-1,J  ) * CS%vort_xy(I-1,J  ,k) * CS%sh_xy(I-1,J  ,k)  + &
-                 G%areaBu(I  ,J-1) * CS%vort_xy(I  ,J-1,k) * CS%sh_xy(I  ,J-1,k))   &
+          vort_sh = 0.25 * (                                                          &
+                ((G%areaBu(I-1,J-1) * CS%vort_xy(I-1,J-1,k)) * CS%sh_xy(I-1,J-1,k)  + &
+                 (G%areaBu(I  ,J  ) * CS%vort_xy(I  ,J  ,k)) * CS%sh_xy(I  ,J  ,k)) + &
+                ((G%areaBu(I-1,J  ) * CS%vort_xy(I-1,J  ,k)) * CS%sh_xy(I-1,J  ,k)  + &
+                 (G%areaBu(I  ,J-1) * CS%vort_xy(I  ,J-1,k)) * CS%sh_xy(I  ,J-1,k))   &
                 ) * G%IareaT(i,j)
         endif
       endif
