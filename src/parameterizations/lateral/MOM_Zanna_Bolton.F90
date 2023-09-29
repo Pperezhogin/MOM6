@@ -1032,45 +1032,45 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
-  call cpu_clock_begin(CS%id_clock_source)
-
-  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-
   if (CS%id_KE_ZB2020 > 0) then
-    call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
+    call cpu_clock_begin(CS%id_clock_source)
+      call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
 
-    KE_term(:,:,:) = 0.
-    !tmp(:,:,:) = 0.
-    ! Calculate the KE source from Zanna-Bolton2020 [H L2 T-3 ~> m3 s-3].
-    do k=1,nz
-      KE_u(:,:) = 0.
-      KE_v(:,:) = 0.
-      do j=js,je ; do I=Isq,Ieq
-        uh = u(I,j,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) * &
-          G%dyCu(I,j)
-        KE_u(I,j) = uh * G%dxCu(I,j) * fx(I,j,k)
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
-        vh = v(i,J,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) * &
-          G%dxCv(i,J)
-        KE_v(i,J) = vh * G%dyCv(i,J) * fy(i,J,k)
-      enddo ; enddo
-      call do_group_pass(pass_KE_uv, G%domain)
-      do j=js,je ; do i=is,ie
-        KE_term(i,j,k) = 0.5 * G%IareaT(i,j) &
-            * (KE_u(I,j) + KE_u(I-1,j) + KE_v(i,J) + KE_v(i,J-1))
-        ! copy-paste from MOM_spatial_means.F90, line 42
-        !tmp(i,j,k) = KE_term(i,j,k) * G%areaT(i,j) * G%mask2dT(i,j)
-      enddo ; enddo
-    enddo
+      is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+      Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-    !global_integral = reproducing_sum(tmp)
+      KE_term(:,:,:) = 0.
+      !tmp(:,:,:) = 0.
+      ! Calculate the KE source from Zanna-Bolton2020 [H L2 T-3 ~> m3 s-3].
+      do k=1,nz
+        KE_u(:,:) = 0.
+        KE_v(:,:) = 0.
+        do j=js,je ; do I=Isq,Ieq
+          uh = u(I,j,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) * &
+            G%dyCu(I,j)
+          KE_u(I,j) = uh * G%dxCu(I,j) * fx(I,j,k)
+        enddo ; enddo
+        do J=Jsq,Jeq ; do i=is,ie
+          vh = v(i,J,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) * &
+            G%dxCv(i,J)
+          KE_v(i,J) = vh * G%dyCv(i,J) * fy(i,J,k)
+        enddo ; enddo
+        call do_group_pass(pass_KE_uv, G%domain)
+        do j=js,je ; do i=is,ie
+          KE_term(i,j,k) = 0.5 * G%IareaT(i,j) &
+              * (KE_u(I,j) + KE_u(I-1,j) + KE_v(i,J) + KE_v(i,J-1))
+          ! copy-paste from MOM_spatial_means.F90, line 42
+          !tmp(i,j,k) = KE_term(i,j,k) * G%areaT(i,j) * G%mask2dT(i,j)
+        enddo ; enddo
+      enddo
 
-    call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
+      !global_integral = reproducing_sum(tmp)
+    call cpu_clock_end(CS%id_clock_source)
+
+    call cpu_clock_begin(CS%id_clock_post)
+      call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
+    call cpu_clock_end(CS%id_clock_post)
   endif
-
-  call cpu_clock_end(CS%id_clock_source)
 
 end subroutine compute_energy_source
 
