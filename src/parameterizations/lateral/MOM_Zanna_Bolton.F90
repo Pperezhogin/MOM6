@@ -311,7 +311,7 @@ subroutine ZB_2020_end(CS)
     deallocate(CS%c_diss)
   endif
 
-  if (CS%Stress_iter > 0 .or. CS%HPF_iter) then
+  if (CS%Stress_iter > 0 .or. CS%HPF_iter > 0) then
     deallocate(CS%maskw_h)
     deallocate(CS%maskw_q)
   endif
