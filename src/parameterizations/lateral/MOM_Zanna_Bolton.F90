@@ -622,7 +622,7 @@ end subroutine compute_stress
 
 !> Compute the divergence of subgrid stress
 !! weghted with thickness, i.e.
-!! (fx,fy) = 1/h Div(h * [Txx, Txy; Txy, Tyy])
+!! (fx,fy) = 1/h Div(h * [Txx, Txy; Txy, Tyy]).
 !! Optionally, before computing the divergence, we attenuate the stress
 !! according to the Klower formula.
 !! In symmetric memory model: Txx, Tyy, Txy, c_diss should have halo 1
@@ -631,34 +631,31 @@ subroutine compute_stress_divergence(h, fx, fy, dx2h, dy2h, dx2q, dy2q, G, GV, C
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(in) :: CS   !< ZB2020 control structure.
-
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
         intent(in) :: h             !< Layer thicknesses [H ~> m or kg m-2].
-
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
         intent(out) :: fx           !< Zonal acceleration due to convergence of
                                     !! along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
         intent(out) :: fy           !< Meridional acceleration due to convergence
                                     !! of along-coordinate stress tensor [L T-2 ~> m s-2]
-
   real, dimension(SZI_(G),SZJ_(G)),           &
         intent(in) :: dx2h, &       !< dx^2 at h points [L2 ~> m2]
                       dy2h          !< dy^2 at h points [L2 ~> m2]
-
   real, dimension(SZIB_(G),SZJB_(G)),           &
         intent(in) :: dx2q, &       !< dx^2 at q points [L2 ~> m2]
                       dy2q          !< dy^2 at q points [L2 ~> m2]
 
+  ! Local variables
   real, dimension(SZI_(G),SZJ_(G)) :: &
-        Mxx, & !< Subgrid stress Txx multiplied by thickness and dy^2 [H L4 T-2 ~> m5 s-2]
-        Myy    !< Subgrid stress Tyy multiplied by thickness and dx^2 [H L4 T-2 ~> m5 s-2]
+        Mxx, & ! Subgrid stress Txx multiplied by thickness and dy^2 [H L4 T-2 ~> m5 s-2]
+        Myy    ! Subgrid stress Tyy multiplied by thickness and dx^2 [H L4 T-2 ~> m5 s-2]
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
-        Mxy    !< Subgrid stress Txy multiplied by thickness [H L2 T-2 ~> m3 s-2]
+        Mxy    ! Subgrid stress Txy multiplied by thickness [H L2 T-2 ~> m3 s-2]
 
-  real :: h_u !< Thickness interpolated to u points [H ~> m or kg m-2].
-  real :: h_v !< Thickness interpolated to v points [H ~> m or kg m-2].
+  real :: h_u ! Thickness interpolated to u points [H ~> m or kg m-2].
+  real :: h_v ! Thickness interpolated to v points [H ~> m or kg m-2].
 
   real :: h_neglect    ! Thickness so small it can be lost in
                        ! roundoff and so neglected [H ~> m or kg m-2]
