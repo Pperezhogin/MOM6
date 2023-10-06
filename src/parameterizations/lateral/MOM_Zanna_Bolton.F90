@@ -121,8 +121,8 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   type(ZB2020_CS),         intent(inout) :: CS         !< ZB2020 control structure.
   logical,                 intent(out)   :: use_ZB2020 !< If true, turns on ZB scheme.
 
-  real :: subroundoff_Cor     !> A negligible parameter which avoids division by zero
-                              !! but small compared to Coriolis parameter [T-1 ~> s-1]
+  real :: subroundoff_Cor     ! A negligible parameter which avoids division by zero
+                              ! but small compared to Coriolis parameter [T-1 ~> s-1]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
@@ -332,11 +332,13 @@ subroutine ZB_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   type(ZB2020_CS),               intent(inout) :: CS     !< ZB2020 control structure.
 
   real, dimension(SZIB_(G),SZJB_(G)), &
-    intent(in) :: sh_xy,   &  !< horizontal shearing strain (du/dy + dv/dx)
+    intent(in) :: sh_xy       !< horizontal shearing strain (du/dy + dv/dx)
                               !! including metric terms [T-1 ~> s-1]
-                  vort_xy, &  !< Vertical vorticity (dv/dx - du/dy)
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(in) :: vort_xy     !< Vertical vorticity (dv/dx - du/dy)
                               !! including metric terms [T-1 ~> s-1]
-                  hq          !< harmonic mean of the harmonic means
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(in) :: hq          !< harmonic mean of the harmonic means
                               !! of the u- & v point thicknesses [H ~> m or kg m-2]
 
   real, dimension(SZI_(G),SZJ_(G)), &
@@ -383,16 +385,16 @@ end subroutine ZB_copy_gradient_and_thickness
 !! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
 subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                              dx2h, dy2h, dx2q, dy2q)
-  type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
-  type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
-  type(ZB2020_CS),               intent(inout) :: CS     !< ZB2020 control structure.
+  type(ocean_grid_type),         intent(in)    :: G  !< The ocean's grid structure.
+  type(verticalGrid_type),       intent(in)    :: GV !< The ocean's vertical grid structure.
+  type(ZB2020_CS),               intent(inout) :: CS !< ZB2020 control structure.
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(in)    :: u    !< The zonal velocity [L T-1 ~> m s-1].
+                                 intent(in)    :: u  !< The zonal velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(in)    :: v    !< The meridional velocity [L T-1 ~> m s-1].
+                                 intent(in)    :: v  !< The meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
-                                 intent(in) :: h       !< Layer thicknesses [H ~> m or kg m-2].
+                                 intent(in)    :: h  !< Layer thicknesses [H ~> m or kg m-2].
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
                         intent(inout) :: diffu   !< Zonal acceleration due to eddy viscosity.
@@ -401,13 +403,11 @@ subroutine Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS, &
                         intent(inout) :: diffv   !< Meridional acceleration due to eddy viscosity.
                                                  !! It is updated with ZB closure [L T-2 ~> m s-2]
 
-  real, dimension(SZI_(G),SZJ_(G)),           &
-                                 intent(in) :: dx2h, & !< dx^2 at h points [L2 ~> m2]
-                                               dy2h    !< dy^2 at h points [L2 ~> m2]
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: dx2h    !< dx^2 at h points [L2 ~> m2]
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: dy2h    !< dy^2 at h points [L2 ~> m2]
 
-  real, dimension(SZIB_(G),SZJB_(G)),           &
-                                 intent(in) :: dx2q, & !< dx^2 at q points [L2 ~> m2]
-                                               dy2q    !< dy^2 at q points [L2 ~> m2]
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: dx2q    !< dx^2 at q points [L2 ~> m2]
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: dy2q    !< dy^2 at q points [L2 ~> m2]
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
     ZB2020u           !< Zonal acceleration due to convergence of
@@ -640,11 +640,13 @@ subroutine compute_stress_divergence(h, fx, fy, dx2h, dy2h, dx2q, dy2q, G, GV, C
         intent(out) :: fy           !< Meridional acceleration due to convergence
                                     !! of along-coordinate stress tensor [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJ_(G)),           &
-        intent(in) :: dx2h, &       !< dx^2 at h points [L2 ~> m2]
-                      dy2h          !< dy^2 at h points [L2 ~> m2]
-  real, dimension(SZIB_(G),SZJB_(G)),           &
-        intent(in) :: dx2q, &       !< dx^2 at q points [L2 ~> m2]
-                      dy2q          !< dy^2 at q points [L2 ~> m2]
+        intent(in) :: dx2h          !< dx^2 at h points [L2 ~> m2]
+  real, dimension(SZI_(G),SZJ_(G)),           &
+        intent(in) :: dy2h          !< dy^2 at h points [L2 ~> m2]
+  real, dimension(SZIB_(G),SZJB_(G)),         &
+        intent(in) :: dx2q          !< dx^2 at q points [L2 ~> m2]
+  real, dimension(SZIB_(G),SZJB_(G)),         &
+        intent(in) :: dy2q          !< dy^2 at q points [L2 ~> m2]
 
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G)) :: &
@@ -880,15 +882,14 @@ subroutine filter_hq(G, GV, CS, current_halo, remaining_iterations, q, h)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(in) :: CS      !< ZB2020 control structure.
-
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional,   &
            intent(inout) :: h !< Input/output array in h points [arbitrary]
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)), optional, &
            intent(inout) :: q !< Input/output array in q points [arbitrary]
-  integer, intent(inout) :: current_halo, &      !< Currently available halo points
-                            remaining_iterations !< The number of iterations to perform
+  integer, intent(inout) :: current_halo         !< Currently available halo points
+  integer, intent(inout) :: remaining_iterations !< The number of iterations to perform
 
-  logical :: direction !< The direction of the first 1D filter
+  logical :: direction ! The direction of the first 1D filter
 
   direction = (MOD(G%first_direction,2) == 0)
 
@@ -929,18 +930,21 @@ end subroutine filter_hq
 subroutine filter_3D(x, maskw, isd, ied, jsd, jed, is, ie, js, je, nz, &
                      current_halo, remaining_iterations,               &
                      direction)
+  integer, intent(in) :: isd !< Indices of array size
+  integer, intent(in) :: ied !< Indices of array size
+  integer, intent(in) :: jsd !< Indices of array size
+  integer, intent(in) :: jed !< Indices of array size
+  integer, intent(in) :: is  !< Indices of owned points
+  integer, intent(in) :: ie  !< Indices of owned points
+  integer, intent(in) :: js  !< Indices of owned points
+  integer, intent(in) :: je  !< Indices of owned points
+  integer, intent(in) :: nz  !< Vertical array size
   real, dimension(isd:ied,jsd:jed,nz), &
-        intent(inout) :: x             !< Input/output array [arbitrary]
+           intent(inout) :: x !< Input/output array [arbitrary]
   real, dimension(isd:ied,jsd:jed), &
-        intent(in)    :: maskw         !< Mask array of land points divided by 16 [nondim]
-  integer, intent(in) :: &
-                         isd, ied,  & !< Indices of array size
-                         jsd, jed,  & !< Indices of array size
-                         is,  ie,   & !< Indices of owned points
-                         js,  je,   & !< Indices of owned points
-                         nz
-  integer, intent(inout) :: current_halo, &      !< Currently available halo points
-                            remaining_iterations !< The number of iterations to perform
+           intent(in) :: maskw !< Mask array of land points divided by 16 [nondim]
+  integer, intent(inout) :: current_halo         !< Currently available halo points
+  integer, intent(inout) :: remaining_iterations !< The number of iterations to perform
   logical, intent(in)    :: direction            !< The direction of the first 1D filter
 
   real, parameter :: two = 2. !< Filter weight [nondim]
