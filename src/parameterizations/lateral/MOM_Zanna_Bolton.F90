@@ -210,7 +210,7 @@ subroutine ZB_2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
   ! parts are measured without - because these are nested clocks.
-  CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE, sync=.true.)
+  CS%id_clock_module = cpu_clock_id('(Ocean Zanna-Bolton-2020)', grain=CLOCK_MODULE)
   CS%id_clock_copy = cpu_clock_id('(ZB2020 copy fields)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
