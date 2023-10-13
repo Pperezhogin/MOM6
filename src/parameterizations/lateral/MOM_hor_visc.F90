@@ -23,8 +23,8 @@ use MOM_open_boundary,         only : OBC_DIRECTION_N, OBC_DIRECTION_S, OBC_NONE
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs
-use MOM_Zanna_Bolton,          only : Zanna_Bolton_2020, ZB_2020_init, ZB_2020_end, &
-                                      ZB2020_CS, ZB_copy_gradient_and_thickness
+use MOM_Zanna_Bolton,          only : ZB2020_lateral_stress, ZB2020_init, ZB2020_end, &
+                                      ZB2020_CS, ZB2020_copy_gradient_and_thickness
 
 implicit none ; private
 
@@ -1210,9 +1210,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
     ! Pass the velocity gradients and thickness to ZB2020
     if (CS%use_ZB2020) then
-      call ZB_copy_gradient_and_thickness( &
-           sh_xx, sh_xy, vort_xy,          &
-           hq,                             &
+      call ZB2020_copy_gradient_and_thickness( &
+           sh_xx, sh_xy, vort_xy,              &
+           hq,                                 &
            G, GV, CS%ZB2020, k)
     endif
 
@@ -1691,8 +1691,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   endif
 
   if (CS%use_ZB2020) then
-    call Zanna_Bolton_2020(u, v, h, diffu, diffv, G, GV, CS%ZB2020, &
-                           CS%dx2h, CS%dy2h, CS%dx2q, CS%dy2q)
+    call ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS%ZB2020, &
+                               CS%dx2h, CS%dy2h, CS%dx2q, CS%dy2q)
   endif
 
 end subroutine horizontal_viscosity
@@ -1769,7 +1769,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   ! init control structure
-  call ZB_2020_init(Time, G, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
+  call ZB2020_init(Time, G, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
 
   CS%initialized = .true.
 
@@ -2685,7 +2685,7 @@ subroutine hor_visc_end(CS)
   endif
 
   if (CS%use_ZB2020) then
-    call ZB_2020_end(CS%ZB2020)
+    call ZB2020_end(CS%ZB2020)
   endif
 
 end subroutine hor_visc_end
