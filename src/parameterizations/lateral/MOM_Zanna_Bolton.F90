@@ -221,15 +221,16 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
 
   ! Allocate memory
-  ! The only array which needs to be initialized is
-  ! Txy in a case if trace-only parameterization is used
-  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)))
-  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)))
-  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)))
+  ! We set the stress tensor and velocity gradient tensor to zero
+  ! with full halo because they potentially may be filtered
+  ! with marching halo algorithm
+  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
+  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
 
-  allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV)))
-  allocate(CS%Tyy(SZI_(G),SZJ_(G),SZK_(GV)))
+  allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  allocate(CS%Tyy(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   allocate(CS%Txy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%kappa_h(SZI_(G),SZJ_(G)))
   allocate(CS%kappa_q(SZIB_(G),SZJB_(G)))
