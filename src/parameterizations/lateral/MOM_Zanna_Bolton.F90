@@ -15,6 +15,7 @@ use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
+use MOM_ANN,           only : ANN_init, ANN_apply, ANN_end, ANN_CS
 
 implicit none ; private
 
@@ -126,6 +127,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
+  type(ANN_CS) :: ann_instance
 
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
@@ -133,6 +135,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  
+  call ANN_init(ann_instance, "ANN_test.nc")
 
   call log_version(param_file, mdl, version, "")
 
