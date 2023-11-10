@@ -79,7 +79,8 @@ type, public :: ZB2020_CS ; private
 
   logical :: use_ann  !< Turns on ANN inference of momentum fluxes
   type(ANN_CS) :: ann_instance !< ANN instance
-  character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_64_neurons_ZB-ver-1.1.nc" !< Default ANN with ZB20 model
+  character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_64_neurons_ZB-ver-1.2.nc" !< Default ANN with ZB20 model
+  real :: subroundoff_shear
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -88,6 +89,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_Tyy = -1
   integer :: id_Txy = -1
   integer :: id_cdiss = -1
+  integer :: id_h = -1, id_u = -1, id_v = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -144,11 +146,11 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "USE_ZB2020", use_ZB2020, &
                  "If true, turns on Zanna-Bolton-2020 (ZB) " //&
-                 "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
+                 "subgrid momentum parameterization of mesoscale eddies.", default=.true.)
   if (.not. use_ZB2020) return
 
   call get_param(param_file, mdl, "USE_ANN", CS%use_ann, &
-                 "ANN inference of momentum fluxes", default=.false.)
+                 "ANN inference of momentum fluxes", default=.true.)
 
   call get_param(param_file, mdl, "ZB_SCALING", CS%amplitude, &
                  "The nondimensional scaling factor in ZB model, " //&
@@ -204,10 +206,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   CS%id_Txx = register_diag_field('ocean_model', 'Txx', diag%axesTL, Time, &
       'Diagonal term (Txx) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
-
   CS%id_Tyy = register_diag_field('ocean_model', 'Tyy', diag%axesTL, Time, &
       'Diagonal term (Tyy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
-
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
 
@@ -215,6 +215,13 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
         'Klower (2018) attenuation coefficient', 'nondim')
   endif
+
+  CS%id_h = register_diag_field('ocean_model', 'h_ZB', diag%axesTL, Time, &
+  'Thickness in ZB module', 'm', conversion=GV%H_to_m)
+  CS%id_u = register_diag_field('ocean_model', 'u_ZB', diag%axesCuL, Time, &
+    'Zonal velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
+  CS%id_v = register_diag_field('ocean_model', 'v_ZB', diag%axesCvL, Time, &
+    'Meridional velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
 
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
@@ -232,6 +239,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   if (CS%use_ann) then
     call ANN_init(CS%ann_instance, CS%ann_file)
+    CS%subroundoff_shear = 1e-30 * US%T_to_s
   endif
 
   ! Allocate memory
@@ -471,6 +479,10 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
   if (CS%id_Txy>0)       call post_data(CS%id_Txy, CS%Txy, CS%diag)
 
   if (CS%id_cdiss>0)     call post_data(CS%id_cdiss, CS%c_diss, CS%diag)
+
+  if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
+  if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
+  if (CS%id_v>0)       call post_data(CS%id_v, v, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
 
   call cpu_clock_end(CS%id_clock_module)
@@ -691,7 +703,7 @@ subroutine compute_stress_ANN(G, GV, CS)
       x(12) = CS%vort_xy(i,j,k)
 
       input_norm = norm(x,12)
-      x = x / input_norm
+      x = x / (input_norm + CS%subroundoff_shear)
 
       call ANN_apply(x, y, CS%ann_instance)
 
