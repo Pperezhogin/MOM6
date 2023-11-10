@@ -137,6 +137,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   
   call ANN_init(ann_instance, "ANN_test.nc")
+  call ANN_end(ann_instance)
 
   call log_version(param_file, mdl, version, "")
 
