@@ -77,6 +77,10 @@ type, public :: ZB2020_CS ; private
         maskw_h,  & !< Mask of land point at h points multiplied by filter weight [nondim]
         maskw_q     !< Same mask but for q points [nondim]
 
+  logical :: use_ann  !< Turns on ANN inference of momentum fluxes
+  type(ANN_CS) :: ann_instance !< ANN instance
+  character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/ANN_64_neurons_ZB.nc" !< Default ANN with ZB20 model
+
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_ZB2020u = -1, id_ZB2020v = -1, id_KE_ZB2020 = -1
@@ -91,6 +95,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_copy
   integer :: id_clock_cdiss
   integer :: id_clock_stress
+  integer :: id_clock_stress_ANN
   integer :: id_clock_divergence
   integer :: id_clock_mpi
   integer :: id_clock_filter
@@ -127,7 +132,6 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
-  type(ANN_CS) :: ann_instance
 
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
@@ -135,9 +139,6 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  
-  call ANN_init(ann_instance, "ANN_test.nc")
-  call ANN_end(ann_instance)
 
   call log_version(param_file, mdl, version, "")
 
@@ -145,6 +146,9 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "If true, turns on Zanna-Bolton-2020 (ZB) " //&
                  "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
   if (.not. use_ZB2020) return
+
+  call get_param(param_file, mdl, "USE_ANN", CS%use_ann, &
+                 "ANN inference of momentum fluxes", default=.false.)
 
   call get_param(param_file, mdl, "ZB_SCALING", CS%amplitude, &
                  "The nondimensional scaling factor in ZB model, " //&
@@ -219,11 +223,14 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_copy = cpu_clock_id('(ZB2020 copy fields)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_stress_ANN = cpu_clock_id('(ZB2020 compute stress ANN)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_mpi = cpu_clock_id('(ZB2020 filter MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(ZB2020 filter no MPI)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
+
+  call ANN_init(CS%ann_instance, CS%ann_file)
 
   ! Allocate memory
   ! We set the stress tensor and velocity gradient tensor to zero
@@ -242,11 +249,11 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   ! Precomputing the scaling coefficient
   ! Mask is included to automatically satisfy B.C.
-  do j=js-1,je+1 ; do i=is-1,ie+1
+  do j=js-2,je+2 ; do i=is-2,ie+2
     CS%kappa_h(i,j) = -CS%amplitude * G%areaT(i,j) * G%mask2dT(i,j)
   enddo; enddo
 
-  do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+  do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
     CS%kappa_q(I,J) = -CS%amplitude * G%areaBu(I,J) * G%mask2dBu(I,J)
   enddo; enddo
 
@@ -322,6 +329,8 @@ subroutine ZB2020_end(CS)
     deallocate(CS%maskw_h)
     deallocate(CS%maskw_q)
   endif
+
+  call ANN_end(CS%ann_instance)
 
 end subroutine ZB2020_end
 
@@ -437,7 +446,11 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
 
   ! Compute the stress tensor given the
   ! (optionally sharpened) velocity gradients
-  call compute_stress(G, GV, CS)
+  if (CS%use_ann) then
+    call compute_stress_ANN(G, GV, CS)
+  else
+    call compute_stress(G, GV, CS)
+  endif
 
   ! Smooth the stress tensor if specified
   call filter_stress(G, GV, CS)
@@ -617,6 +630,78 @@ subroutine compute_stress(G, GV, CS)
   call cpu_clock_end(CS%id_clock_stress)
 
 end subroutine compute_stress
+
+pure function norm(x,n) result (y)
+  real, dimension(n), intent(in) :: x
+  integer, intent(in) :: n
+  real :: y
+
+  integer :: i
+
+  y = 0.
+  do i=1,n
+    y = y + x(i)**2
+  enddo
+  y = sqrt(y)
+end function norm
+
+!> Compute stress tensor T =
+!! (Txx, Txy;
+!!  Txy, Tyy)
+!!  with ANN
+subroutine compute_stress_ANN(G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+
+  real :: x(12), y(3)
+  real :: input_norm
+
+  call cpu_clock_begin(CS%id_clock_stress_ANN)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  call pass_var(CS%sh_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%sh_xx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%vort_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+
+  do k=1,nz
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      x(1) = CS%sh_xy(i-1,j-1,k)
+      x(2) = CS%sh_xy(i,j-1,k)
+      x(3) = CS%sh_xy(i-1,j,k)
+      x(4) = CS%sh_xy(i,j,k)
+
+      x(5) = CS%sh_xx(i,j,k)
+      x(6) = CS%sh_xx(i+1,j,k)
+      x(7) = CS%sh_xx(i,j+1,k)
+      x(8) = CS%sh_xx(i+1,j+1,k)
+
+      x(9)  = CS%vort_xy(i-1,j-1,k)
+      x(10) = CS%vort_xy(i,j-1,k)
+      x(11) = CS%vort_xy(i-1,j,k)
+      x(12) = CS%vort_xy(i,j,k)
+
+      input_norm = norm(x,12)
+      x = x / input_norm
+
+      call ANN_apply(x, y, CS%ann_instance)
+
+      y = y * input_norm * input_norm
+   
+      CS%Txx(i,j,k) = CS%kappa_h(i,j) * y(1)
+      CS%Tyy(i,j,k) = CS%kappa_h(i,j) * y(2)
+      CS%Txy(I,J,k) = CS%kappa_q(I,J) * y(3)
+    enddo ; enddo
+  enddo ! end of k loop
+
+  call cpu_clock_end(CS%id_clock_stress_ANN)
+
+end subroutine compute_stress_ANN
 
 !> Compute the divergence of subgrid stress
 !! weighted with thickness, i.e.
