@@ -5,7 +5,7 @@ module MOM_ANN
 
 use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_io, only : MOM_read_data
-use MOM_error_handler, only : MOM_error, FATAL
+use MOM_error_handler, only : MOM_error, FATAL, MOM_mesg
 !
 implicit none ; private
 
@@ -63,6 +63,8 @@ subroutine ANN_init(CS, NNfile)
   character(len=1) :: layer_num_str
   character(len=3) :: fieldname
 
+  call MOM_mesg('ANN: initialization started', 2)
+
   ! Read the number of layers
   call MOM_read_data(NNfile, "num_layers", CS%num_layers)
   
@@ -102,6 +104,8 @@ subroutine ANN_init(CS, NNfile)
   CS%layers(CS%num_layers-1)%activation = .False.
 
   call ANN_test(CS, NNfile)
+
+  call MOM_mesg('ANN is successfully initialized', 2)
 
 end subroutine ANN_init
 

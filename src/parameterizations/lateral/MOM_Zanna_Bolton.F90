@@ -79,7 +79,7 @@ type, public :: ZB2020_CS ; private
 
   logical :: use_ann  !< Turns on ANN inference of momentum fluxes
   type(ANN_CS) :: ann_instance !< ANN instance
-  character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_64_neurons_ZB.nc" !< Default ANN with ZB20 model
+  character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_64_neurons_ZB-ver-1.1.nc" !< Default ANN with ZB20 model
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -230,7 +230,9 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
 
-  call ANN_init(CS%ann_instance, CS%ann_file)
+  if (CS%use_ann) then
+    call ANN_init(CS%ann_instance, CS%ann_file)
+  endif
 
   ! Allocate memory
   ! We set the stress tensor and velocity gradient tensor to zero
@@ -330,7 +332,9 @@ subroutine ZB2020_end(CS)
     deallocate(CS%maskw_q)
   endif
 
-  call ANN_end(CS%ann_instance)
+  if (CS%use_ann) then
+    call ANN_end(CS%ann_instance)
+  endif
 
 end subroutine ZB2020_end
 

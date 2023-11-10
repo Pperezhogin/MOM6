@@ -47,7 +47,7 @@ class ANN(nn.Module):
 
 def export_ANN(ann, input_norms, output_norms, filename='ANN_test.nc'):
     ds = xr.Dataset()
-    ds['num_layers'] = len(ann.layer_sizes)
+    ds['num_layers'] = xr.DataArray(len(ann.layer_sizes)).expand_dims('dummy_dimension')
     ds['layer_sizes'] = xr.DataArray(ann.layer_sizes, dims=['nlayers'])
     ds = ds.astype('int32') # MOM6 reads only int32 numbers
     
