@@ -746,10 +746,19 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
   real :: x(27), y1(1), y2(2)
   real :: input_norm
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
-        sh_xx_q ! sh_xx interpolated to the corner [T-1 ~ s-1]
+        sh_xx_q,   & ! sh_xx interpolated to the corner [T-1 ~ s-1]
+        norm_q       ! Norm in q points [T-1 ~ s-1]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
-        sh_xy_h, & ! sh_xy interpolated to the center [T-1 ~ s-1]
-        vort_xy_h  ! vort_xy interpolated to the center [T-1 ~ s-1]
+        sh_xy_h,   & ! sh_xy interpolated to the center [T-1 ~ s-1]
+        vort_xy_h, & ! vort_xy interpolated to the center [T-1 ~ s-1]
+        norm_h       ! Norm in h points [T-1 ~ s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        sqr_h ! Sum of squares in h points
+  real, dimension(SZIB_(G),SZJB_(G)) :: &
+        sqr_q ! Sum of squares in q points
+
+  real :: diagonal, side
 
   call cpu_clock_begin(CS%id_clock_stress_ANN)
 
@@ -759,26 +768,50 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
   sh_xx_q = 0.
   sh_xy_h = 0.
   vort_xy_h = 0.
+  norm_q = 0.
+  norm_h = 0.
+
+  call pass_var(CS%sh_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%sh_xx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%vort_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
 
   ! Interpolate input features
   do k=1,nz
-    do j=js,je ; do i=is,ie
+    do j=js-1,je+1 ; do i=is-1,ie+1
       ! It is assumed that B.C. is applied to sh_xy and vort_xy
       sh_xy_h(i,j,k) = 0.25 * ( (CS%sh_xy(I-1,J-1,k) + CS%sh_xy(I,J,k)) &
                        + (CS%sh_xy(I-1,J,k) + CS%sh_xy(I,J-1,k)) ) * G%mask2dT(i,j)
 
       vort_xy_h(i,j,k) = 0.25 * ( (CS%vort_xy(I-1,J-1,k) + CS%vort_xy(I,J,k)) &
                          + (CS%vort_xy(I-1,J,k) + CS%vort_xy(I,J-1,k)) ) * G%mask2dT(i,j)
+      
+      sqr_h(i,j) = CS%sh_xx(i,j,k)**2 + sh_xy_h(i,j,k)**2 + vort_xy_h(i,j,k)**2
     enddo; enddo
-    do J=Jsq,Jeq ; do I=Isq,Ieq
+
+    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
       sh_xx_q(I,J,k) = 0.25 * ( (CS%sh_xx(i+1,j+1,k) + CS%sh_xx(i,j,k)) &
                        + (CS%sh_xx(i+1,j,k) + CS%sh_xx(i,j+1,k))) * G%mask2dBu(I,J)
+      sqr_q(I,J) = sh_xx_q(I,J,k)**2 + CS%vort_xy(I,J,k)**2 + CS%sh_xy(I,J,k)**2
     enddo; enddo
+
+    do j=js,je ; do i=is,ie
+      diagonal = (sqr_h(i+1,j+1) + sqr_h(i-1,j-1)) + (sqr_h(i+1,j-1) + sqr_h(i-1,j+1))
+      side     = (sqr_h(i+1,j) + sqr_h(i-1,j)) + (sqr_h(i,j+1) + sqr_h(i,j-1))
+      norm_h(i,j,k) = sqrt((diagonal + side) + sqr_h(i,j))
+    enddo; enddo
+
+    do J=Jsq,Jeq ; do I=Isq,Ieq
+      diagonal = (sqr_q(i+1,j+1) + sqr_q(i-1,j-1)) + (sqr_q(i+1,j-1) + sqr_q(i-1,j+1))
+      side     = (sqr_q(i+1,j) + sqr_q(i-1,j)) + (sqr_q(i,j+1) + sqr_q(i,j-1))
+      norm_q(i,j,k) = sqrt((diagonal + side) + sqr_q(i,j))
+    enddo; enddo 
   enddo
 
   call pass_var(sh_xy_h, G%Domain, clock=CS%id_clock_mpi)
   call pass_var(vort_xy_h, G%Domain, clock=CS%id_clock_mpi)
   call pass_var(sh_xx_q, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(norm_h, G%Domain, clock=CS%id_clock_mpi) 
+  call pass_var(norm_q, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
 
   do k=1,nz
     ! compute Txx, Tyy tensor
@@ -787,7 +820,8 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
       x(10:18) = RESHAPE(CS%sh_xx(i-1:i+1,j-1:j+1,k), (/9/))
       x(19:27) = RESHAPE(vort_xy_h(i-1:i+1,j-1:j+1,k), (/9/))
 
-      input_norm = norm(x,27)
+      input_norm = norm_h(i,j,k)
+
       x = x / (input_norm + CS%subroundoff_shear)
 
       call ANN_apply(x, y2, CS%ann_Txx_Tyy)
@@ -804,7 +838,7 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
       x(10:18) = RESHAPE(sh_xx_q(i-1:i+1,j-1:j+1,k), (/9/))
       x(19:27) = RESHAPE(CS%vort_xy(i-1:i+1,j-1:j+1,k), (/9/))
 
-      input_norm = norm(x,27)
+      input_norm = norm_q(I,J,k)
       x = x / (input_norm + CS%subroundoff_shear)
 
       call ANN_apply(x, y1, CS%ann_Txy)
