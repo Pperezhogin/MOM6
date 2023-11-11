@@ -82,6 +82,7 @@ def export_ANN(ann, input_norms, output_norms, filename='ANN_test.nc'):
         print(f'Rewrite {filename} ?')
         input()
         os.system(f'rm -f {filename}')
+        print(f'{filename} is rewritten')
     
     ds.to_netcdf(filename)
 
@@ -231,7 +232,7 @@ def train(net, X_train: np.array, Y_train: np.array,
         evaluate_test(net, X_test, Y_test, batch_size=batch_size, device=device)
         t = time()
         if epoch % print_frequency == 0 and print_frequency > 0:
-            print('[%d/%d] [%.2f/%.2f] Loss: [%.3f, %.3f]' 
+            print('[%d/%d] [%.2f/%.2f] Loss: [%.6f, %.6f]' 
                 % (epoch+1, num_epochs,
                 t-t_e, (t-t_s)*(num_epochs/(epoch+1)-1),
                 net.log_dict['loss'][-1], net.log_dict['loss_test'][-1]))

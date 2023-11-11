@@ -63,7 +63,7 @@ subroutine ANN_init(CS, NNfile)
   character(len=1) :: layer_num_str
   character(len=3) :: fieldname
 
-  call MOM_mesg('ANN: initialization started', 2)
+  call MOM_mesg('ANN: init from ' // trim(NNfile), 2)
 
   ! Read the number of layers
   call MOM_read_data(NNfile, "num_layers", CS%num_layers)
@@ -105,7 +105,7 @@ subroutine ANN_init(CS, NNfile)
 
   call ANN_test(CS, NNfile)
 
-  call MOM_mesg('ANN is successfully initialized', 2)
+  call MOM_mesg('ANN: have been read from ' // trim(NNfile), 2)
 
 end subroutine ANN_init
 
@@ -116,6 +116,7 @@ subroutine ANN_test(CS, NNfile)
 
   real, dimension(:), allocatable :: x_test, y_test, y_pred
   real :: relative_error
+  character(len=200) :: relative_error_str
 
   ! Allocate data
   allocate(x_test(CS%layer_sizes(1)))
@@ -132,7 +133,8 @@ subroutine ANN_test(CS, NNfile)
   relative_error = maxval(abs(y_pred - y_test)) / maxval(abs(y_test))
 
   if (relative_error > 1e-6) then
-    call MOM_error(FATAL, 'Relative error in ANN prediction is too large.')
+    write(relative_error_str, '(ES12.4)') relative_error
+    call MOM_error(FATAL, 'Relative error in ANN prediction is too large: ' // trim(relative_error_str))
   endif
 
   deallocate(x_test)
