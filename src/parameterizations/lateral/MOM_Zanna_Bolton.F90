@@ -78,6 +78,7 @@ type, public :: ZB2020_CS ; private
         maskw_q     !< Same mask but for q points [nondim]
 
   integer :: use_ann  !< 0: ANN is turned off, 1: default ANN with ZB20 model, 2: two separate ANNs on stencil 3x3 for corner and center
+  logical :: rotation_invariant !< If true, the ANN is rotation invariant
   type(ANN_CS) :: ann_instance !< ANN instance
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
@@ -150,11 +151,14 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "USE_ZB2020", use_ZB2020, &
                  "If true, turns on Zanna-Bolton-2020 (ZB) " //&
-                 "subgrid momentum parameterization of mesoscale eddies.", default=.true.)
+                 "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
   if (.not. use_ZB2020) return
 
   call get_param(param_file, mdl, "USE_ANN", CS%use_ann, &
-                 "ANN inference of momentum fluxes: 0 off, 1: single ANN 2x2, 2: two ANNs 3x3", default=2)
+                 "ANN inference of momentum fluxes: 0 off, 1: single ANN 2x2, 2: two ANNs 3x3", default=0)
+
+  call get_param(param_file, mdl, "ROT_INV", CS%rotation_invariant, &
+                 "If true, rotation invariance is imposed as hard constraint", default=.false.)
 
   call get_param(param_file, mdl, "ZB_SCALING", CS%amplitude, &
                  "The nondimensional scaling factor in ZB model, " //&
@@ -743,7 +747,7 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
 
-  real :: x(27), y1(1), y2(2)
+  real :: x(27), y1(1), y2(2), y3(1), y4(2)
   real :: input_norm
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
         sh_xx_q,   & ! sh_xx interpolated to the corner [T-1 ~ s-1]
@@ -758,7 +762,7 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
   real, dimension(SZIB_(G),SZJB_(G)) :: &
         sqr_q ! Sum of squares in q points
 
-  real :: diagonal, side
+  real :: diagonal, side, Ttr, Tdd
 
   call cpu_clock_begin(CS%id_clock_stress_ANN)
 
@@ -828,8 +832,28 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
 
       y2 = y2 * input_norm * input_norm
 
-      CS%Txx(i,j,k) = CS%kappa_h(i,j) * y2(1)
-      CS%Tyy(i,j,k) = CS%kappa_h(i,j) * y2(2)
+      if (CS%rotation_invariant) then
+        x(1:9) = RESHAPE(TRANSPOSE(-sh_xy_h(i-1:i+1,j-1:j+1,k)), (/9/))
+        x(10:18) = RESHAPE(TRANSPOSE(-CS%sh_xx(i-1:i+1,j-1:j+1,k)), (/9/))
+        x(19:27) = RESHAPE(TRANSPOSE(vort_xy_h(i-1:i+1,j-1:j+1,k)), (/9/))
+
+        input_norm = norm_h(i,j,k)
+
+        x = x / (input_norm + CS%subroundoff_shear)
+
+        call ANN_apply(x, y4, CS%ann_Txx_Tyy)
+
+        y4 = y4 * input_norm * input_norm
+
+        Ttr = (y2(1) + y2(2)) * 0.25 + (y4(1) + y4(2)) * 0.25
+        Tdd = (y2(1) - y2(2)) * 0.25 - (y4(1) - y4(2)) * 0.25
+      else
+        Ttr = (y2(1) + y2(2)) * 0.5
+        Tdd = (y2(1) - y2(2)) * 0.5
+      endif
+
+      CS%Txx(i,j,k) = CS%kappa_h(i,j) * (Ttr + Tdd)
+      CS%Tyy(i,j,k) = CS%kappa_h(i,j) * (Ttr - Tdd)
     enddo ; enddo
 
     ! compute Txy
@@ -845,7 +869,22 @@ subroutine compute_stress_ANN_3x3(G, GV, CS)
 
       y1 = y1 * input_norm * input_norm
 
-      CS%Txy(I,J,k) = CS%kappa_q(I,J) * y1(1)
+      if (CS%rotation_invariant) then
+        x(1:9) = RESHAPE(TRANSPOSE(-CS%sh_xy(i-1:i+1,j-1:j+1,k)), (/9/))
+        x(10:18) = RESHAPE(TRANSPOSE(-sh_xx_q(i-1:i+1,j-1:j+1,k)), (/9/))
+        x(19:27) = RESHAPE(TRANSPOSE(CS%vort_xy(i-1:i+1,j-1:j+1,k)), (/9/))
+
+        input_norm = norm_q(I,J,k)
+        x = x / (input_norm + CS%subroundoff_shear)
+
+        call ANN_apply(x, y3, CS%ann_Txy)
+
+        y3 = y3 * input_norm * input_norm
+
+        CS%Txy(I,J,k) = CS%kappa_q(I,J) * (y1(1) - y3(1)) * 0.5
+      else
+        CS%Txy(I,J,k) = CS%kappa_q(I,J) * y1(1)
+      endif
 
     enddo; enddo
   enddo ! end of k loop
