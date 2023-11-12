@@ -44,7 +44,7 @@ def select_NA(variable, time=None):
             x = x.isel(time=time)
     return x
 
-class Experiment():
+class StateFunctions():
     def __init__(self,data, param):
         self.data = data
         self.param = param
