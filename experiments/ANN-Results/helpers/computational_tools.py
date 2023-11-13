@@ -69,9 +69,12 @@ def select_Equator(variable, time=None):
     return x
 
 # We compare masked fields because outside there may be 1e+20 values
-def compare(tested, control, mask, vmax=None, selector=select_NA):
-    tested = selector(tested * mask)
-    control = selector(control * mask)
+def compare(tested, control, mask=None, vmax=None, selector=select_NA):
+    if mask is not None:
+        tested = tested * mask
+        control = control * mask
+    tested = selector(tested)
+    control = selector(control)
     
     plt.figure(figsize=(12,10))
     plt.subplot(2,2,1)
@@ -143,15 +146,15 @@ class StateFunctions():
         Tyy = kappa_t * (+ vort_sh + sum_sq)
         Txy = kappa_q * (vort_xy * sh_xx_corner)
 
-        ZB2020u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
+        ZB20u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
                + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
                / (param.dxCu*param.dyCu)
 
-        ZB2020v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
+        ZB20v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
                    + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
                    / (param.dxCv*param.dyCv)
 
-        return {'ZB2020u': ZB2020u, 'ZB2020v': ZB2020v, 
+        return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
     
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
@@ -192,6 +195,10 @@ class StateFunctions():
         area = torch.tensor((param.dxBu * param.dyBu).values).reshape(-1,1)
         Txy = - Txy * input_norm * input_norm * area
         Txy = Txy.reshape(data.sh_xy.shape)
+        
+        # Placing boundary conditions
+        wet = torch.tensor(param.wet_c.values)
+        Txy = Txy * wet
 
         ########## Second, prediction of Txx, Tyy ###############
         sh_xy = extract_3x3(data.sh_xy_h)
@@ -211,8 +218,56 @@ class StateFunctions():
         Tdiag = - Tdiag * input_norm * input_norm * area
         Txx = Tdiag[:,0].reshape(data.sh_xx.shape)
         Tyy = Tdiag[:,1].reshape(data.sh_xx.shape)
+        
+        # Placing boundary conditions
+        wet = torch.tensor(param.wet.values)
+        Txx = Txx * wet
+        Tyy = Tyy * wet
+        
+        ############ Computing subgrid forcing in torch #############
+#         ZB20u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
+#                + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
+#                / (param.dxCu*param.dyCu)
+        
+#         ZB20v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
+#                    + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
+#                    / (param.dxCv*param.dyCv)
 
-        return Txy, Txx, Tyy
+        def tensor(x):
+            return torch.tensor(x.values)
+        
+        wet_u = tensor(param.wet_u)
+        wet_v = tensor(param.wet_v)
+        dyT = tensor(param.dyT)
+        dxT = tensor(param.dxT)
+        dxCu = tensor(param.dxCu)
+        dyCu = tensor(param.dyCu)
+        dyCv = tensor(param.dyCv)
+        dxCv = tensor(param.dxCv)
+        dxBu = tensor(param.dxBu)
+        dyBu = tensor(param.dyBu)
+        
+        from torch.nn.functional import pad as torch_pad
+        
+        def zonal_circular_pad(x, right=True):
+            y = torch.zeros(x.shape[-2], x.shape[-1]+1)
+            if right:
+                y[:,:-1] = x
+                y[:,-1] = x[:,0]
+            else:
+                y[:,1:] = x
+                y[:,0] = x[:,-1]
+            return y
+                
+        Txx_padded = zonal_circular_pad(Txx * dyT**2)
+        Txy_padded = torch_pad(Txy * dxBu**2, (0,0,1,0)) # pad on the left with zero along meridional direction
+        ZB20u = wet_u * (torch.diff(Txx_padded,dim=-1) / dyCu + torch.diff(Txy_padded,dim=-2) / dxCu) / (dxCu * dyCu)
+        
+        Txy_padded = zonal_circular_pad(Txy * dyBu**2,right=False)
+        Tyy_padded = torch_pad(Tyy * dxT**2, (0,0,0,1)) # pad on the right with zero along meridional direction
+        ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (dxCv * dyCv)
+        
+        return Txy, Txx, Tyy, ZB20u, ZB20v
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
         if 'time' in self.data.dims:
@@ -222,13 +277,15 @@ class StateFunctions():
         if ann_Txx_Tyy is None:
             ann_Txx_Tyy = import_ANN('trained_models/ANN_Txx_Tyy_ZB.nc')
             
-        Txy, Txx, Tyy = self.Apply_ANN(ann_Txy, ann_Txx_Tyy)
+        Txy, Txx, Tyy, ZB20u, ZB20v = self.Apply_ANN(ann_Txy, ann_Txx_Tyy)
         
         Txy = Txy.detach().numpy() + self.param.dxBu * 0
         Txx = Txx.detach().numpy() + self.param.dxT * 0
         Tyy = Tyy.detach().numpy() + self.param.dxT * 0
+        ZB20u = ZB20u.detach().numpy() + self.param.dxCu * 0
+        ZB20v = ZB20v.detach().numpy() + self.param.dxCv * 0
 
-        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'ZB20u': ZB20u, 'ZB20v': ZB20v}
     
     def KE_Arakawa(self):
         '''
