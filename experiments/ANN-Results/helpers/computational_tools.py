@@ -163,10 +163,21 @@ class StateFunctions():
         The output is predicted momentum flux in physical
         units in torch format
         '''
+        if 'time' in self.data.dims:
+            raise NotImplementedError("This operation is not implemented for many time slices. Use a single time.")
+        if ann_Txy is None:
+            ann_Txy = import_ANN('trained_models/ANN_Txy_ZB.nc')
+            print('Warning: Prediction from default ANN')
+        if ann_Txx_Tyy is None:
+            ann_Txx_Tyy = import_ANN('trained_models/ANN_Txx_Tyy_ZB.nc')
+            print('Warning: Prediction from default ANN')
         
         def norm(x):
             return torch.sqrt((x**2).sum(dim=-1, keepdims=True))
         
+        def tensor(x, torch_type=torch.float32):
+            return torch.tensor(x.values).type(torch_type)
+
         data = self.data
         grid = self.grid
         param = self.param
@@ -175,66 +186,54 @@ class StateFunctions():
             return pad(x, grid, {'X':1, 'Y':1})
 
         def extract_3x3(x):
-            return image_to_3x3_stencil_gpt(torch.tensor(_pad(x).values))
+            return image_to_3x3_stencil_gpt(tensor(_pad(x)))
 
         ########## First, do prediction for Txy stress ###########
         # Collect input features
         sh_xy = extract_3x3(data.sh_xy)
         sh_xx = extract_3x3(data.sh_xx_q)
         vort_xy = extract_3x3(data.vort_xy)
-        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1).type(torch.float64)
+        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1)
 
         # Normalize input features
-        input_norm = norm(input_features)
-        input_features = (input_features / (input_norm+1e-70)).type(torch.float32)
+        input_norm = norm(input_features.type(torch.float64)).type(torch.float32)
+        input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction
         Txy = ann_Txy(input_features)
 
         # Now denormalize the output
-        area = torch.tensor((param.dxBu * param.dyBu).values).reshape(-1,1)
+        area = tensor((param.dxBu * param.dyBu)).reshape(-1,1)
         Txy = - Txy * input_norm * input_norm * area
         Txy = Txy.reshape(data.sh_xy.shape)
         
         # Placing boundary conditions
-        wet = torch.tensor(param.wet_c.values)
+        wet = tensor(param.wet_c)
         Txy = Txy * wet
 
         ########## Second, prediction of Txx, Tyy ###############
         sh_xy = extract_3x3(data.sh_xy_h)
         sh_xx = extract_3x3(data.sh_xx)
         vort_xy = extract_3x3(data.vort_xy_h)
-        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1).type(torch.float64)
+        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1)
 
         # Normalize input features
-        input_norm = norm(input_features)
-        input_features = (input_features / (input_norm+1e-70)).type(torch.float32)
+        input_norm = norm(input_features.type(torch.float64)).type(torch.float32)
+        input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction
         Tdiag = ann_Txx_Tyy(input_features)
 
         # Now denormalize the output
-        area = torch.tensor((param.dxT * param.dyT).values).reshape(-1,1)
+        area = tensor((param.dxT * param.dyT)).reshape(-1,1)
         Tdiag = - Tdiag * input_norm * input_norm * area
         Txx = Tdiag[:,0].reshape(data.sh_xx.shape)
         Tyy = Tdiag[:,1].reshape(data.sh_xx.shape)
         
         # Placing boundary conditions
-        wet = torch.tensor(param.wet.values)
+        wet = tensor(param.wet)
         Txx = Txx * wet
         Tyy = Tyy * wet
-        
-        ############ Computing subgrid forcing in torch #############
-#         ZB20u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
-#                + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
-#                / (param.dxCu*param.dyCu)
-        
-#         ZB20v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
-#                    + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
-#                    / (param.dxCv*param.dyCv)
-
-        def tensor(x):
-            return torch.tensor(x.values)
         
         wet_u = tensor(param.wet_u)
         wet_v = tensor(param.wet_v)
@@ -267,23 +266,16 @@ class StateFunctions():
         Tyy_padded = torch_pad(Tyy * dxT**2, (0,0,0,1)) # pad on the right with zero along meridional direction
         ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (dxCv * dyCv)
         
-        return Txy, Txx, Tyy, ZB20u, ZB20v
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'ZB20u': ZB20u, 'ZB20v': ZB20v}
     
-    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
-        if 'time' in self.data.dims:
-            raise NotImplementedError("This operation is not implemented for many time slices. Use a single time.")
-        if ann_Txy is None:
-            ann_Txy = import_ANN('trained_models/ANN_Txy_ZB.nc')
-        if ann_Txx_Tyy is None:
-            ann_Txx_Tyy = import_ANN('trained_models/ANN_Txx_Tyy_ZB.nc')
-            
-        Txy, Txx, Tyy, ZB20u, ZB20v = self.Apply_ANN(ann_Txy, ann_Txx_Tyy)
+    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None):            
+        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy)
         
-        Txy = Txy.detach().numpy() + self.param.dxBu * 0
-        Txx = Txx.detach().numpy() + self.param.dxT * 0
-        Tyy = Tyy.detach().numpy() + self.param.dxT * 0
-        ZB20u = ZB20u.detach().numpy() + self.param.dxCu * 0
-        ZB20v = ZB20v.detach().numpy() + self.param.dxCv * 0
+        Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
+        Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0
+        Tyy = pred['Tyy'].detach().numpy() + self.param.dxT * 0
+        ZB20u = pred['ZB20u'].detach().numpy() + self.param.dxCu * 0
+        ZB20v = pred['ZB20v'].detach().numpy() + self.param.dxCv * 0
 
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'ZB20u': ZB20u, 'ZB20v': ZB20v}
     
