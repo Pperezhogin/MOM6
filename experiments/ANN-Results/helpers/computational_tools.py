@@ -2,6 +2,9 @@ from xgcm import Grid
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN
+import torch
+from xgcm.padding import pad
 
 roundoff = 1e-40
 
@@ -150,6 +153,82 @@ class StateFunctions():
 
         return {'ZB2020u': ZB2020u, 'ZB2020v': ZB2020v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
+    
+    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
+        '''
+        The only input is the dataset itself.
+        The output is predicted momentum flux in physical
+        units in torch format
+        '''
+        
+        def norm(x):
+            return torch.sqrt((x**2).sum(dim=-1, keepdims=True))
+        
+        data = self.data
+        grid = self.grid
+        param = self.param
+
+        def _pad(x):
+            return pad(x, grid, {'X':1, 'Y':1})
+
+        def extract_3x3(x):
+            return image_to_3x3_stencil_gpt(torch.tensor(_pad(x).values))
+
+        ########## First, do prediction for Txy stress ###########
+        # Collect input features
+        sh_xy = extract_3x3(data.sh_xy)
+        sh_xx = extract_3x3(data.sh_xx_q)
+        vort_xy = extract_3x3(data.vort_xy)
+        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1).type(torch.float64)
+
+        # Normalize input features
+        input_norm = norm(input_features)
+        input_features = (input_features / (input_norm+1e-70)).type(torch.float32)
+
+        # Make prediction
+        Txy = ann_Txy(input_features)
+
+        # Now denormalize the output
+        area = torch.tensor((param.dxBu * param.dyBu).values).reshape(-1,1)
+        Txy = - Txy * input_norm * input_norm * area
+        Txy = Txy.reshape(data.sh_xy.shape)
+
+        ########## Second, prediction of Txx, Tyy ###############
+        sh_xy = extract_3x3(data.sh_xy_h)
+        sh_xx = extract_3x3(data.sh_xx)
+        vort_xy = extract_3x3(data.vort_xy_h)
+        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1).type(torch.float64)
+
+        # Normalize input features
+        input_norm = norm(input_features)
+        input_features = (input_features / (input_norm+1e-70)).type(torch.float32)
+
+        # Make prediction
+        Tdiag = ann_Txx_Tyy(input_features)
+
+        # Now denormalize the output
+        area = torch.tensor((param.dxT * param.dyT).values).reshape(-1,1)
+        Tdiag = - Tdiag * input_norm * input_norm * area
+        Txx = Tdiag[:,0].reshape(data.sh_xx.shape)
+        Tyy = Tdiag[:,1].reshape(data.sh_xx.shape)
+
+        return Txy, Txx, Tyy
+    
+    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
+        if 'time' in self.data.dims:
+            raise NotImplementedError("This operation is not implemented for many time slices. Use a single time.")
+        if ann_Txy is None:
+            ann_Txy = import_ANN('trained_models/ANN_Txy_ZB.nc')
+        if ann_Txx_Tyy is None:
+            ann_Txx_Tyy = import_ANN('trained_models/ANN_Txx_Tyy_ZB.nc')
+            
+        Txy, Txx, Tyy = self.Apply_ANN(ann_Txy, ann_Txx_Tyy)
+        
+        Txy = Txy.detach().numpy() + self.param.dxBu * 0
+        Txx = Txx.detach().numpy() + self.param.dxT * 0
+        Tyy = Tyy.detach().numpy() + self.param.dxT * 0
+
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
     
     def KE_Arakawa(self):
         '''

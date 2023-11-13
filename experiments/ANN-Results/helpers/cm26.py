@@ -184,12 +184,7 @@ class DatasetCM26():
             ds_coarse.data['sh_xy_h'] = ds_coarse.grid.interp(sh_xy, ['X','Y']) * ds_coarse.param.wet
             ds_coarse.data['vort_xy_h'] = ds_coarse.grid.interp(vort_xy, ['X','Y']) * ds_coarse.param.wet
             ds_coarse.data['sh_xx_q'] = ds_coarse.grid.interp(sh_xx, ['X','Y']) * ds_coarse.param.wet_c
-            
-            # Add reference: ZB20
-            zb = ds_coarse.state.ZB20(ZB_scaling=0.3)
-            ds_coarse.data['ZBx'] = zb['ZB2020u']
-            ds_coarse.data['ZBy'] = zb['ZB2020v']
-            
+                        
             output[factor] = ds_coarse
                             
         return output

@@ -7,6 +7,35 @@ import os
 import xarray as xr
 from time import time
 
+def image_to_3x3_stencil(x):
+    '''
+    Note that x is the fast direction in CM2.6 and 
+    also it is the rightmost.
+    Transforms image data to Npoints * 9 data. 
+    The input and output are torch tensors
+    '''
+    ny, nx = x.shape
+    # Single feature has dimension Npoints x 9,
+    # where 9 corresponds to stencil 3x3, and 
+    # zonal direction is the fast one
+    y = torch.zeros((nx-2)*(ny-2),9)
+    k = 0
+    for j in range(1,x.shape[0]-1):
+        for i in range(1,x.shape[1]-1):
+            y[k,:] = x[j-1:j+2,i-1:i+2].reshape(1,9)
+            k += 1
+    return y
+
+def image_to_3x3_stencil_gpt(x):
+    '''
+    It is the same function, but 1000 times faster
+    suggested by gpt. The result is the same up to 
+    float32 precision (i.e., it is not exact)
+    '''
+    ny, nx = x.shape
+    patches = x.unfold(0, 3, 1).unfold(1, 3, 1).reshape(-1, 9)
+    return patches
+
 def log_to_xarray(log_dict):
     anykey = list(log_dict.keys())[0]
     num_epochs = len(log_dict[anykey])
@@ -85,6 +114,28 @@ def export_ANN(ann, input_norms, output_norms, filename='ANN_test.nc'):
         print(f'{filename} is rewritten')
     
     ds.to_netcdf(filename)
+    
+def import_ANN(filename='ANN_test.nc'):
+    ds = xr.open_dataset(filename)
+    layer_sizes = ds['layer_sizes'].values
+
+    ann = ANN(layer_sizes)
+    
+    for i in range(len(ann.layers)):
+        # Naming convention for weights and dimensions
+        matrix = torch.tensor(ds[f'A{i}'].T.values) # Transpose back: it is convention
+        bias = torch.tensor(ds[f'b{i}'].values)
+        ann.layers[i].weight.data = matrix
+        ann.layers[i].bias.data = bias
+        
+    x_test = torch.tensor(ds['x_test'].values.reshape(1,-1))
+    y_pred = ann(x_test).detach()
+    y_test = ds['y_test'].values
+    
+    rel_error = float(np.abs(y_pred - y_test).max() / np.abs(y_test).max())
+    if rel_error > 1e-6:
+        print(f'Test prediction using {filename}: {rel_error}')
+    return ann
 
 class AverageLoss():
     '''
