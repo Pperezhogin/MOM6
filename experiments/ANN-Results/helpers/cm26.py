@@ -2,6 +2,7 @@ from intake import open_catalog
 import xarray as xr
 from xgcm import Grid
 import numpy as np
+from helpers.computational_tools import StateFunctions
 
 def mask_from_nans(variable):
     mask = (1 - np.isnan(variable).astype('float32'))
@@ -11,9 +12,27 @@ def mask_from_nans(variable):
         mask = mask.drop('time')
     return mask
 
+# If there is any point in averaging box, it is treated as land point
+def discard_land(x):
+    return (x==1).astype('float32')
 
+def remesh(x, hires_ds, ds_coarse):
+    if 'xq' in x.dims and 'yh' in x.dims:
+        variable = 'U-point'
+    if 'xh' in x.dims and 'yq' in x.dims:
+        variable = 'V-point'
+    
+    if variable == 'U-point':
+        x_coarse = ds_coarse.grid.interp(hires_ds.grid.interp(x, 'X').coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean(),'X') * ds_coarse.param.wet_u
+        
+    if variable == 'V-point':
+        x_coarse = ds_coarse.grid.interp(hires_ds.grid.interp(x, 'Y').coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean(),'Y') * ds_coarse.param.wet_v
+    
+    return x_coarse
+        
+        
 class DatasetCM26():
-    def __init__(self):
+    def from_cloud(self):
         rename = {'xt_ocean': 'xh', 'yt_ocean': 'yh', 'xu_ocean': 'xq', 'yu_ocean': 'yq'}
         rename_param = {'dxt': 'dxT', 'dyt': 'dyT', 'dxu': 'dxBu', 'dyu': 'dyBu'}
         
@@ -36,12 +55,12 @@ class DatasetCM26():
             'Y': {'center': 'yh', 'right': 'yq'}
             },
            boundary={"X": 'periodic', 'Y': 'fill'},
-           fill_value = {'X':1e+20, 'Y':1e+20})
+           fill_value = {'X':0, 'Y':0})
         
         param['wet'] = mask_from_nans(ds.surface_salt)
-        param['wet_c'] = mask_from_nans(ds.usurf)
-        param['wet_u'] = mask_from_nans(grid.interp(ds.surface_salt,'X')) # We interpolate center variable as it gives best treatment of the coastline
-        param['wet_v'] = mask_from_nans(grid.interp(ds.surface_salt,'Y')) # We interpolate center variable as it gives best treatment of the coastline
+        param['wet_u'] = discard_land(grid.interp(param['wet'], 'X'))
+        param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
+        param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
         
         param['dxCu'] = grid.interp(param.dxT,'X')
         param['dyCu'] = grid.interp(param.dyT,'X')
@@ -52,6 +71,129 @@ class DatasetCM26():
         
         self.data = xr.Dataset()
         
-        self.data['u'] = grid.interp(ds.usurf,'Y').fillna(0.)
-        self.data['v'] = grid.interp(ds.vsurf,'X').fillna(0.)
+        self.data['u'] = grid.interp(ds.usurf,'Y').fillna(0.) * param.wet_u
+        self.data['v'] = grid.interp(ds.vsurf,'X').fillna(0.) * param.wet_v
+        
+        self.grid = grid
+        
+    def __init__(self, data=None, param=None, grid=None):
+        if data is None and param is None:
+            self.from_cloud()
+        else:
+            self.data = data
+            self.param = param
+            self.grid = grid
+        self.state = StateFunctions(self.data, self.param, self.grid)
         return
+
+    def coarsen(self, factor=10):
+        ################# Start with coarsening grid steps #####################
+        dxT = self.param.dxT.coarsen({'xh':factor}).sum().coarsen({'yh':factor}).mean()
+        dyT = self.param.dyT.coarsen({'yh':factor}).sum().coarsen({'xh':factor}).mean()
+        
+        ############## Manually create C-Arakawa coordinates ###################
+        xh = dxT.xh
+        xq = xh.data + (xh[1].data - xh[0].data)*0.5
+        xq = xr.DataArray(xq, dims=['xq'])
+        
+        yh = dxT.yh
+        yyq = (yh[1:].data + yh[:-1].data)*0.5
+        yq = np.zeros(yh.size)
+        yq[:-1] = yyq
+        yq[-1] = yh[-1].data + (yh[-1].data-yh[-2].data)/2
+        
+        yq = xr.DataArray(yq, dims=['yq'])
+        
+        param = xr.Dataset()
+        param['xh'] = xh
+        param['xq'] = xq
+        param['yh'] = yh
+        param['yq'] = yq
+        
+        ########### Initialize Grid and compute grid steps #####################
+        
+        grid = Grid(param, coords={
+            'X': {'center': 'xh', 'right': 'xq'},
+            'Y': {'center': 'yh', 'right': 'yq'}
+            },
+           boundary={"X": 'periodic', 'Y': 'fill'},
+           fill_value = {'X':0, 'Y':0})
+
+        param['dxT'] = dxT
+        param['dyT'] = dyT
+        param['dxCu'] = grid.interp(param.dxT,'X')
+        param['dyCu'] = grid.interp(param.dyT,'X')
+        param['dxCv'] = grid.interp(param.dxT,'Y')
+        param['dyCv'] = grid.interp(param.dyT,'Y')
+        param['dxBu'] = grid.interp(param.dxT,['X','Y'])
+        param['dyBu'] = grid.interp(param.dyT,['X','Y'])
+        
+        ######################### Creating wet masks ###########################
+        param['wet'] = discard_land(self.param.wet.coarsen({'xh':factor,'yh':factor}).mean())
+        param['wet_u'] = discard_land(grid.interp(param['wet'], 'X'))
+        param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
+        param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
+        
+        ##################### Coarsegraining velocities ########################
+        
+        data = xr.Dataset()
+
+        data['u'] = grid.interp(self.grid.interp(self.data.u, 'X').coarsen({'xh':factor, 'yh':factor}).mean(),'X') * param.wet_u
+        data['v'] = grid.interp(self.grid.interp(self.data.v, 'Y').coarsen({'xh':factor, 'yh':factor}).mean(),'Y') * param.wet_v
+        
+        ds_coarse = DatasetCM26(data, param, grid)
+        ds_coarse.factor = factor
+  
+        return ds_coarse
+
+    def subgrid_forcing(self, ds_coarse):
+        hires_advection = self.state.advection()
+        advx = remesh(hires_advection[0], self, ds_coarse)
+        advy = remesh(hires_advection[1], self, ds_coarse)
+        
+        coarse_advection = ds_coarse.state.advection()
+        SGSx = advx - coarse_advection[0]
+        SGSy = advy - coarse_advection[1]
+        return {'SGSx': SGSx, 'SGSy': SGSy}
+    
+    def sample_epoch(self, time=-1, factors = [2,4,6,10,20]):
+        '''
+        This function takes one time snapshot and produces training dataset
+        consisting of velocity gradients on a coarse grid and 
+        corresponding subgrid forcing, for a range of factors
+        '''
+        # Load a single snapshot for fast processing
+        snapshot = DatasetCM26(self.data.isel(time=time).compute(), self.param.compute(), self.grid)
+        
+        hires_advection = snapshot.state.advection()
+        advx = hires_advection[0].compute()
+        advy = hires_advection[1].compute()
+        
+        output = {}
+        for factor in factors:
+            ds_coarse = snapshot.coarsen(factor)
+            coarse_advection = ds_coarse.state.advection()
+            
+            ds_coarse.data['SGSx'] = remesh(advx, snapshot, ds_coarse) - coarse_advection[0]
+            ds_coarse.data['SGSy'] = remesh(advy, snapshot, ds_coarse) - coarse_advection[1]
+            sh_xy, sh_xx, vort_xy = ds_coarse.state.velocity_gradients()
+            ds_coarse.data['sh_xy'] = sh_xy
+            ds_coarse.data['sh_xx'] = sh_xx
+            ds_coarse.data['vort_xy'] = vort_xy
+
+            ds_coarse.data['sh_xy_h'] = ds_coarse.grid.interp(sh_xy, ['X','Y']) * ds_coarse.param.wet
+            ds_coarse.data['vort_xy_h'] = ds_coarse.grid.interp(vort_xy, ['X','Y']) * ds_coarse.param.wet
+            ds_coarse.data['sh_xx_q'] = ds_coarse.grid.interp(sh_xx, ['X','Y']) * ds_coarse.param.wet_c
+            
+            # Add reference: ZB20
+            zb = ds_coarse.state.ZB20(ZB_scaling=0.3)
+            ds_coarse.data['ZBx'] = zb['ZB2020u']
+            ds_coarse.data['ZBy'] = zb['ZB2020v']
+            
+            output[factor] = ds_coarse
+                            
+        return output
+            
+            
+        
+        

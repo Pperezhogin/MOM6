@@ -1,4 +1,7 @@
 from xgcm import Grid
+import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
 
 roundoff = 1e-40
 
@@ -36,7 +39,7 @@ def select_LatLon(array, Lat=(35,45), Lon=(5,15)):
                       y.name: slice(Lat[0],Lat[1])})
 
 def select_NA(variable, time=None):
-    x = select_LatLon(variable, Lat=(15, 89), Lon=(-90,-10))
+    x = select_LatLon(variable, Lat=(15, 65), Lon=(-90,-10))
     if 'time' in x.dims:
         if time is None:
             x = x.isel(time=-1)
@@ -44,17 +47,59 @@ def select_NA(variable, time=None):
             x = x.isel(time=time)
     return x
 
+def select_Pacific(variable, time=None):
+    x = select_LatLon(variable, Lat=(15, 65), Lon=(-250,-120))
+    if 'time' in x.dims:
+        if time is None:
+            x = x.isel(time=-1)
+        else:
+            x = x.isel(time=time)
+    return x
+
+def select_Equator(variable, time=None):
+    x = select_LatLon(variable, Lat=(-20, 20), Lon=(-230,-90))
+    if 'time' in x.dims:
+        if time is None:
+            x = x.isel(time=-1)
+        else:
+            x = x.isel(time=time)
+    return x
+
+# We compare masked fields because outside there may be 1e+20 values
+def compare(tested, control, mask, vmax=None, selector=select_NA):
+    tested = selector(tested * mask)
+    control = selector(control * mask)
+    
+    plt.figure(figsize=(12,10))
+    plt.subplot(2,2,1)
+    tested.plot(vmax=vmax, robust=True)
+    plt.xlabel(''); plt.ylabel('')
+    plt.title('Tested field')
+    plt.subplot(2,2,2)
+    control.plot(vmax=vmax, robust=True)
+    plt.title('Control field')
+    plt.xlabel(''); plt.ylabel('')
+    plt.subplot(2,2,3)
+    np.abs((tested-control)).plot(vmax=vmax, robust=True)
+    plt.title('Tested-control')
+    plt.xlabel(''); plt.ylabel('')
+    plt.tight_layout()
+    error = tested-control
+    relative_error = np.abs(error).mean() / np.abs(control).mean()
+    R2 = 1 - (error**2).mean() / (control**2).mean()
+    optimal_scaling = (tested*control).mean() / (tested**2).mean()
+    corr = xr.corr(tested, control)
+    print('Correlation:', float(corr))
+    print('Relative Error:', float(relative_error))
+    print('R2 = ', float(R2))
+    print('Optinal scaling:', float(optimal_scaling))
+    print('Nans:', int(np.sum(np.isnan(error))))
+
 class StateFunctions():
-    def __init__(self,data, param):
+    def __init__(self,data, param, grid):
         self.data = data
         self.param = param
-        self.grid = Grid(param, coords={
-                    'X': {'center': 'xh', 'right': 'xq'},
-                    'Y': {'center': 'yh', 'right': 'yq'}
-                    },
-                    boundary={'X':'periodic', 'Y':'fill'},
-                    fill_value = {'X':0, 'Y':0}
-                    )
+        self.grid = grid
         
     def velocity_gradients(self):
         param = self.param
