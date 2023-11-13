@@ -104,8 +104,8 @@ def export_ANN(ann, input_norms, output_norms, filename='ANN_test.nc'):
     ds['output_norms'] = xr.DataArray(output_norms.data, dims=[nrow])
 
     
-    print('x_test = ', ds['x_test'].data)
-    print('y_test = ', ds['y_test'].data)
+    # print('x_test = ', ds['x_test'].data)
+    # print('y_test = ', ds['y_test'].data)
     
     if os.path.exists(filename):
         print(f'Rewrite {filename} ?')
@@ -189,7 +189,7 @@ class AverageLoss():
 def dict_postfix(mydict, postfix):
     return {str(key)+postfix: val for key, val in mydict.items()}
 
-def minibatch(*arrays: np.array, batch_size=64, shuffle=True):
+def minibatch(*arrays, batch_size=64, shuffle=True):
     '''
     Recieves arbitrary number of numpy arrays
     of size 
@@ -204,7 +204,8 @@ def minibatch(*arrays: np.array, batch_size=64, shuffle=True):
     steps = int(np.ceil(len(arrays[0]) / batch_size))
     for step in range(steps):
         idx = order[step*batch_size:(step+1)*batch_size]
-        yield tuple(torch.as_tensor(array[idx]) for array in arrays)
+        yield tuple(torch.as_tensor(array[idx]) if isinstance(array, np.ndarray) else array[idx] for array in arrays)
+        
 
 def evaluate_test(net, *arrays: np.array, batch_size=64, postfix='_test', device=None):
     '''

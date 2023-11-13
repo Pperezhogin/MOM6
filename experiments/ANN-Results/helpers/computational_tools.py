@@ -94,10 +94,13 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     relative_error = np.abs(error).mean() / np.abs(control).mean()
     R2 = 1 - (error**2).mean() / (control**2).mean()
     optimal_scaling = (tested*control).mean() / (tested**2).mean()
+    error = tested * optimal_scaling - control
+    R2_max = 1 - (error**2).mean() / (control**2).mean()
     corr = xr.corr(tested, control)
     print('Correlation:', float(corr))
     print('Relative Error:', float(relative_error))
     print('R2 = ', float(R2))
+    print('R2 max = ', float(R2_max))
     print('Optinal scaling:', float(optimal_scaling))
     print('Nans:', int(np.sum(np.isnan(error))))
 
