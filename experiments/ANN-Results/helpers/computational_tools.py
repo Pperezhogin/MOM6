@@ -76,6 +76,9 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     tested = selector(tested)
     control = selector(control)
     
+    if vmax is None:
+        vmax = control.std() * 2
+    
     plt.figure(figsize=(12,10))
     plt.subplot(2,2,1)
     tested.plot(vmax=vmax, robust=True)
@@ -86,7 +89,7 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     plt.title('Control field')
     plt.xlabel(''); plt.ylabel('')
     plt.subplot(2,2,3)
-    np.abs((tested-control)).plot(vmax=vmax, robust=True)
+    (tested-control).plot(vmax=vmax, robust=True)
     plt.title('Tested-control')
     plt.xlabel(''); plt.ylabel('')
     plt.tight_layout()
@@ -160,7 +163,7 @@ class StateFunctions():
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
     
-    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
+    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -181,7 +184,6 @@ class StateFunctions():
         def tensor(x, torch_type=torch.float32):
             return torch.tensor(x.values).type(torch_type)
 
-        data = self.data
         grid = self.grid
         param = self.param
 
@@ -190,13 +192,25 @@ class StateFunctions():
 
         def extract_3x3(x):
             return image_to_3x3_stencil_gpt(tensor(_pad(x)))
+        
+        sh_xy, sh_xx, vort_xy = self.velocity_gradients()
+        if time_revers:
+            sh_xy = - sh_xy
+            sh_xx = - sh_xx
+            vort_xy = - vort_xy
+
+        sh_xy_h = grid.interp(sh_xy, ['X','Y']) * param.wet
+        vort_xy_h = grid.interp(vort_xy, ['X','Y']) * param.wet
+        sh_xx_q = grid.interp(sh_xx, ['X','Y']) * param.wet_c
 
         ########## First, do prediction for Txy stress ###########
         # Collect input features
-        sh_xy = extract_3x3(data.sh_xy)
-        sh_xx = extract_3x3(data.sh_xx_q)
-        vort_xy = extract_3x3(data.vort_xy)
-        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1)
+        input_features = torch.concat(
+                        [
+                        extract_3x3(sh_xy), 
+                        extract_3x3(sh_xx_q), 
+                        extract_3x3(vort_xy)
+                        ],-1)
 
         # Normalize input features
         input_norm = norm(input_features.type(torch.float64)).type(torch.float32)
@@ -208,17 +222,19 @@ class StateFunctions():
         # Now denormalize the output
         area = tensor((param.dxBu * param.dyBu)).reshape(-1,1)
         Txy = - Txy * input_norm * input_norm * area
-        Txy = Txy.reshape(data.sh_xy.shape)
+        Txy = Txy.reshape(sh_xy.shape)
         
         # Placing boundary conditions
         wet = tensor(param.wet_c)
         Txy = Txy * wet
 
         ########## Second, prediction of Txx, Tyy ###############
-        sh_xy = extract_3x3(data.sh_xy_h)
-        sh_xx = extract_3x3(data.sh_xx)
-        vort_xy = extract_3x3(data.vort_xy_h)
-        input_features = torch.concat([sh_xy, sh_xx, vort_xy],-1)
+        input_features = torch.concat(
+                        [
+                        extract_3x3(sh_xy_h), 
+                        extract_3x3(sh_xx), 
+                        extract_3x3(vort_xy_h)
+                        ],-1)
 
         # Normalize input features
         input_norm = norm(input_features.type(torch.float64)).type(torch.float32)
@@ -230,8 +246,8 @@ class StateFunctions():
         # Now denormalize the output
         area = tensor((param.dxT * param.dyT)).reshape(-1,1)
         Tdiag = - Tdiag * input_norm * input_norm * area
-        Txx = Tdiag[:,0].reshape(data.sh_xx.shape)
-        Tyy = Tdiag[:,1].reshape(data.sh_xx.shape)
+        Txx = Tdiag[:,0].reshape(sh_xx.shape)
+        Tyy = Tdiag[:,1].reshape(sh_xx.shape)
         
         # Placing boundary conditions
         wet = tensor(param.wet)
@@ -269,10 +285,12 @@ class StateFunctions():
         Tyy_padded = torch_pad(Tyy * dxT**2, (0,0,0,1)) # pad on the right with zero along meridional direction
         ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (dxCv * dyCv)
         
-        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'ZB20u': ZB20u, 'ZB20v': ZB20v}
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
+                'ZB20u': ZB20u, 'ZB20v': ZB20v, 
+                'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
     
-    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None):            
-        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy)
+    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False):            
+        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, time_revers)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0
@@ -280,7 +298,9 @@ class StateFunctions():
         ZB20u = pred['ZB20u'].detach().numpy() + self.param.dxCu * 0
         ZB20v = pred['ZB20v'].detach().numpy() + self.param.dxCv * 0
 
-        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'ZB20u': ZB20u, 'ZB20v': ZB20v}
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
+                'ZB20u': ZB20u, 'ZB20v': ZB20v,
+                'sh_xx': pred['sh_xx'], 'sh_xy': pred['sh_xy'], 'vort_xy': pred['vort_xy']}
     
     def KE_Arakawa(self):
         '''

@@ -74,6 +74,8 @@ class DatasetCM26():
         self.data['u'] = grid.interp(ds.usurf,'Y').fillna(0.) * param.wet_u
         self.data['v'] = grid.interp(ds.vsurf,'X').fillna(0.) * param.wet_v
         
+        self.data['time'] = ds['time']
+        
         self.grid = grid
         
     def __init__(self, data=None, param=None, grid=None):
@@ -156,14 +158,25 @@ class DatasetCM26():
         SGSy = advy - coarse_advection[1]
         return {'SGSx': SGSx, 'SGSy': SGSy}
     
-    def sample_epoch(self, time=-1, factors = [2,4,6,10,20]):
+    def sample_epoch(self, time=None, cftime=None, factors = [2,4,6,10,20]):
         '''
         This function takes one time snapshot and produces training dataset
         consisting of velocity gradients on a coarse grid and 
         corresponding subgrid forcing, for a range of factors
         '''
+        if time is not None and cftime is not None:
+            print('Error: use only one selector of time')
+            return
+        elif time is not None:
+            data = self.data.isel(time=time)
+        elif cftime is not None:
+            data = self.data.sel(time=cftime)
+        else:
+            print('Time argument is not provided')
+            return
+        
         # Load a single snapshot for fast processing
-        snapshot = DatasetCM26(self.data.isel(time=time).compute(), self.param.compute(), self.grid)
+        snapshot = DatasetCM26(data.compute(), self.param.compute(), self.grid)
         
         hires_advection = snapshot.state.advection()
         advx = hires_advection[0].compute()
@@ -175,20 +188,7 @@ class DatasetCM26():
             coarse_advection = ds_coarse.state.advection()
             
             ds_coarse.data['SGSx'] = remesh(advx, snapshot, ds_coarse) - coarse_advection[0]
-            ds_coarse.data['SGSy'] = remesh(advy, snapshot, ds_coarse) - coarse_advection[1]
-            sh_xy, sh_xx, vort_xy = ds_coarse.state.velocity_gradients()
-            ds_coarse.data['sh_xy'] = sh_xy
-            ds_coarse.data['sh_xx'] = sh_xx
-            ds_coarse.data['vort_xy'] = vort_xy
-
-            ds_coarse.data['sh_xy_h'] = ds_coarse.grid.interp(sh_xy, ['X','Y']) * ds_coarse.param.wet
-            ds_coarse.data['vort_xy_h'] = ds_coarse.grid.interp(vort_xy, ['X','Y']) * ds_coarse.param.wet
-            ds_coarse.data['sh_xx_q'] = ds_coarse.grid.interp(sh_xx, ['X','Y']) * ds_coarse.param.wet_c
-                        
+            ds_coarse.data['SGSy'] = remesh(advy, snapshot, ds_coarse) - coarse_advection[1]                        
             output[factor] = ds_coarse
                             
         return output
-            
-            
-        
-        
