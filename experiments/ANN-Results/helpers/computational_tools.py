@@ -159,7 +159,15 @@ class StateFunctions():
         Tyy = - Txx # There is no trace part
         Txy = sh_xy * grid.interp(viscosity,['X','Y']) * param.wet_c
         
-        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
+        smagx = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
+               + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
+               / (param.dxCu*param.dyCu)
+
+        smagy = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
+                   + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
+                   / (param.dxCv*param.dyCv)
+        
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy, 'smagx': smagx, 'smagy': smagy}
         
     def ZB20(self, ZB_scaling=1.0):
         param = self.param
