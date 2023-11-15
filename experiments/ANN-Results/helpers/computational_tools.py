@@ -129,6 +129,37 @@ class StateFunctions():
         vort_xy=dvdx-dudy
         
         return sh_xy, sh_xx, vort_xy
+    
+    def Smagorinsky(self, Cs_biharm=0.06):
+        sh_xy, sh_xx, vort_xy = self.velocity_gradients()
+        grid = self.grid
+        param = self.param
+        
+        # In center point
+        Shear_mag = param.wet * (sh_xx**2+grid.interp(sh_xy**2,['X','Y']))**0.5
+        
+        # Biharmonic viscosity coefficient
+        dx2h = param.dxT**2
+        dy2h = param.dyT**2
+        grid_sp2 = (2 * dx2h * dy2h) / (dx2h + dy2h)
+        Biharm_const = Cs_biharm * grid_sp2**2
+        
+        # Convert to laplacian viscosity
+        # using Griffies formula
+        # nu_biharm = nu_lap * dx**2 / 8.
+        Lap_const = Biharm_const * 8. / grid_sp2
+        
+        # Compute viscosity (i.e., harmonic one)
+        viscosity = Lap_const * Shear_mag
+        
+        # There is no minus here because
+        # we consider sign as 
+        # du/dt = div(T)
+        Txx = sh_xx * viscosity * param.wet
+        Tyy = - Txx # There is no trace part
+        Txy = sh_xy * grid.interp(viscosity,['X','Y']) * param.wet_c
+        
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
         
     def ZB20(self, ZB_scaling=1.0):
         param = self.param
