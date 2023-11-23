@@ -3,6 +3,8 @@ import xarray as xr
 from xgcm import Grid
 import numpy as np
 from helpers.computational_tools import StateFunctions
+import gcm_filters
+from xgcm.padding import pad
 
 def mask_from_nans(variable):
     mask = (1 - np.isnan(variable).astype('float32'))
@@ -12,25 +14,152 @@ def mask_from_nans(variable):
         mask = mask.drop('time')
     return mask
 
-# If there is any point in averaging box, it is treated as land point
-def discard_land(x):
-    return (x==1).astype('float32')
+def discard_land(x, percentile=1):
+    '''
+    Input is the mask array. Supposed that it was
+    obtained with interpolation or coarsegraining
+    
+    percentile controls how to treat land:
+    * percentile=1 means that if in an averaging
+    box during coarsening there was any land point,
+    we treat coarse point as land point
+    * percentile=0 means that of in an averaging box
+    there was at least one computational point, we 
+    treat coarse point as wet point
+    * percentile=0.5 means that if in an averaging
+    box there were more than half wet points,
+    we treat coarse point as wet point
+    '''
+    if percentile<0 or percentile>1:
+        print('Error: choose percentile between 0 and 1')
+    if percentile==1:
+        return (x==1).astype('float32')
+    else:
+        return (x>percentile).astype('float32')
 
-def remesh(x, hires_ds, ds_coarse):
-    if 'xq' in x.dims and 'yh' in x.dims:
-        variable = 'U-point'
-    if 'xh' in x.dims and 'yq' in x.dims:
-        variable = 'V-point'
+def operator_coarsen(u, v, ds_hires, ds_coarse):
+    '''
+    Algorithm: 
+    * Interpolate velocities to the center
+    * Coarsegrain
+    * Interpolate to nodes of Arakawa-C grid on coarse grid
+    '''
+    u_coarse = ds_coarse.grid.interp(
+              (ds_hires.grid.interp(u, 'X')*ds_hires.param.wet).coarsen(
+              {'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean() * ds_coarse.param.wet,'X') * ds_coarse.param.wet_u
     
-    if variable == 'U-point':
-        x_coarse = ds_coarse.grid.interp(hires_ds.grid.interp(x, 'X').coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean(),'X') * ds_coarse.param.wet_u
-        
-    if variable == 'V-point':
-        x_coarse = ds_coarse.grid.interp(hires_ds.grid.interp(x, 'Y').coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean(),'Y') * ds_coarse.param.wet_v
+    v_coarse = ds_coarse.grid.interp(
+              (ds_hires.grid.interp(v, 'Y')*ds_hires.param.wet).coarsen(
+              {'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean() * ds_coarse.param.wet,'Y') * ds_coarse.param.wet_v   
+    return u_coarse, v_coarse
+
+def operator_coarsen_weighted(u, v, ds_hires, ds_coarse):
+    '''
+    Algorithm: 
+    * Interpolate velocities to the center
+    * Coarsegrain
+    * Interpolate to nodes of Arakawa-C grid on coarse grid
     
-    return x_coarse
-        
-        
+    But now: all interpolations and coarsenings are weighted with mesh area
+    '''
+    
+    ############ U-velocity ############
+    areaU = ds_hires.param.dxCu * ds_hires.param.dyCu
+    # u velocity in T point weighted with area
+    u_T_weighted = ds_hires.grid.interp(u * areaU,'X') * ds_hires.param.wet
+    # Note, multiplication by mask is not needed because:
+    # All T points coming from boundary will be discarded on coarse grid
+    
+    areaU = ds_coarse.param.dxCu * ds_coarse.param.dyCu
+    u_coarse = ds_coarse.grid.interp(
+        u_T_weighted.coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).sum() * ds_coarse.param.wet
+        ,'X') \
+        * ds_coarse.param.wet_u / areaU
+
+    ############ V-velocity ############
+    areaV = ds_hires.param.dxCv * ds_hires.param.dyCv
+    # v velocity in T point weighted with area
+    v_T_weighted = ds_hires.grid.interp(v * areaV,'Y') * ds_hires.param.wet
+    
+    areaV = ds_coarse.param.dxCv * ds_coarse.param.dyCv
+    v_coarse = ds_coarse.grid.interp(
+        v_T_weighted.coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).sum() * ds_coarse.param.wet
+        ,'Y') \
+        * ds_coarse.param.wet_v / areaV
+                
+    return u_coarse, v_coarse
+
+def operator_gaussian(u, v, ds_hires, ds_coarse, FGR=2):
+    '''
+    Algorithm: apply top-hat filter with prescribed FGR
+    w.r.t. coarse grid step. The top-hat filter is 
+    informed with mask and local grid area
+    
+    The filtered field is downscaled to coarse grid
+    with subsampling operation (in a case of missing points,
+    with interpolation)
+    '''
+    FGR_coarse = FGR * ds_coarse.factor
+    ############ U-velocity ############
+    areaU = ds_hires.param.dxCu * ds_hires.param.dyCu
+    filter_simple_fixed_factor = gcm_filters.Filter(
+        filter_scale=FGR_coarse,
+        dx_min=1,
+        filter_shape=gcm_filters.FilterShape.GAUSSIAN,
+        grid_type=gcm_filters.GridType.REGULAR_WITH_LAND_AREA_WEIGHTED,
+        grid_vars={'area': areaU, 'wet_mask': ds_hires.param.wet_u}
+        )
+    u_filtered = filter_simple_fixed_factor.apply(u, dims=['yh', 'xq'])
+    u_coarse = u_filtered.interp(xq=ds_coarse.param.xq, yh=ds_coarse.param.yh)
+    
+    ############ V-velocity ############
+    areaV = ds_hires.param.dxCv * ds_hires.param.dyCv
+    filter_simple_fixed_factor = gcm_filters.Filter(
+        filter_scale=FGR_coarse,
+        dx_min=1,
+        filter_shape=gcm_filters.FilterShape.GAUSSIAN,
+        grid_type=gcm_filters.GridType.REGULAR_WITH_LAND_AREA_WEIGHTED,
+        grid_vars={'area': areaV, 'wet_mask': ds_hires.param.wet_v}
+        )
+    v_filtered = filter_simple_fixed_factor.apply(v, dims=['yq', 'xh'])
+    v_coarse = v_filtered.interp(xh=ds_coarse.param.xh, yq=ds_coarse.param.yq)
+    
+    return u_coarse, v_coarse
+
+def operator_Kochkov(u, v, ds_hires, ds_coarse):
+    '''
+    Algorithm: apply coarsegraining of velocities
+    in finite-volume fashion following Kochkov2021 (see their Supplementary). 
+    It should help preserve as much information about short
+    waves as possible.
+    
+    Also, it satisfies exactly the incompressibility condition for 
+    coarsegrained field
+    '''
+    factor = ds_coarse.factor
+    param = ds_coarse.param
+    
+    # Here we apply coarsening along y direction,
+    # while in x direction we do simple subsampling.
+    # Also, we weight with grid steps to satisy
+    # incompressibility condition.
+    u_coarse = (u*ds_hires.param.dyCu).rolling(yh=factor).sum().isel(
+        yh=slice(factor-1,None,factor), xq=slice(factor-1,None,factor))
+    # We update coordinates because of strange rolling algorithm and
+    # not exact (up to numerics) coincidence for xq coordinate
+    u_coarse['yh'] = param.yh
+    u_coarse['xq'] = param.xq
+    u_coarse = u_coarse / ds_coarse.param.dyCu * ds_coarse.param.wet_u
+
+    # V velocity
+    v_coarse = (v*ds_hires.param.dxCv).rolling(xh=factor).sum().isel(
+    yq=slice(factor-1,None,factor), xh=slice(factor-1,None,factor))
+    v_coarse['yq'] = param.yq
+    v_coarse['xh'] = param.xh
+    v_coarse = v_coarse / ds_coarse.param.dxCv * ds_coarse.param.wet_v
+
+    return u_coarse, v_coarse
+    
 class DatasetCM26():
     def from_cloud(self):
         rename = {'xt_ocean': 'xh', 'yt_ocean': 'yh', 'xu_ocean': 'xq', 'yu_ocean': 'yq'}
@@ -88,7 +217,7 @@ class DatasetCM26():
         self.state = StateFunctions(self.data, self.param, self.grid)
         return
 
-    def coarsen(self, factor=10):
+    def coarsen(self, factor=10, operator=operator_coarsen, percentile=1):
         ################# Start with coarsening grid steps #####################
         dxT = self.param.dxT.coarsen({'xh':factor}).sum().coarsen({'yh':factor}).mean()
         dyT = self.param.dyT.coarsen({'yh':factor}).sum().coarsen({'xh':factor}).mean()
@@ -102,7 +231,8 @@ class DatasetCM26():
         yyq = (yh[1:].data + yh[:-1].data)*0.5
         yq = np.zeros(yh.size)
         yq[:-1] = yyq
-        yq[-1] = yh[-1].data + (yh[-1].data-yh[-2].data)/2
+        #yq[-1] = yh[-1].data + (yh[-1].data-yh[-2].data)/2
+        yq[-1] = 90.0 # This is the property for all CM2.6 grids
         
         yq = xr.DataArray(yq, dims=['yq'])
         
@@ -131,7 +261,7 @@ class DatasetCM26():
         param['dyBu'] = grid.interp(param.dyT,['X','Y'])
         
         ######################### Creating wet masks ###########################
-        param['wet'] = discard_land(self.param.wet.coarsen({'xh':factor,'yh':factor}).mean())
+        param['wet'] = discard_land(self.param.wet.coarsen({'xh':factor,'yh':factor}).mean(), percentile=percentile)
         param['wet_u'] = discard_land(grid.interp(param['wet'], 'X'))
         param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
         param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
@@ -139,26 +269,25 @@ class DatasetCM26():
         ##################### Coarsegraining velocities ########################
         
         data = xr.Dataset()
-
-        data['u'] = grid.interp(self.grid.interp(self.data.u, 'X').coarsen({'xh':factor, 'yh':factor}).mean(),'X') * param.wet_u
-        data['v'] = grid.interp(self.grid.interp(self.data.v, 'Y').coarsen({'xh':factor, 'yh':factor}).mean(),'Y') * param.wet_v
-        
+        # Create coarse version of the dataset
         ds_coarse = DatasetCM26(data, param, grid)
         ds_coarse.factor = factor
+        
+        # Coarsegrain velocities
+        ds_coarse.data['u'], ds_coarse.data['v'] = operator(self.data.u, self.data.v, self, ds_coarse)
   
         return ds_coarse
 
-    def subgrid_forcing(self, ds_coarse):
+    def subgrid_forcing(self, ds_coarse, operator=operator_coarsen):
         hires_advection = self.state.advection()
-        advx = remesh(hires_advection[0], self, ds_coarse)
-        advy = remesh(hires_advection[1], self, ds_coarse)
+        advx, advy = operator(hires_advection[0], hires_advection[1], self, ds_coarse)
         
         coarse_advection = ds_coarse.state.advection()
         SGSx = advx - coarse_advection[0]
         SGSy = advy - coarse_advection[1]
         return {'SGSx': SGSx, 'SGSy': SGSy}
     
-    def sample_epoch(self, time=None, cftime=None, factors = [2,4,6,10,20]):
+    def sample_epoch(self, time=None, cftime=None, factors = [2,4,6,10,20], operator=operator_coarsen, percentile=1):
         '''
         This function takes one time snapshot and produces training dataset
         consisting of velocity gradients on a coarse grid and 
@@ -184,11 +313,13 @@ class DatasetCM26():
         
         output = {}
         for factor in factors:
-            ds_coarse = snapshot.coarsen(factor)
+            ds_coarse = snapshot.coarsen(factor, operator=operator, percentile=percentile)
             coarse_advection = ds_coarse.state.advection()
             
-            ds_coarse.data['SGSx'] = remesh(advx, snapshot, ds_coarse) - coarse_advection[0]
-            ds_coarse.data['SGSy'] = remesh(advy, snapshot, ds_coarse) - coarse_advection[1]                        
+            ds_coarse.data['SGSx'], ds_coarse.data['SGSy'] = operator(advx, advy, snapshot, ds_coarse)
+            ds_coarse.data['SGSx'] = ds_coarse.data['SGSx'] - coarse_advection[0]
+            ds_coarse.data['SGSy'] = ds_coarse.data['SGSy'] - coarse_advection[1]
+            
             output[factor] = ds_coarse
                             
         return output        

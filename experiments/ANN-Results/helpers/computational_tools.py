@@ -5,6 +5,8 @@ import xarray as xr
 from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN
 import torch
 from xgcm.padding import pad
+import cartopy.crs as ccrs
+import cmocean
 
 roundoff = 1e-40
 
@@ -68,31 +70,48 @@ def select_Equator(variable, time=None):
             x = x.isel(time=time)
     return x
 
+def select_Cem(variable, time=None):
+    x = select_LatLon(variable, Lat=(-10,15), Lon=(-260,-230))
+    if 'time' in x.dims:
+        if time is None:
+            x = x.isel(time=-1)
+        else:
+            x = x.isel(time=time)
+    return x
+
 # We compare masked fields because outside there may be 1e+20 values
 def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     if mask is not None:
-        tested = tested * mask
-        control = control * mask
-    tested = selector(tested)
-    control = selector(control)
+        mask_nan = mask.data.copy()
+        mask_nan[mask_nan==0.] = np.nan
+        tested = tested * mask_nan
+        control = control * mask_nan
+    tested = selector(tested).compute()
+    control = selector(control).compute()
     
     if vmax is None:
         vmax = control.std() * 2
     
-    plt.figure(figsize=(12,10))
-    plt.subplot(2,2,1)
-    tested.plot(vmax=vmax, robust=True)
-    plt.xlabel(''); plt.ylabel('')
-    plt.title('Tested field')
-    plt.subplot(2,2,2)
-    control.plot(vmax=vmax, robust=True)
-    plt.title('Control field')
-    plt.xlabel(''); plt.ylabel('')
-    plt.subplot(2,2,3)
-    (tested-control).plot(vmax=vmax, robust=True)
-    plt.title('Tested-control')
-    plt.xlabel(''); plt.ylabel('')
+    central_latitude = float(y_coord(control).mean())
+    central_longitude = float(x_coord(control).mean())
+    fig, axes = plt.subplots(2,2, figsize=(12, 10), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
+    cmap = cmocean.cm.balance
+    cmap.set_bad('gray')
+    
+    ax = axes[0][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
+    im = tested.plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    ax.set_title('Tested field')
+    ax = axes[0][1]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
+    control.plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    ax.set_title('Control field')
+    ax = axes[1][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
+    (tested-control).plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    ax.set_title('Tested-control')
     plt.tight_layout()
+    plt.colorbar(im, ax=axes, shrink=0.9, aspect=30, extend='both')
+    axes[1][1].remove()
+    
+    ########## Metrics ##############
     error = tested-control
     relative_error = np.abs(error).mean() / np.abs(control).mean()
     R2 = 1 - (error**2).mean() / (control**2).mean()
@@ -105,13 +124,51 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     print('R2 = ', float(R2))
     print('R2 max = ', float(R2_max))
     print('Optinal scaling:', float(optimal_scaling))
-    print('Nans:', int(np.sum(np.isnan(error))))
+    print(f'Nans [test/control]: [{int(np.sum(np.isnan(tested)))}, {int(np.sum(np.isnan(control)))}]')
 
 class StateFunctions():
     def __init__(self,data, param, grid):
         self.data = data
         self.param = param
         self.grid = grid
+    
+    def compute_EZ_source(self, fx, fy):
+        '''
+        Compute local and global sources of energy
+        and enstrophy for a given forcing
+        '''
+        data = self.data
+        param = self.param
+        grid = self.grid
+
+        areaT = param.dxT * param.dyT
+        areaU = param.dxCu * param.dyCu
+        areaV = param.dxCv * param.dyCv
+        areaB = param.dxBu * param.dyBu
+    
+        # Energy source
+        Ex = fx * data.u
+        Ey = fy * data.v
+        dEdt = (grid.interp(Ex * areaU,'X') + grid.interp(Ey * areaV,'Y')) * param.wet
+
+        # Enstrophy source
+        f = self.relative_vorticity(fx,fy)
+        vorticity = self.relative_vorticity(data.u,data.v)
+        dZdt = f * vorticity * areaB
+        
+        # Palinstrophy source
+        def gradient(w):
+            wx = grid.diff(w, 'X') / param.dxCv * param.wet_v
+            wy = grid.diff(w, 'Y') / param.dyCu * param.wet_u
+            return wx, wy
+        
+        px, py = gradient(f)
+        wx, wy = gradient(vorticity)
+        Px = px * wx * areaV
+        Py = py * wy * areaU
+        dPdt = (grid.interp(Px,'Y') + grid.interp(Py,'X')) * param.wet
+
+        return {'dEdt_local': dEdt, 'dZdt_local': dZdt, 'dPdt_local': dPdt, 'dEdt': float((dEdt).sum()), 'dZdt': float((dZdt).sum()), 'dPdt': float((dPdt.sum()))}
         
     def velocity_gradients(self):
         param = self.param
@@ -375,14 +432,16 @@ class StateFunctions():
         KEy = grid.diff(KE, 'Y') * IdyCv * param.wet_v
         return (KEx, KEy)
 
-    def relative_vorticity(self):
+    def relative_vorticity(self, u=None, v=None):
         '''
         https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L472
         '''
         param = self.param
-        u = self.data.u
-        v = self.data.v
         grid = self.grid
+        
+        if u is None and v is None:
+            u = self.data.u
+            v = self.data.v
         
         dyCv = param.dyCv
         dxCu = param.dxCu
