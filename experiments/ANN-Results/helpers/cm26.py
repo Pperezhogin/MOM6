@@ -161,15 +161,22 @@ def operator_Kochkov(u, v, ds_hires, ds_coarse):
     return u_coarse, v_coarse
     
 class DatasetCM26():
-    def from_cloud(self):
+    def from_cloud(self, source='leap'):
         rename = {'xt_ocean': 'xh', 'yt_ocean': 'yh', 'xu_ocean': 'xq', 'yu_ocean': 'yq'}
         rename_param = {'dxt': 'dxT', 'dyt': 'dyT', 'dxu': 'dxBu', 'dyu': 'dyBu'}
         
-        url = "gs://leap-persistent-ro/groundpepper/GFDL_cm2.6/GFDL_CM2_6_CONTROL_DAILY_SURF.zarr"
-        ds = xr.open_dataset(url, engine='zarr', chunks={}, use_cftime=True).rename(**rename).chunk({'yh':-1, 'yq':-1})
-        
-        cat = open_catalog("https://raw.githubusercontent.com/pangeo-data/pangeo-datastore/master/intake-catalogs/ocean/GFDL_CM2.6.yaml")
-        param_init  = cat["GFDL_CM2_6_grid"].to_dask().rename(**rename, **rename_param).chunk({'yh':-1, 'yq':-1})
+        if source == 'leap':
+            ds = xr.open_dataset("gs://leap-persistent-ro/groundpepper/GFDL_cm2.6/GFDL_CM2_6_CONTROL_DAILY_SURF.zarr", engine='zarr', chunks={}, use_cftime=True)
+            cat = open_catalog("https://raw.githubusercontent.com/pangeo-data/pangeo-datastore/master/intake-catalogs/ocean/GFDL_CM2.6.yaml")
+            param_init  = cat["GFDL_CM2_6_grid"].to_dask()
+        elif source == 'cmip6':
+            ds = xr.open_dataset("gs://cmip6/GFDL_CM2_6/control/surface", engine='zarr', chunks={}, use_cftime=True)
+            param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr')
+        else:
+            print('Error: wrong source parameter')
+            
+        ds = ds.rename(**rename).chunk({'yh':-1, 'yq':-1})
+        param_init = param_init.rename(**rename, **rename_param).chunk({'yh':-1, 'yq':-1})
 
         param = xr.Dataset()
         for key in ['xh', 'yh', 'xq', 'yq']:
@@ -207,9 +214,9 @@ class DatasetCM26():
         
         self.grid = grid
         
-    def __init__(self, data=None, param=None, grid=None):
+    def __init__(self, data=None, param=None, grid=None, source='leap'):
         if data is None and param is None:
-            self.from_cloud()
+            self.from_cloud(source=source)
         else:
             self.data = data
             self.param = param
