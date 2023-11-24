@@ -37,3 +37,6 @@ experiments/ANN-Results/.ffmpeg/*
 experiments/ANN-Results/*.gif
 experiments/ANN-Results/*.mp4
 experiments/ANN-Results/helpers_mom6/__pycache__/*
+experiments/ANN-Results/animations/*
+experiments/ANN-Results/figures/*
+*.ipynb_checkpoints*
