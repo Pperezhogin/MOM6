@@ -39,6 +39,47 @@ def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loo
         duration=duration,
         loop=loop)
     
+def create_animation_ffmpeg(fun, idx, filename='my-video.mp4', dpi=200, FPS=18, resolution=None):
+    folder = '.ffmpeg/'+filename.split('.')[0]
+
+    def create_snapshots():
+        for i in idx:
+            fun(i)
+            plt.savefig(f'{folder}/frame-{i}.png', dpi=dpi, bbox_inches='tight')
+            plt.close()
+            print(f'Frame {i} is created', end='\r')
+
+    if os.path.exists(folder):
+        if os.path.exists(folder+'/frame-0.png'):
+            print(f'Frames already exists in folder {folder}')
+            x = input('Do you want to update snapshots?: [y/n]')
+            if x=='y':
+                create_snapshots()
+            elif x=='n':
+                print('Frames are not updated\n')
+    else:
+        os.system(f'mkdir -p {folder}')
+        create_snapshots()
+
+    if resolution is None:
+        resolution = list(Image.open(f'{folder}/frame-0.png').size)
+        for i in [0,1]:
+            resolution[i] = (resolution[i]//2)*2
+        print(f'Native resolution of snapshots is used: {resolution[0]}x{resolution[1]}\n')
+    else:
+        for i in [0,1]:
+            resolution[i] = (resolution[i]//2)*2
+        print(f'Resolution is set to {resolution[0]}x{resolution[1]}\n')
+
+    print(f'Animation {filename} at FPS={FPS} will last for {round(len(idx)/FPS,1)} seconds. The frames are saved to \n{folder}\n')
+    ffmpeg_command = f'ffmpeg -y -framerate {FPS} -i {folder}/frame-%d.png -s:v {resolution[0]}x{resolution[1]} -c:v libx264 -profile:v high -crf 20 -pix_fmt yuv420p {filename}'
+    try:
+        os.system(ffmpeg_command)
+    except:
+        print('Something went wrong. Try to run the following command in the terminal:\n')
+        print('Optional: module load ffmpeg/4.2.4')
+        print(f'cd {os.getcwd()}; {ffmpeg_command}')
+    
 def merge_gifs(gif_files, output_file, fps=20):
     '''
     Note it is purely chatgpt code

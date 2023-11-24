@@ -12,6 +12,7 @@ config.status
 configure
 /Makefile
 Makefile.mkmf
+.vscode/*
 
 experiments/ZB20-Results/*.pdf
 experiments/ZB20-Results/*.png
@@ -32,3 +33,7 @@ experiments/ANN-Results/*.pdf
 experiments/ANN-Results/*.png
 experiments/ANN-Results/*.nc
 experiments/ANN-Results/helpers/__pycache__/*
+experiments/ANN-Results/.ffmpeg/*
+experiments/ANN-Results/*.gif
+experiments/ANN-Results/*.mp4
+experiments/ANN-Results/helpers_mom6/__pycache__/*

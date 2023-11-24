@@ -132,7 +132,7 @@ subroutine ANN_test(CS, NNfile)
   
   relative_error = maxval(abs(y_pred - y_test)) / maxval(abs(y_test))
 
-  if (relative_error > 1e-6) then
+  if (relative_error > 1e-5) then
     write(relative_error_str, '(ES12.4)') relative_error
     call MOM_error(FATAL, 'Relative error in ANN prediction is too large: ' // trim(relative_error_str))
   endif

@@ -83,8 +83,8 @@ type, public :: ZB2020_CS ; private
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
   character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_64_neurons_ZB-ver-1.2.nc" !< Default ANN with ZB20 model
-  character(len=200) :: ann_file_Txy = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_Txy_ZB.nc"
-  character(len=200) :: ann_file_Txx_Tyy = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_Txx_Tyy_ZB.nc"
+  character(len=200) :: ann_file_Txy = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_Kochkov_vorticity/Txy_epoch_1000.nc"
+  character(len=200) :: ann_file_Txx_Tyy = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_Kochkov_vorticity/Txx_Tyy_epoch_1000.nc"
   real :: subroundoff_shear
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
