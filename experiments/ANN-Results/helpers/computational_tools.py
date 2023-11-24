@@ -8,6 +8,10 @@ from xgcm.padding import pad
 import cartopy.crs as ccrs
 import cmocean
 import xrft
+from torch.nn.functional import pad as torch_pad
+import warnings
+warnings.filterwarnings("ignore")
+
 
 roundoff = 1e-40
 
@@ -532,8 +536,6 @@ class StateFunctions():
         dxBu = tensor(param.dxBu)
         dyBu = tensor(param.dyBu)
         
-        from torch.nn.functional import pad as torch_pad
-        
         def zonal_circular_pad(x, right=True):
             y = torch.zeros(x.shape[-2], x.shape[-1]+1)
             if right:
@@ -618,9 +620,44 @@ class StateFunctions():
         dxCu = param.dxCu
         IareaBu = 1. / (param.dxBu * param.dyBu)
         # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L309-L310
-        dvdx = grid.diff(param.wet_v * v*dyCv,'X')
-        dudy = grid.diff(param.wet_u * u*dxCu,'Y')
+        dvdx = grid.diff(param.wet_v * v * dyCv,'X')
+        dudy = grid.diff(param.wet_u * u * dxCu,'Y')
         return (dvdx - dudy) * IareaBu * param.wet_c
+    
+    def relative_vorticity_torch(self, u, v):
+        '''
+        Analog of the function above but for torch tensors
+        Here we assume that u and v are torch tensors
+        '''
+        def tensor(x, torch_type=torch.float32):
+            return torch.tensor(x.values).type(torch_type)
+        
+        param = self.param
+        dyCv = tensor(param.dyCv)
+        dxCu = tensor(param.dxCu)
+        wet_u = tensor(param.wet_u)
+        wet_v = tensor(param.wet_v)
+        wet_c = tensor(param.wet_c)
+        IareaBu = tensor(1. / (param.dxBu * param.dyBu))
+        
+        V = wet_v * v * dyCv
+        U = wet_u * u * dxCu
+        
+        def zonal_circular_pad(x, right=True):
+            y = torch.zeros(x.shape[-2], x.shape[-1]+1)
+            if right:
+                y[:,:-1] = x
+                y[:,-1] = x[:,0]
+            else:
+                y[:,1:] = x
+                y[:,0] = x[:,-1]
+            return y
+        
+        V_padded = zonal_circular_pad(V, right=True)
+        dvdx = V_padded[:,1:] - V_padded[:,:-1]
+        U_padded = torch_pad(U, (0,0,0,1)) # pad on the right with zero along meridional 
+        dudy = U_padded[1:,:] - U_padded[:-1,:]
+        return (dvdx - dudy) * IareaBu * wet_c
 
     def PV_cross_uv(self):
         '''
