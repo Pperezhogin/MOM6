@@ -7,6 +7,7 @@ import torch
 from xgcm.padding import pad
 import cartopy.crs as ccrs
 import cmocean
+import xrft
 
 roundoff = 1e-40
 
@@ -127,12 +128,73 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     print(f'Nans [test/control]: [{int(np.sum(np.isnan(tested)))}, {int(np.sum(np.isnan(control)))}]')
 
 class StateFunctions():
-    def __init__(self,data, param, grid):
+    def __init__(self, data, param, grid):
         self.data = data
         self.param = param
         self.grid = grid
+        
+    def sample_grid_harmonic(self, grid_harmonic='chess_vorticity'):
+        '''
+        Available grid harmonics to sample:
+        'chess_vorticity'
+        'chess_divergence'
+        'plane_wave'
+        
+        Return new object StateFunctions with data containing waves
+        '''
+        data = self.data[['u','v']].copy()
+        ny, nx = data.u.shape
+
+        if grid_harmonic in ['chess_vorticity', 'chess_divergence']:
+            u = np.zeros((ny,nx))
+            v = np.zeros((ny,nx))
+            
+            # assign random phase (1 or -1)
+            phase = -1 if np.random.randint(2)==0 else 1
+
+            if grid_harmonic == 'chess_vorticity':
+                sign = -1
+            elif grid_harmonic == 'chess_divergence':
+                sign = 1
+            else:
+                print('Error: grid_harmonic is wrongly specified')
+
+            for j in range(ny):
+                for i in range(nx):
+                    idx = i+j
+                    u[j,i] = phase *        (-1)**(idx)
+                    v[j,i] = phase * sign * (-1)**(idx)
+
+        elif grid_harmonic == 'plane_wave':
+            freq_x = 0
+            freq_y = 0
+            while np.abs(freq_x)<2/3*np.pi and np.abs(freq_y)<2/3*np.pi:
+                freq_x = np.random.rand() * np.pi * 2 - np.pi
+                freq_y = np.random.rand() * np.pi * 2 - np.pi
+
+            phase_u = np.random.rand()*2*np.pi
+            phase_v = np.random.rand()*2*np.pi
+
+            i = np.ones(ny).reshape(-1,1)@np.arange(nx).reshape(1,-1)
+            j = np.arange(ny).reshape(-1,1)@np.ones(nx).reshape(1,-1)
+
+            u = np.sin(freq_x * i + freq_y * j + phase_u)
+            v = np.sin(freq_x * i + freq_y * j + phase_v)
+        else:
+            print('Error: wrong grid harmonic')
+                
+        data['u'] = xr.DataArray(u, dims=['yh', 'xq']) * self.param.wet_u
+        data['v'] = xr.DataArray(v, dims=['yq', 'xh']) * self.param.wet_v
+        
+        return StateFunctions(data, self.param, self.grid)
     
-    def compute_EZ_source(self, fx, fy):
+    def EZ_source_ANN(self, ann_Txy=None, ann_Txx_Tyy=None):
+        ann = self.ANN(ann_Txy, ann_Txx_Tyy)
+        
+        return self.compute_EZ_source(
+            ann['ZB20u'], ann['ZB20v'], ann['Txy'], ann['Txx'], ann['Tyy'])
+        
+    def compute_EZ_source(self, fx, fy, Txy=None, Txx=None, Tyy=None):
         '''
         Compute local and global sources of energy
         and enstrophy for a given forcing
@@ -146,10 +208,18 @@ class StateFunctions():
         areaV = param.dxCv * param.dyCv
         areaB = param.dxBu * param.dyBu
     
-        # Energy source
+        # Energy source total
         Ex = fx * data.u
         Ey = fy * data.v
         dEdt = (grid.interp(Ex * areaU,'X') + grid.interp(Ey * areaV,'Y')) * param.wet
+        
+        # Energy source Galilean-invariant form
+        if Txy is not None:
+            sh_xy, sh_xx, vort_xy = self.velocity_gradients()
+            dEdt_G = - 0.5 * ((Txx * sh_xx - Tyy * sh_xx) * areaT + \
+                grid.interp(2 * Txy * sh_xy * areaB,['X','Y']))
+        else:
+            dEdt_G = None
 
         # Enstrophy source
         f = self.relative_vorticity(fx,fy)
@@ -168,7 +238,66 @@ class StateFunctions():
         Py = py * wy * areaU
         dPdt = (grid.interp(Px,'Y') + grid.interp(Py,'X')) * param.wet
 
-        return {'dEdt_local': dEdt, 'dZdt_local': dZdt, 'dPdt_local': dPdt, 'dEdt': float((dEdt).sum()), 'dZdt': float((dZdt).sum()), 'dPdt': float((dPdt.sum()))}
+        return {'dEdt_G': dEdt_G, 'dEdt_local': dEdt, 'dZdt_local': dZdt, 'dPdt_local': dPdt, 'dEdt': float((dEdt).sum()), 'dZdt': float((dZdt).sum()), 'dPdt': float((dPdt.sum()))}    
+           
+    def transfer(self, fu_in, fv_in,
+            region = 'NA', window='hann', 
+            nfactor=2, truncate=False, detrend='linear', 
+            window_correction=True, compensated=True):
+        
+        if region == 'NA':
+            kw = {'Lat': (40,60), 'Lon': (-40,-20)}
+        elif region == 'Pacific':
+            kw = {'Lat': (20,40), 'Lon': (-200,-180)}
+        else:
+            print('Error: wrong region')
+            
+        # Select desired Lon-Lat square
+        u = select_LatLon(self.data.u,**kw)
+        v = select_LatLon(self.data.v,**kw)
+        fu = select_LatLon(fu_in,**kw)
+        fv = select_LatLon(fv_in,**kw)
+        
+        if u.shape != v.shape:
+            shape = [None]*2
+            shape[0] = min(u.shape[0], v.shape[0])
+            shape[1] = min(u.shape[1], v.shape[1])
+            def sel(x):
+                return x[:shape[0],:shape[1]]
+            u = sel(u)
+            v = sel(v)
+            fu = sel(fu)
+            fv = sel(fv)
+
+        # Average grid spacing (result in metres)
+        dx = select_LatLon(self.param.dxT,**kw).mean().values
+        dy = select_LatLon(self.param.dyT,**kw).mean().values
+
+        # define uniform grid
+        for variable in [u, fu]:
+            variable['xq'] = dx * np.arange(len(u.xq))
+            variable['yh'] = dy * np.arange(len(u.yh))
+            
+        for variable in [v, fv]:
+            variable['xh'] = dx * np.arange(len(v.xh))
+            variable['yq'] = dy * np.arange(len(v.yq))
+
+        Eu = xrft.isotropic_cross_spectrum(u, fu, dim=('xq','yh'), window=window, nfactor=nfactor, 
+            truncate=truncate, detrend=detrend, window_correction=window_correction)
+        Ev = xrft.isotropic_cross_spectrum(v, fv, dim=('xh','yq'), window=window, nfactor=nfactor, 
+            truncate=truncate, detrend=detrend, window_correction=window_correction)
+        
+        E = (Eu+Ev)
+        E['freq_r'] = E['freq_r']*2*np.pi # because library returns frequencies, but not wavenumbers
+
+        if compensated:
+            return np.real(E) * E['freq_r']
+        else:
+            return np.real(E)
+    
+    def transfer_ANN(self, ann_Txy, ann_Txx_Tyy, kw_ann={}, kw_sp={}):
+        ann = self.ANN(ann_Txy, ann_Txx_Tyy, **kw_ann)
+        return self.transfer(ann['ZB20u'], ann['ZB20v'], **kw_sp)
         
     def velocity_gradients(self):
         param = self.param
@@ -259,7 +388,7 @@ class StateFunctions():
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
     
-    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False):
+    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False, rotation=0, reflect_x=False, reflect_y=False):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -287,25 +416,53 @@ class StateFunctions():
             return pad(x, grid, {'X':1, 'Y':1})
 
         def extract_3x3(x):
-            return image_to_3x3_stencil_gpt(tensor(_pad(x)))
+            return image_to_3x3_stencil_gpt(tensor(_pad(x)), 
+                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
         
         sh_xy, sh_xx, vort_xy = self.velocity_gradients()
-        if time_revers:
-            sh_xy = - sh_xy
-            sh_xx = - sh_xx
-            vort_xy = - vort_xy
 
         sh_xy_h = grid.interp(sh_xy, ['X','Y']) * param.wet
         vort_xy_h = grid.interp(vort_xy, ['X','Y']) * param.wet
         sh_xx_q = grid.interp(sh_xx, ['X','Y']) * param.wet_c
 
         ########## First, do prediction for Txy stress ###########
+        ## Note on rotation ##
+        # Consider rotation=90 as an example
+        # We need not only to rotate input features, but also
+        # change sign of input sh_xy and sh_xx
+        # Also, output Txy should flip sign, but Txx and Tyy should
+        # flip each other
+        # Vorticity is a scalar and it does not change sign
+        if rotation in [0, 180]:
+            rotation_sign = 1
+        elif rotation in [90, 270]:
+            rotation_sign = -1
+        else:
+            print('Error: use rotation one of 0, 90, 180, 270')
+        
+        ## Note on reflection ##
+        # It does not change prediction of Txx, Tyy
+        reflect_sign = 1
+        if reflect_x:
+            reflect_sign = - reflect_sign
+        if reflect_y:
+            reflect_sign = - reflect_sign
+        
+        # This key enables prediction of
+        # -T(-features)
+        # For Smagorinsky model, it is the same value
+        # Reversibility does not contribute to feature rearrangement
+        if time_revers:
+            reverse_sign = -1
+        else:
+            reverse_sign = 1
+        
         # Collect input features
         input_features = torch.concat(
                         [
-                        extract_3x3(sh_xy), 
-                        extract_3x3(sh_xx_q), 
-                        extract_3x3(vort_xy)
+                        extract_3x3(sh_xy   * (rotation_sign * reflect_sign * reverse_sign)), 
+                        extract_3x3(sh_xx_q * (rotation_sign * reverse_sign)), 
+                        extract_3x3(vort_xy * (reflect_sign  * reverse_sign))
                         ],-1)
 
         # Normalize input features
@@ -313,7 +470,9 @@ class StateFunctions():
         input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction
-        Txy = ann_Txy(input_features)
+        # Note: rotation sign here transforms prediction back
+        # to original frame
+        Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign * reverse_sign)
 
         # Now denormalize the output
         area = tensor((param.dxBu * param.dyBu)).reshape(-1,1)
@@ -327,9 +486,9 @@ class StateFunctions():
         ########## Second, prediction of Txx, Tyy ###############
         input_features = torch.concat(
                         [
-                        extract_3x3(sh_xy_h), 
-                        extract_3x3(sh_xx), 
-                        extract_3x3(vort_xy_h)
+                        extract_3x3(sh_xy_h   * (rotation_sign * reflect_sign * reverse_sign)), 
+                        extract_3x3(sh_xx     * (rotation_sign * reverse_sign)), 
+                        extract_3x3(vort_xy_h * (reflect_sign  * reverse_sign))
                         ],-1)
 
         # Normalize input features
@@ -337,13 +496,25 @@ class StateFunctions():
         input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction
-        Tdiag = ann_Txx_Tyy(input_features)
+        Tdiag = ann_Txx_Tyy(input_features) * reverse_sign
 
         # Now denormalize the output
         area = tensor((param.dxT * param.dyT)).reshape(-1,1)
         Tdiag = - Tdiag * input_norm * input_norm * area
-        Txx = Tdiag[:,0].reshape(sh_xx.shape)
-        Tyy = Tdiag[:,1].reshape(sh_xx.shape)
+        
+        # This transformation transforms the prediction 
+        # back to original frame
+        if rotation in [0, 180]:
+            Txx_idx = 0
+            Tyy_idx = 1
+        elif rotation in [90, 270]:
+            Txx_idx = 1
+            Tyy_idx = 0
+        else:
+            print('Error: use rotation one of 0, 90, 180, 270')
+        
+        Txx = Tdiag[:,Txx_idx].reshape(sh_xx.shape)
+        Tyy = Tdiag[:,Tyy_idx].reshape(sh_xx.shape)
         
         # Placing boundary conditions
         wet = tensor(param.wet)
@@ -385,8 +556,8 @@ class StateFunctions():
                 'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
     
-    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False):            
-        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, time_revers)
+    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False, rotation=0, reflect_x=False, reflect_y=False):            
+        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, time_revers, rotation, reflect_x, reflect_y)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0

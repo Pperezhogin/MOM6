@@ -196,7 +196,7 @@ class DatasetCM26():
         param['dxCv'] = grid.interp(param.dxT,'Y')
         param['dyCv'] = grid.interp(param.dyT,'Y')
         
-        self.param = param
+        self.param = param.compute()
         
         self.data = xr.Dataset()
         
@@ -305,7 +305,7 @@ class DatasetCM26():
             return
         
         # Load a single snapshot for fast processing
-        snapshot = DatasetCM26(data.compute(), self.param.compute(), self.grid)
+        snapshot = DatasetCM26(data.compute(), self.param, self.grid)
         
         hires_advection = snapshot.state.advection()
         advx = hires_advection[0].compute()

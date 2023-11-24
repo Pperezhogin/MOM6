@@ -26,15 +26,33 @@ def image_to_3x3_stencil(x):
             k += 1
     return y
 
-def image_to_3x3_stencil_gpt(x):
+def image_to_3x3_stencil_gpt(x, rotation=0, reflect_x=False, reflect_y=False):
     '''
     It is the same function, but 1000 times faster
     suggested by gpt. The result is the same up to 
     float32 precision (i.e., it is not exact)
+    
+    The rotation parameter allows to rotate input stencil
+    by 0, 90, 180, 270 degrees conunter-clockwise
     '''
-    ny, nx = x.shape
-    patches = x.unfold(0, 3, 1).unfold(1, 3, 1).reshape(-1, 9)
-    return patches
+    
+    if rotation == 0:
+        y = x.unfold(0,3,1).unfold(1,3,1)
+    elif rotation == 90:
+        y = x.unfold(1,3,1).flip(-1).unfold(0,3,1)
+    elif rotation == 180:
+        y = x.unfold(0,3,1).flip(-1).unfold(1,3,1).flip(-1)
+    elif rotation == 270:
+        y = x.unfold(1,3,1).unfold(0,3,1).flip(-1)
+    else:
+        print('Error: use rotation one of 0, 90, 180, 270')
+        
+    if reflect_x:
+        y = y.flip(-1)
+    if reflect_y:
+        y = y.flip(-2) 
+        
+    return y.reshape(-1,9)
 
 def log_to_xarray(log_dict):
     anykey = list(log_dict.keys())[0]
