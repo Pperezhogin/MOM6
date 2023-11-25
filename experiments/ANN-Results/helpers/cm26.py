@@ -135,7 +135,7 @@ class DatasetCM26():
         del self.data, self.param, self.grid, self.state
         return
     
-    def init_coarse_grid(self, factor=10, percentile=1):
+    def init_coarse_grid(self, factor=10, percentile=0):
         '''
         Here "self" is the DatasetCM26 object
         We cache the coarse grid initialization because it takes
@@ -195,7 +195,7 @@ class DatasetCM26():
 
         return param.compute(), grid
 
-    def coarsen(self, factor=10, operator=CoarsenWeighted(), percentile=0):
+    def coarsen(self, factor=10, operator=CoarsenWeighted(), percentile=0, param=None, grid=None):
         '''
         Coarsening of the dataset with a given factor
 
@@ -205,7 +205,8 @@ class DatasetCM26():
         * Return new dataset with coarse velocities
         '''
         # Initialize coarse grid
-        param, grid = self.init_coarse_grid(factor=factor, percentile=percentile)
+        if param is None or grid is None:
+            param, grid = self.init_coarse_grid(factor=factor, percentile=percentile)
 
         ##################### Coarsegraining velocities ########################
         data = xr.Dataset()
@@ -217,23 +218,36 @@ class DatasetCM26():
         ds_coarse.data['u'], ds_coarse.data['v'] = operator(self.data.u, self.data.v, self, ds_coarse)
   
         return ds_coarse
-    
+  
     def sample_batch(self, time=np.random.randint(0,7305,1), factors = [2,4,6,10,20], operator=CoarsenWeighted(), percentile=0):
         '''
         This function samples batch and produces training dataset
         consisting of velocity gradients on a coarse grid and 
         corresponding subgrid forcing, for a range of factors
         '''
+        ############## Automatic generation of coarse grids ###################
+        try:
+            for factor in factors:
+                self.params[factor]; self.grids[factor]
+        except:
+            self.params = {}; self.grids = {}
+            for factor in factors:
+                self.params[factor], self.grids[factor] = self.init_coarse_grid(factor=factor, percentile=percentile)
+
+        ############# Sampling batch from the dataset ###################
         data = self.data.isel(time=time)
         batch = DatasetCM26(data.compute(), self.param, self.grid)
 
+        ############# High-resolution advection #################
         hires_advection = batch.state.advection()
         advx = hires_advection[0].compute()
         advy = hires_advection[1].compute()
         
+        ############## Coarsegraining and SGS ###################
         output = {}
         for factor in factors:
-            ds_coarse = batch.coarsen(factor, operator=operator, percentile=percentile)
+            ds_coarse = batch.coarsen(factor, operator=operator, percentile=percentile, 
+                                      param=self.params[factor], grid=self.grids[factor])
             coarse_advection = ds_coarse.state.advection()
             
             ds_coarse.data['SGSx'], ds_coarse.data['SGSy'] = operator(advx, advy, batch, ds_coarse)
