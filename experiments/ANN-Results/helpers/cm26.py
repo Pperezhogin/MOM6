@@ -90,8 +90,9 @@ class DatasetCM26():
         param['wet'] = mask_from_nans(ds.surface_salt)
 
         # Set manually wall for the layer of points
-        # close to the north pole
+        # close to the north (and southern) pole
         param['wet'][{'yh':-1}] = 0
+        param['wet'][{'yh': 0}] = 0
 
         # Interpolating mask from cell center to corners or sides
         # will result to values less than 1, and thus we mark
@@ -187,8 +188,9 @@ class DatasetCM26():
         ######################### Creating wet masks ###########################
         param['wet'] = discard_land(self.param.wet.coarsen({'xh':factor,'yh':factor}).mean(), percentile=percentile)
         # Set manually wall for the layer of points
-        # close to the north pole
+        # close to the north (and southern) pole
         param['wet'][{'yh':-1}] = 0
+        param['wet'][{'yh': 0}] = 0
         param['wet_u'] = discard_land(grid.interp(param['wet'], 'X'))
         param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
         param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
@@ -234,14 +236,20 @@ class DatasetCM26():
     def split(self, time=np.random.randint(0,7305,1)):
         return DatasetCM26(self.data.isel(time=time), self.param, self.grid)
 
-    def sample_batch(self, time=np.random.randint(0,7305,1), factors = [4,6,9,12], operator=CoarsenWeighted(), percentile=0, 
-            compute=lambda x: x.compute().chunk({'time':1})): 
-            # This compute function allows to benefit from precomputing but remain working with dask arrays
+    def sample_batch(self, time=np.random.randint(0,7305,1), factors = [4,6,9,12], operator=CoarsenWeighted(), percentile=0): 
         '''
         This function samples batch and produces training dataset
-        consisting of velocity gradients on a coarse grid and 
+        consisting of velocities on a coarse grid and 
         corresponding subgrid forcing, for a range of factors
         '''
+        ############## Parallelization control ##################
+        if isinstance(time, int):
+            # Disable dask arrays and use numpy
+            compute = lambda x: x.compute()
+        else:
+            # Enable parallelization across chunks
+            compute = lambda x: x.compute().chunk({'time':1})
+
         ############## Automatic generation of coarse grids ###################
         self.generate_coarse_grids(factors, percentile=percentile)
 
@@ -264,7 +272,7 @@ class DatasetCM26():
             ds_coarse.data['SGSx'], ds_coarse.data['SGSy'] = operator(advx, advy, batch, ds_coarse)
             ds_coarse.data['SGSx'] = ds_coarse.data['SGSx'] - coarse_advection[0]
             ds_coarse.data['SGSy'] = ds_coarse.data['SGSy'] - coarse_advection[1]
-            ds_coarse.data = ds_coarse.data.squeeze()
+            ds_coarse.data = compute(ds_coarse.data).squeeze()
             if 'time' in ds_coarse.data.dims:
                 ds_coarse.data['time'] = batch.data['time']
             

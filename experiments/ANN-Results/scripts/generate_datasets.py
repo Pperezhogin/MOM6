@@ -4,6 +4,7 @@ import numpy as np
 import xarray as xr
 from helpers.cm26 import DatasetCM26
 from helpers.operators import Coarsen, Filtering, Subsampling, CoarsenKochkov, CoarsenWeighted
+import gcm_filters
 import os
 from time import time
 import argparse

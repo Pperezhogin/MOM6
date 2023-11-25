@@ -141,9 +141,11 @@ class Subsampling(Operator):
         return u_coarse, v_coarse
 
 class Filtering(Operator):
-    def __init__(self, FGR=2):
+    def __init__(self, FGR=2, shape=gcm_filters.FilterShape.GAUSSIAN):
         super().__init__()
         self.FGR = FGR
+        self.shape = shape
+
     def __call__(self, u, v, ds_hires, ds_coarse):
         '''
         Algorithm:
@@ -159,7 +161,7 @@ class Filtering(Operator):
         filter_simple_fixed_factor = gcm_filters.Filter(
             filter_scale=FGR,
             dx_min=1,
-            filter_shape=gcm_filters.FilterShape.GAUSSIAN,
+            filter_shape=self.shape,
             grid_type=gcm_filters.GridType.REGULAR_WITH_LAND_AREA_WEIGHTED,
             grid_vars={'area': areaU, 'wet_mask': ds_hires.param.wet_u}
             )
@@ -170,7 +172,7 @@ class Filtering(Operator):
         filter_simple_fixed_factor = gcm_filters.Filter(
             filter_scale=FGR,
             dx_min=1,
-            filter_shape=gcm_filters.FilterShape.GAUSSIAN,
+            filter_shape=self.shape,
             grid_type=gcm_filters.GridType.REGULAR_WITH_LAND_AREA_WEIGHTED,
             grid_vars={'area': areaV, 'wet_mask': ds_hires.param.wet_v}
             )

@@ -62,7 +62,7 @@ def plot(control, mask=None, vmax=None, selector=select_NA):
         mask_nan[mask_nan==0.] = np.nan
         control = control * mask_nan
 
-    control = selector(control)
+    control = selector(control).compute()
     
     if vmax is None:
         vmax = control.std() * 4
