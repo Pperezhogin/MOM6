@@ -1,4 +1,3 @@
-from intake import open_catalog
 import xarray as xr
 from xgcm import Grid
 import numpy as np
@@ -166,6 +165,7 @@ class DatasetCM26():
         rename_param = {'dxt': 'dxT', 'dyt': 'dyT', 'dxu': 'dxBu', 'dyu': 'dyBu'}
         
         if source == 'leap':
+            from intake import open_catalog
             ds = xr.open_dataset("gs://leap-persistent-ro/groundpepper/GFDL_cm2.6/GFDL_CM2_6_CONTROL_DAILY_SURF.zarr", engine='zarr', chunks={}, use_cftime=True)
             cat = open_catalog("https://raw.githubusercontent.com/pangeo-data/pangeo-datastore/master/intake-catalogs/ocean/GFDL_CM2.6.yaml")
             param_init  = cat["GFDL_CM2_6_grid"].to_dask()
