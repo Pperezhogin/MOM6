@@ -48,7 +48,7 @@ def select_NA(array, time=None):
     return select_LatLon(array, Lat=(15, 65), Lon=(-90,-10), time=time)
 
 def select_Pacific(array, time=None):
-    return select_LatLon(array, Lat=(15, 65), Lon=(-250,-120), time=time)
+    return select_LatLon(array, Lat=(0, 45), Lon=(-250,-180), time=time)
 
 def select_Cem(array, time=None):
     return select_LatLon(array, Lat=(-10,15), Lon=(-260,-230), time=time)

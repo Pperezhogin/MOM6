@@ -1,0 +1,21 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=14
+#SBATCH --mem=64GB
+#SBATCH --begin=now
+#SBATCH --time=24:00:00
+#SBATCH --job-name=CM26_ds
+
+#SBATCH --output=Coarsen.out
+#SBATCH --error=Coarsen.err
+
+echo " "
+scontrol show jobid -dd $SLURM_JOB_ID
+echo " "
+echo "The number of alphafold processes:"
+ps -e | grep -i alphafold | wc -l
+echo " "
+module purge
+
+singularity exec --nv --overlay /scratch/pp2681/python-container/python-overlay.ext3:ro /scratch/work/public/singularity/cuda11.6.124-cudnn8.4.0.27-devel-ubuntu20.04.4.sif /bin/bash -c "source /ext3/env.sh; time python -u generate_datasets.py --operator_str=\"CoarsenWeighted()\" "

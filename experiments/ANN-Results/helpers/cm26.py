@@ -230,8 +230,13 @@ class DatasetCM26():
             self.params = {}; self.grids = {}
             for factor in factors:
                 self.params[factor], self.grids[factor] = self.init_coarse_grid(factor=factor, percentile=percentile)
-  
-    def sample_batch(self, time=np.random.randint(0,7305,1), factors = [2,4,6,10,20], operator=CoarsenWeighted(), percentile=0):
+    
+    def split(self, time=np.random.randint(0,7305,1)):
+        return DatasetCM26(self.data.isel(time=time), self.param, self.grid)
+
+    def sample_batch(self, time=np.random.randint(0,7305,1), factors = [4,6,9,12], operator=CoarsenWeighted(), percentile=0, 
+            compute=lambda x: x.compute().chunk({'time':1})): 
+            # This compute function allows to benefit from precomputing but remain working with dask arrays
         '''
         This function samples batch and produces training dataset
         consisting of velocity gradients on a coarse grid and 
@@ -242,12 +247,12 @@ class DatasetCM26():
 
         ############# Sampling batch from the dataset ###################
         data = self.data.isel(time=time)
-        batch = DatasetCM26(data.compute(), self.param, self.grid)
+        batch = DatasetCM26(compute(data), self.param, self.grid)
 
         ############# High-resolution advection #################
         hires_advection = batch.state.advection()
-        advx = hires_advection[0].compute()
-        advy = hires_advection[1].compute()
+        advx = compute(hires_advection[0])
+        advy = compute(hires_advection[1])
         
         ############## Coarsegraining and SGS ###################
         output = {}
@@ -260,6 +265,8 @@ class DatasetCM26():
             ds_coarse.data['SGSx'] = ds_coarse.data['SGSx'] - coarse_advection[0]
             ds_coarse.data['SGSy'] = ds_coarse.data['SGSy'] - coarse_advection[1]
             ds_coarse.data = ds_coarse.data.squeeze()
+            if 'time' in ds_coarse.data.dims:
+                ds_coarse.data['time'] = batch.data['time']
             
             output[factor] = ds_coarse
 
