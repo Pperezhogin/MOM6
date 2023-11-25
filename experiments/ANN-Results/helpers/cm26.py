@@ -218,6 +218,18 @@ class DatasetCM26():
         ds_coarse.data['u'], ds_coarse.data['v'] = operator(self.data.u, self.data.v, self, ds_coarse)
   
         return ds_coarse
+    
+    def generate_coarse_grids(self, factors, percentile=0):
+        '''
+        Generate and save grid objects if they are not generated yet
+        '''
+        try:
+            for factor in factors:
+                self.params[factor]; self.grids[factor]
+        except:
+            self.params = {}; self.grids = {}
+            for factor in factors:
+                self.params[factor], self.grids[factor] = self.init_coarse_grid(factor=factor, percentile=percentile)
   
     def sample_batch(self, time=np.random.randint(0,7305,1), factors = [2,4,6,10,20], operator=CoarsenWeighted(), percentile=0):
         '''
@@ -226,13 +238,7 @@ class DatasetCM26():
         corresponding subgrid forcing, for a range of factors
         '''
         ############## Automatic generation of coarse grids ###################
-        try:
-            for factor in factors:
-                self.params[factor]; self.grids[factor]
-        except:
-            self.params = {}; self.grids = {}
-            for factor in factors:
-                self.params[factor], self.grids[factor] = self.init_coarse_grid(factor=factor, percentile=percentile)
+        self.generate_coarse_grids(factors, percentile=percentile)
 
         ############# Sampling batch from the dataset ###################
         data = self.data.isel(time=time)
