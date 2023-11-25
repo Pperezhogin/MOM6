@@ -56,26 +56,33 @@ def select_Cem(array, time=None):
 def select_globe(array, time=None):
     return select_LatLon(array, Lat=(None,None), Lon=(None,None), time=time)
 
-def plot(control, mask=None, vmax=None, selector=select_NA):
+def plot(control, mask=None, vmax=None, selector=select_NA, cartopy=True):
     if mask is not None:
-        mask_nan = mask.data.copy()
+        mask_nan = selector(mask).data.copy()
         mask_nan[mask_nan==0.] = np.nan
-        control = control * mask_nan
+    else:
+        mask_nan = 1
 
-    control = selector(control).compute()
+    control = (mask_nan * selector(control)).compute()
     
     if vmax is None:
         vmax = control.std() * 4
     
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
-    fig, ax = plt.subplots(1,1, figsize=(6, 6), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
+    if cartopy:
+        fig, ax = plt.subplots(1,1, figsize=(6, 6), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
+        ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True
+        kw = {'transform': ccrs.PlateCarree()}
+    else:
+        ax = plt.gca()
+        kw = {}
     cmap = cmocean.cm.balance
     cmap.set_bad('gray')
-    ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True
-    selector(control).plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    im = selector(control).plot(ax=ax, vmax=vmax, cmap=cmap, add_colorbar=False, **kw)
     plt.tight_layout()
     plt.title('')
+    return im
 
 # We compare masked fields because outside there may be 1e+20 values
 def compare(tested, control, mask=None, vmax=None, selector=select_NA):
