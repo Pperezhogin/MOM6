@@ -92,7 +92,6 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
-    print(central_latitude, central_longitude)
     fig, axes = plt.subplots(2,2, figsize=(12, 10), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
     cmap = cmocean.cm.balance
     cmap.set_bad('gray')
