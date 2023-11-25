@@ -1,141 +1,26 @@
-from xgcm import Grid
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
-from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN
 import torch
-from xgcm.padding import pad
-import cartopy.crs as ccrs
-import cmocean
 import xrft
+from xgcm.padding import pad as xgcm_pad
 from torch.nn.functional import pad as torch_pad
+
+from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN
+from helpers.selectors import select_LatLon
 import warnings
 warnings.filterwarnings("ignore")
-
-
-roundoff = 1e-40
-
-def x_coord(array):
-    '''
-    Returns horizontal coordinate, 'xq' or 'xh'
-    as xarray
-    '''
-    try:
-        coord = array.xq
-    except:
-        coord = array.xh
-    return coord
-
-def y_coord(array):
-    '''
-    Returns horizontal coordinate, 'yq' or 'yh'
-    as xarray
-    '''
-    try:
-        coord = array.yq
-    except:
-        coord = array.yh
-    return coord
-
-def select_LatLon(array, Lat=(35,45), Lon=(5,15)):
-    '''
-    array is xarray
-    Lat, Lon = tuples of floats
-    '''
-    x = x_coord(array)
-    y = y_coord(array)
-
-    return array.sel({x.name: slice(Lon[0],Lon[1]), 
-                      y.name: slice(Lat[0],Lat[1])})
-
-def select_NA(variable, time=None):
-    x = select_LatLon(variable, Lat=(15, 65), Lon=(-90,-10))
-    if 'time' in x.dims:
-        if time is None:
-            x = x.isel(time=-1)
-        else:
-            x = x.isel(time=time)
-    return x
-
-def select_Pacific(variable, time=None):
-    x = select_LatLon(variable, Lat=(15, 65), Lon=(-250,-120))
-    if 'time' in x.dims:
-        if time is None:
-            x = x.isel(time=-1)
-        else:
-            x = x.isel(time=time)
-    return x
-
-def select_Equator(variable, time=None):
-    x = select_LatLon(variable, Lat=(-20, 20), Lon=(-230,-90))
-    if 'time' in x.dims:
-        if time is None:
-            x = x.isel(time=-1)
-        else:
-            x = x.isel(time=time)
-    return x
-
-def select_Cem(variable, time=None):
-    x = select_LatLon(variable, Lat=(-10,15), Lon=(-260,-230))
-    if 'time' in x.dims:
-        if time is None:
-            x = x.isel(time=-1)
-        else:
-            x = x.isel(time=time)
-    return x
-
-# We compare masked fields because outside there may be 1e+20 values
-def compare(tested, control, mask=None, vmax=None, selector=select_NA):
-    if mask is not None:
-        mask_nan = mask.data.copy()
-        mask_nan[mask_nan==0.] = np.nan
-        tested = tested * mask_nan
-        control = control * mask_nan
-    tested = selector(tested).compute()
-    control = selector(control).compute()
-    
-    if vmax is None:
-        vmax = control.std() * 2
-    
-    central_latitude = float(y_coord(control).mean())
-    central_longitude = float(x_coord(control).mean())
-    fig, axes = plt.subplots(2,2, figsize=(12, 10), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
-    cmap = cmocean.cm.balance
-    cmap.set_bad('gray')
-    
-    ax = axes[0][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    im = tested.plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
-    ax.set_title('Tested field')
-    ax = axes[0][1]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    control.plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
-    ax.set_title('Control field')
-    ax = axes[1][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    (tested-control).plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
-    ax.set_title('Tested-control')
-    plt.tight_layout()
-    plt.colorbar(im, ax=axes, shrink=0.9, aspect=30, extend='both')
-    axes[1][1].remove()
-    
-    ########## Metrics ##############
-    error = tested-control
-    relative_error = np.abs(error).mean() / np.abs(control).mean()
-    R2 = 1 - (error**2).mean() / (control**2).mean()
-    optimal_scaling = (tested*control).mean() / (tested**2).mean()
-    error = tested * optimal_scaling - control
-    R2_max = 1 - (error**2).mean() / (control**2).mean()
-    corr = xr.corr(tested, control)
-    print('Correlation:', float(corr))
-    print('Relative Error:', float(relative_error))
-    print('R2 = ', float(R2))
-    print('R2 max = ', float(R2_max))
-    print('Optinal scaling:', float(optimal_scaling))
-    print(f'Nans [test/control]: [{int(np.sum(np.isnan(tested)))}, {int(np.sum(np.isnan(control)))}]')
 
 class StateFunctions():
     def __init__(self, data, param, grid):
         self.data = data
         self.param = param
         self.grid = grid
+    
+    def __del__(self):
+        del self.data
+        del self.param
+        del self.grid
         
     def sample_grid_harmonic(self, grid_harmonic='chess_vorticity'):
         '''
@@ -417,7 +302,7 @@ class StateFunctions():
         param = self.param
 
         def _pad(x):
-            return pad(x, grid, {'X':1, 'Y':1})
+            return xgcm_pad(x, grid, {'X':1, 'Y':1})
 
         def extract_3x3(x):
             return image_to_3x3_stencil_gpt(tensor(_pad(x)), 
