@@ -40,3 +40,8 @@ experiments/ANN-Results/helpers_mom6/__pycache__/*
 experiments/ANN-Results/animations/*
 experiments/ANN-Results/figures/*
 *.ipynb_checkpoints*
+*.ffmpeg*
+*.err*
+*.out*
+*.mp4*
+*.gif*

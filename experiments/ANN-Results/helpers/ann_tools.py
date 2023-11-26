@@ -7,6 +7,42 @@ import os
 import xarray as xr
 from time import time
 
+def tensor_from_xarray(x, torch_type=torch.float32):
+    return torch.tensor(x.to_numpy()).type(torch_type)
+
+def torch_pad(x, left=False, right=False, top=False, bottom=False):
+    '''
+    x is the torch tensor of size Ny x Nx
+    Here we implement padding with circular B.C.
+    for zonal (Nx) direction and zero B.C. for meridional (Ny)
+
+    By default, we pad do not do padding
+    '''
+    ny, nx = x.shape
+    
+    # Compute size of the resulting array
+    Nx = nx + int(left) + int(right)
+    Ny = ny + int(top) + int(bottom)
+    y = torch.zeros((Ny,Nx), dtype=x.dtype)
+
+    # Copy original array to the center
+    x_start = 1 if left else 0
+    y_start = 1 if bottom else 0
+
+    y[y_start:y_start+ny,x_start:x_start+nx] = x
+
+    if top:
+        y[-1,:] = 0.
+    if bottom:
+        y[0,:] = 0.
+    
+    if left:
+        y[y_start:y_start+ny,0] = x[:,-1]
+    if right:
+        y[y_start:y_start+ny,-1] = x[:,0]
+
+    return y
+
 def image_to_3x3_stencil(x):
     '''
     Note that x is the fast direction in CM2.6 and 

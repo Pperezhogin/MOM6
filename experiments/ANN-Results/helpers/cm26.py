@@ -82,7 +82,6 @@ class DatasetCM26():
             },
            boundary={"X": 'periodic', 'Y': 'fill'},
            fill_value = {'Y':0})
-        self.grid = grid
         
         ############ Compute masks for C-grid ###########
         # Note, we assume that coastline goes accross U,V and corner points,
@@ -114,21 +113,28 @@ class DatasetCM26():
         param['dyCu'] = grid.interp(param.dyBu,'Y')
         param['dxCv'] = grid.interp(param.dxBu,'X')
         
-        self.param = param.compute()
-        
         ########### Interpolate velocities to C-grid ############
-        self.data = xr.Dataset()
-        self.data['u'] = grid.interp(ds.usurf.fillna(0.) * param.wet_c,'Y') * param.wet_u
-        self.data['v'] = grid.interp(ds.vsurf.fillna(0.) * param.wet_c,'X') * param.wet_v
-        self.data['time'] = ds['time']
+        data = xr.Dataset()
+        data['u'] = grid.interp(ds.usurf.fillna(0.) * param.wet_c,'Y') * param.wet_u
+        data['v'] = grid.interp(ds.vsurf.fillna(0.) * param.wet_c,'X') * param.wet_v
+        data['time'] = ds['time']
         
-    def __init__(self, data=None, param=None, grid=None, source='cmip6'):
-        if data is None and param is None:
-            self.from_cloud(source=source)
+        return data, param.compute()
+        
+    def __init__(self, data=None, param=None, source='cmip6'):
+        if data is None or param is None:
+            self.data, self.param = self.from_cloud(source=source)
         else:
             self.data = data
             self.param = param
-            self.grid = grid
+        
+        self.grid = Grid(self.param, coords={
+            'X': {'center': 'xh', 'right': 'xq'},
+            'Y': {'center': 'yh', 'right': 'yq'}
+            },
+           boundary={"X": 'periodic', 'Y': 'fill'},
+           fill_value = {'Y':0})
+
         self.state = StateFunctions(self.data, self.param, self.grid)
         return
     
@@ -195,9 +201,9 @@ class DatasetCM26():
         param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
         param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
 
-        return param.compute(), grid
+        return param.compute()
 
-    def coarsen(self, factor=10, operator=CoarsenWeighted(), percentile=0, param=None, grid=None):
+    def coarsen(self, factor=10, operator=CoarsenWeighted(), percentile=0, param=None):
         '''
         Coarsening of the dataset with a given factor
 
@@ -207,13 +213,13 @@ class DatasetCM26():
         * Return new dataset with coarse velocities
         '''
         # Initialize coarse grid
-        if param is None or grid is None:
-            param, grid = self.init_coarse_grid(factor=factor, percentile=percentile)
+        if param is None:
+            param = self.init_coarse_grid(factor=factor, percentile=percentile)
 
         ##################### Coarsegraining velocities ########################
         data = xr.Dataset()
         # Create coarse version of the dataset
-        ds_coarse = DatasetCM26(data, param, grid)
+        ds_coarse = DatasetCM26(data, param)
         ds_coarse.factor = factor
         
         # Coarsegrain velocities
@@ -227,14 +233,17 @@ class DatasetCM26():
         '''
         try:
             for factor in factors:
-                self.params[factor]; self.grids[factor]
+                self.params[factor]
         except:
-            self.params = {}; self.grids = {}
+            self.params = {}
             for factor in factors:
-                self.params[factor], self.grids[factor] = self.init_coarse_grid(factor=factor, percentile=percentile)
+                self.params[factor] = self.init_coarse_grid(factor=factor, percentile=percentile)
     
-    def split(self, time=np.random.randint(0,7305,1)):
-        return DatasetCM26(self.data.isel(time=time), self.param, self.grid)
+    def split(self, time = None, compute = lambda x: x):
+        if time is None:
+            self_len = len(self.data.time)
+            time=np.random.randint(0,self_len)
+        return DatasetCM26(compute(self.data.isel(time=time)), self.param)
 
     def sample_batch(self, time=np.random.randint(0,7305,1), factors = [4,6,9,12], operator=CoarsenWeighted(), percentile=0): 
         '''
@@ -255,7 +264,7 @@ class DatasetCM26():
 
         ############# Sampling batch from the dataset ###################
         data = self.data.isel(time=time)
-        batch = DatasetCM26(compute(data), self.param, self.grid)
+        batch = DatasetCM26(compute(data), self.param)
 
         ############# High-resolution advection #################
         hires_advection = batch.state.advection()
@@ -266,7 +275,7 @@ class DatasetCM26():
         output = {}
         for factor in factors:
             ds_coarse = batch.coarsen(factor, operator=operator, percentile=percentile, 
-                                      param=self.params[factor], grid=self.grids[factor])
+                                      param=self.params[factor])
             coarse_advection = ds_coarse.state.advection()
             
             ds_coarse.data['SGSx'], ds_coarse.data['SGSy'] = operator(advx, advy, batch, ds_coarse)
