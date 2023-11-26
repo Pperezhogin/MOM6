@@ -7,7 +7,7 @@ from xgcm.padding import pad as xgcm_pad
 from functools import lru_cache
 
 from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN, torch_pad, tensor_from_xarray
-from helpers.selectors import select_LatLon
+from helpers.selectors import select_LatLon, x_coord, y_coord
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -100,20 +100,21 @@ class StateFunctions():
         # Energy source total
         Ex = fx * data.u
         Ey = fy * data.v
-        dEdt = (grid.interp(Ex * areaU,'X') + grid.interp(Ey * areaV,'Y')) * param.wet
+        dEdt = (grid.interp(Ex * areaU,'X') + grid.interp(Ey * areaV,'Y')) * param.wet / areaT
         
         # Energy source Galilean-invariant form
         if Txy is not None:
             sh_xy, sh_xx, vort_xy = self.velocity_gradients()
             dEdt_G = - 0.5 * ((Txx * sh_xx - Tyy * sh_xx) * areaT + \
                 grid.interp(2 * Txy * sh_xy * areaB,['X','Y']))
+            dEdt_G = dEdt_G * param.wet / areaT
         else:
             dEdt_G = None
 
         # Enstrophy source
         f = self.relative_vorticity(fx,fy)
         vorticity = self.relative_vorticity(data.u,data.v)
-        dZdt = f * vorticity * areaB
+        dZdt = grid.interp(f * vorticity * areaB, ['X', 'Y']) * param.wet / areaT
         
         # Palinstrophy source
         def gradient(w):
@@ -121,38 +122,48 @@ class StateFunctions():
             wy = grid.diff(w, 'Y') / param.dyCu * param.wet_u
             return wx, wy
         
-        px, py = gradient(f)
+        px, py = gradient(f.astype('float64'))
         wx, wy = gradient(vorticity)
         Px = px * wx * areaV
         Py = py * wy * areaU
-        dPdt = (grid.interp(Px,'Y') + grid.interp(Py,'X')) * param.wet
+        dPdt = (grid.interp(Px,'Y') + grid.interp(Py,'X')) * param.wet / areaT
 
-        return {'dEdt_G': dEdt_G, 'dEdt_local': dEdt, 'dZdt_local': dZdt, 'dPdt_local': dPdt, 'dEdt': float((dEdt).sum()), 'dZdt': float((dZdt).sum()), 'dPdt': float((dPdt.sum()))}    
+        return {'dEdt_G': dEdt_G, 'dEdt_local': dEdt, 'dZdt_local': dZdt, 'dPdt_local': dPdt,
+                'dEdt': float((dEdt*areaT).sum()), 'dZdt': float((dZdt*areaT).sum()), 'dPdt': float((dPdt*areaT).sum())}    
            
     def transfer(self, fu_in, fv_in,
             region = 'NA', window='hann', 
             nfactor=2, truncate=False, detrend='linear', 
-            window_correction=True, compensated=True):
+            window_correction=True, compensated=True, 
+            additional_spectra=False):
+        '''
+        This function computes energy transfer spectrum
+        and optionally outputs the spatial and temporal power spectrum
+        and KE spectrum
+        '''
         
         if region == 'NA':
-            kw = {'Lat': (40,60), 'Lon': (-40,-20)}
+            kw = {'Lat': (25,45), 'Lon': (-60,-40)}
         elif region == 'Pacific':
-            kw = {'Lat': (20,40), 'Lon': (-200,-180)}
+            kw = {'Lat': (25,45), 'Lon': (-200,-180)}
+        elif region == 'Equator':
+            kw = {'Lat': (-30,30), 'Lon': (-190,-130)}
+        elif region == 'ACC':
+            kw = {'Lat': (-70,-30), 'Lon': (-40,0)}
         else:
             print('Error: wrong region')
             
         # Select desired Lon-Lat square
-        u = select_LatLon(self.data.u,**kw)
-        v = select_LatLon(self.data.v,**kw)
-        fu = select_LatLon(fu_in,**kw)
-        fv = select_LatLon(fv_in,**kw)
+        u = select_LatLon(self.data.u,time=slice(None,None),**kw)
+        v = select_LatLon(self.data.v,time=slice(None,None),**kw)
+        fu = select_LatLon(fu_in,time=slice(None,None),**kw)
+        fv = select_LatLon(fv_in,time=slice(None,None),**kw)
         
         if u.shape != v.shape:
-            shape = [None]*2
-            shape[0] = min(u.shape[0], v.shape[0])
-            shape[1] = min(u.shape[1], v.shape[1])
+            nx = min(len(x_coord(u)), len(x_coord(v)))
+            ny = min(len(y_coord(u)), len(y_coord(v)))
             def sel(x):
-                return x[:shape[0],:shape[1]]
+                return x[{x_coord(x).name: slice(0,nx), y_coord(x).name: slice(0,ny)}]
             u = sel(u)
             v = sel(v)
             fu = sel(fu)
@@ -171,18 +182,69 @@ class StateFunctions():
             variable['xh'] = dx * np.arange(len(v.xh))
             variable['yq'] = dy * np.arange(len(v.yq))
 
+        # In a case of dimensions are transposed differently
+        fu = fu.transpose(*u.dims)
+        fv = fv.transpose(*v.dims)
+
         Eu = xrft.isotropic_cross_spectrum(u, fu, dim=('xq','yh'), window=window, nfactor=nfactor, 
             truncate=truncate, detrend=detrend, window_correction=window_correction)
         Ev = xrft.isotropic_cross_spectrum(v, fv, dim=('xh','yq'), window=window, nfactor=nfactor, 
             truncate=truncate, detrend=detrend, window_correction=window_correction)
         
-        E = (Eu+Ev)
+        E = np.real(Eu+Ev)
         E['freq_r'] = E['freq_r']*2*np.pi # because library returns frequencies, but not wavenumbers
-
         if compensated:
-            return np.real(E) * E['freq_r']
+            E = E * E['freq_r']
+
+        if additional_spectra:
+            # Spatial power spectrum of subgrid forcing
+            Pu = xrft.isotropic_power_spectrum(fu, dim=('xq','yh'), window=window, nfactor=nfactor, 
+                truncate=truncate, detrend=detrend, window_correction=window_correction)
+            Pv = xrft.isotropic_power_spectrum(fv, dim=('xh','yq'), window=window, nfactor=nfactor,
+                truncate=truncate, detrend=detrend, window_correction=window_correction)
+
+            P = (Pu+Pv)
+            P['freq_r'] = P['freq_r']*2*np.pi
+
+            # Spatial KE spectrum
+            KEu = xrft.isotropic_power_spectrum(u, dim=('xq','yh'), window=window, nfactor=nfactor,
+                truncate=True, detrend=detrend, window_correction=window_correction)                                   
+            KEv = xrft.isotropic_power_spectrum(v, dim=('xh','yq'), window=window, nfactor=nfactor,
+                truncate=True, detrend=detrend, window_correction=window_correction)
+            KE = (KEu+KEv) * 0.5 # As KE spectrum is half the power density
+            KE['freq_r'] = KE['freq_r']*2*np.pi
+
+            # Time power spectrum of subgrid forcing
+            try:
+                # Here we try to convert cftime to day format, so that frequency will be in day^-1
+                dt = np.diff(fu.time.dt.day).max()
+                fu['time'] = np.arange(len(fu.time))*dt
+                fv['time'] = np.arange(len(fv.time))*dt
+                u['time'] = np.arange(len(u.time))*dt
+                v['time'] = np.arange(len(v.time))*dt
+            except:
+                pass
+            Ps_u = xrft.power_spectrum(fu.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xq','yh'))
+            Ps_v = xrft.power_spectrum(fv.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xh','yq'))
+            Ps = (Ps_u+Ps_v)
+            # Convert 2-sided power spectrum to one-sided
+            Ps = Ps[Ps.freq_time>0]
+
+            # Time power spectrum of KE
+            KEs_u = xrft.power_spectrum(u.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xq','yh'))
+            KEs_v = xrft.power_spectrum(v.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xh','yq'))
+            KEs = (KEs_u+KEs_v) * 0.5
+            # Convert 2-sided power spectrum to one-sided
+            KEs = KEs[KEs.freq_time>0]
+
+        if additional_spectra:
+            return E, P, KE, Ps, KEs
         else:
-            return np.real(E)
+            return E
     
     def transfer_ANN(self, ann_Txy, ann_Txx_Tyy, kw_ann={}, kw_sp={}):
         ann = self.ANN(ann_Txy, ann_Txx_Tyy, **kw_ann)

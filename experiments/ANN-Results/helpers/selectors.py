@@ -48,7 +48,7 @@ def select_NA(array, time=None):
     return select_LatLon(array, Lat=(15, 65), Lon=(-90,-10), time=time)
 
 def select_Pacific(array, time=None):
-    return select_LatLon(array, Lat=(0, 45), Lon=(-250,-180), time=time)
+    return select_LatLon(array, Lat=(10, 65), Lon=(-250,-130), time=time)
 
 def select_Cem(array, time=None):
     return select_LatLon(array, Lat=(-10,15), Lon=(-260,-230), time=time)
@@ -56,7 +56,13 @@ def select_Cem(array, time=None):
 def select_globe(array, time=None):
     return select_LatLon(array, Lat=(None,None), Lon=(None,None), time=time)
 
-def plot(control, mask=None, vmax=None, selector=select_NA, cartopy=True):
+def select_Equator(array, time=None):
+    return select_LatLon(array, Lat=(-30,30), Lon=(-190,-130), time=time)
+
+def select_ACC(array, time=None):
+    return select_LatLon(array, Lat=(-70,-30), Lon=(-40,0), time=time)
+
+def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=True):
     if mask is not None:
         mask_nan = selector(mask).data.copy()
         mask_nan[mask_nan==0.] = np.nan
@@ -79,8 +85,7 @@ def plot(control, mask=None, vmax=None, selector=select_NA, cartopy=True):
         kw = {}
     cmap = cmocean.cm.balance
     cmap.set_bad('gray')
-    im = selector(control).plot(ax=ax, vmax=vmax, cmap=cmap, add_colorbar=False, **kw)
-    plt.tight_layout()
+    im = selector(control).plot(ax=ax, vmax=vmax, vmin=vmin, cmap=cmap, add_colorbar=True, **kw)
     plt.title('')
     return im
 

@@ -5,6 +5,19 @@ from helpers.state_functions import StateFunctions
 from helpers.operators import Coarsen, CoarsenWeighted, CoarsenKochkov, Subsampling, Filtering
 from functools import cache
 
+######## Precomputed training datasets ############
+def read_datasets(operator_str = 'Filtering(FGR=2)+CoarsenKochkov()', factors = [4,6,9,12]): 
+    d = {}
+    for factor in factors:
+        for key in ['train', 'test']:
+            data = xr.open_mfdataset(
+                f'/scratch/pp2681/mom6/CM26_datasets/{operator_str}/factor-{factor}/{key}*.nc', chunks={'time':1})
+            param = xr.open_mfdataset(
+                f'/scratch/pp2681/mom6/CM26_datasets/{operator_str}/factor-{factor}/param.nc')
+            d[f'{key}-{factor}'] = DatasetCM26(data, param)
+            print(f'Dataset has been read: {operator_str}-{key}-{factor}')
+    return d
+
 def mask_from_nans(variable):
     mask = (1 - np.isnan(variable).astype('float32'))
     if 'time' in variable.dims:
@@ -142,6 +155,9 @@ class DatasetCM26():
         del self.data, self.param, self.grid, self.state
         return
     
+    def __len__(self):
+        return len(self.data.time)
+    
     def init_coarse_grid(self, factor=10, percentile=0):
         '''
         Here "self" is the DatasetCM26 object
@@ -241,9 +257,9 @@ class DatasetCM26():
     
     def split(self, time = None, compute = lambda x: x):
         if time is None:
-            self_len = len(self.data.time)
-            time=np.random.randint(0,self_len)
-            compute = lambda x: x.compute() # Enforce load to memory if randomly sampled
+            time=np.random.randint(0,len(self))
+        if isinstance(time, int):    
+            compute = lambda x: x.compute() # Enforce load to memory if a single snapshot
         return DatasetCM26(compute(self.data.isel(time=time)), self.param)
 
     def sample_batch(self, time=np.random.randint(0,7305,1), factors = [4,6,9,12], operator=CoarsenWeighted(), percentile=0): 
@@ -287,5 +303,141 @@ class DatasetCM26():
                 ds_coarse.data['time'] = batch.data['time']
             
             output[factor] = ds_coarse
-
+        
         return output
+
+    def predict_ANN(self, ann_Txy, ann_Txx_Tyy):
+        '''
+        This function makes ANN inference on the whole dataset
+        '''
+        # Just a (lazy) copy of dataset
+        ds = DatasetCM26(self.data, self.param)
+        ds.data = ds.data.load() # This data will anyway be needed for later evaluation
+        ds.data['ZB20u'] = xr.zeros_like(ds.data.u)
+        ds.data['ZB20v'] = xr.zeros_like(ds.data.v)
+        
+        for time in range(len(self)):
+            batch = ds.split(time=time)
+            prediction = batch.state.ANN(ann_Txy, ann_Txx_Tyy)
+            for key in ['ZB20u', 'ZB20v']:
+                ds.data[key][{'time':time}] = prediction[key]
+        
+        return ds
+    
+    def SGS_skill(self):
+        '''
+        This function computes:
+        * 2D map of R-squared
+        * 2D map of SGS dissipation
+        * Power and energy transfer spectra
+        in a few regions
+        '''
+        grid = self.grid
+        param = self.param
+        SGSx = self.data.SGSx
+        SGSy = self.data.SGSy
+        ZB20u = self.data.ZB20u
+        ZB20v = self.data.ZB20v
+
+        ############# R-squared and correlation ##############
+        # Here we define second moments
+        def M2(x,y=None,centered=False,dims=None):
+            if y is None:
+                y = x
+            if centered:
+                return (x*y).mean(dims) - x.mean(dims)*y.mean(dims)
+            else:
+                return (x*y).mean(dims)
+
+        def M2u(x,y=None,centered=False,dims='time'):
+            return grid.interp(M2(x,y,centered,dims),'X')
+        def M2v(x,y=None,centered=False,dims='time'):
+            return grid.interp(M2(x,y,centered,dims),'Y')
+            
+        errx = SGSx - ZB20u
+        erry = SGSy - ZB20v
+
+        ds = param.copy()
+        ######## Simplest statistics ##########
+        ds['SGSx_mean'] = SGSx.mean('time')
+        ds['SGSy_mean'] = SGSy.mean('time')
+        ds['ZB20u_mean'] = ZB20u.mean('time')
+        ds['ZB20v_mean'] = ZB20v.mean('time')
+        ds['SGSx_std']  = SGSx.std('time')
+        ds['SGSy_std']  = SGSy.std('time')
+        ds['ZB20u_std'] = ZB20u.std('time')
+        ds['ZB20v_std'] = ZB20v.std('time')
+
+        # These metrics are same as in GZ21 work
+        # Note: eveything is uncentered
+        ds['R2u_map'] = 1 - M2u(errx) / M2u(SGSx)
+        ds['R2v_map'] = 1 - M2v(erry) / M2v(SGSy)
+        ds['R2_map']  = 1 - (M2u(errx) + M2v(erry)) / (M2u(SGSx) + M2v(SGSy))
+
+        # Here everything is centered according to definition of correlation
+        ds['corru_map'] = M2u(SGSx,ZB20u,centered=True) / np.sqrt(M2u(SGSx,centered=True) * M2u(ZB20u,centered=True))
+        ds['corrv_map'] = M2v(SGSy,ZB20v,centered=True) / np.sqrt(M2v(SGSy,centered=True) * M2v(ZB20v,centered=True))
+        # It is complicated to derive a single true formula, so use simplest one
+        ds['corr_map']  = (ds['corru_map'] + ds['corrv_map']) * 0.5
+
+        ########### Global metrics ############
+        ds['R2u'] = 1 - M2(errx) / M2(SGSx)
+        ds['R2v'] = 1 - M2(erry) / M2(SGSy)
+        ds['R2'] = 1 - (M2(errx) + M2(erry)) / (M2(SGSx) + M2(SGSy))
+        ds['corru'] = M2(SGSx,ZB20u,centered=True) \
+            / np.sqrt(M2(SGSx,centered=True) * M2(ZB20u,centered=True))
+        ds['corrv'] = M2(SGSy,ZB20v,centered=True) \
+            / np.sqrt(M2(SGSy,centered=True) * M2(ZB20v,centered=True))
+        ds['corr'] = (ds['corru'] + ds['corrv']) * 0.5
+
+        ########## Optimal scaling analysis ###########
+        ds['opt_scaling_map'] = (M2u(SGSx,ZB20u) + M2v(SGSy,ZB20v)) / (M2u(ZB20u) + M2v(ZB20v))
+        # Maximum achievable R2 if scaling was optimal
+        scaling_u = grid.interp(ds['opt_scaling_map'], 'X')
+        scaling_v = grid.interp(ds['opt_scaling_map'], 'Y')
+        errx = SGSx - ZB20u * scaling_u
+        erry = SGSy - ZB20v * scaling_v
+        ds['R2_max_map']  = 1 - (M2u(errx) + M2v(erry)) / (M2u(SGSx) + M2v(SGSy))
+
+        ds['opt_scaling'] = (M2(SGSx,ZB20u) + M2(SGSy,ZB20v)) / (M2(ZB20u) + M2(ZB20v))
+        errx = SGSx - ZB20u * ds['opt_scaling']
+        erry = SGSy - ZB20v * ds['opt_scaling']
+        ds['R2_max']  = 1 - (M2(errx) + M2(erry)) / (M2(SGSx) + M2(SGSy))
+
+        ############### Dissipation analysis ###############
+        d = self.state.compute_EZ_source(SGSx, SGSy)
+        ds['Esource_map'] = d['dEdt_local'].mean('time')
+        ds['Zsource_map'] = d['dZdt_local'].mean('time')
+        ds['Psource_map'] = d['dPdt_local'].mean('time')
+        d = self.state.compute_EZ_source(ZB20u, ZB20v)
+        ds['Esource_ZB_map'] = d['dEdt_local'].mean('time')
+        ds['Zsource_ZB_map'] = d['dZdt_local'].mean('time')
+        ds['Psource_ZB_map'] = d['dPdt_local'].mean('time')
+
+        ######## Domain-averaged energy/enstrophy sources #########
+        # We integrate sources away from the land
+        wet = param.wet.copy()
+        for i in range(3):
+            wet = discard_land(grid.interp(grid.interp(wet, ['X', 'Y']), ['X', 'Y']))
+        ds['wet_extended'] = wet
+
+        for key in ['Esource', 'Zsource', 'Psource', 
+                    'Esource_ZB', 'Zsource_ZB', 'Psource_ZB']:
+            areaT = param.dxT * param.dyT
+            ds[key+'_extend'] = (ds[key+'_map'] * areaT * ds['wet_extended']).mean()
+            ds[key] = (ds[key+'_map'] * areaT * ds['wet']).mean()
+
+        ############### Spectral analysis ##################
+        for region in ['NA', 'Pacific', 'Equator', 'ACC']:
+            transfer, power, KE_spec, power_time, KE_time = self.state.transfer(SGSx, SGSy, region=region, additional_spectra=True)
+            ds['transfer_'+region] = transfer.rename({'freq_r': 'freq_r_'+region})
+            ds['power_'+region] = power.rename({'freq_r': 'freq_r_'+region})
+            ds['KE_spec_'+region] = KE_spec.rename({'freq_r': 'freq_r_t'+region})
+            ds['power_time_'+region] = power_time
+            ds['KE_time_'+region] = KE_time
+            transfer, power, KE_spec, power_time, KE_time = self.state.transfer(ZB20u, ZB20v, region=region, additional_spectra=True)
+            ds['transfer_ZB_'+region] = transfer.rename({'freq_r': 'freq_r_'+region})
+            ds['power_ZB_'+region] = power.rename({'freq_r': 'freq_r_'+region})
+            ds['power_time_ZB_'+region] = power_time
+
+        return ds.compute()
