@@ -8,7 +8,10 @@ import xarray as xr
 from time import time
 
 def tensor_from_xarray(x, torch_type=torch.float32):
-    return torch.tensor(x.to_numpy()).type(torch_type)
+    if isinstance(x, xr.DataArray):
+        return torch.tensor(x.to_numpy()).type(torch_type)
+    elif isinstance(x, torch.Tensor):
+        return x.type(torch_type)
 
 def torch_pad(x, left=False, right=False, top=False, bottom=False):
     '''

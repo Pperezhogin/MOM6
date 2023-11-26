@@ -243,6 +243,7 @@ class DatasetCM26():
         if time is None:
             self_len = len(self.data.time)
             time=np.random.randint(0,self_len)
+            compute = lambda x: x.compute() # Enforce load to memory if randomly sampled
         return DatasetCM26(compute(self.data.isel(time=time)), self.param)
 
     def sample_batch(self, time=np.random.randint(0,7305,1), factors = [4,6,9,12], operator=CoarsenWeighted(), percentile=0): 

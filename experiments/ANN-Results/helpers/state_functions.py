@@ -4,9 +4,9 @@ import xarray as xr
 import torch
 import xrft
 from xgcm.padding import pad as xgcm_pad
-from torch.nn.functional import pad as torch_pad
+from functools import lru_cache
 
-from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN
+from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN, torch_pad, tensor_from_xarray
 from helpers.selectors import select_LatLon
 import warnings
 warnings.filterwarnings("ignore")
@@ -187,19 +187,24 @@ class StateFunctions():
     def transfer_ANN(self, ann_Txy, ann_Txx_Tyy, kw_ann={}, kw_sp={}):
         ann = self.ANN(ann_Txy, ann_Txx_Tyy, **kw_ann)
         return self.transfer(ann['ZB20u'], ann['ZB20v'], **kw_sp)
-        
-    def velocity_gradients(self):
+    
+    def velocity_gradients(self, compute=False):
         param = self.param
         data = self.data
         grid = self.grid
-        
-        dudx = grid.diff(data.u * param.wet_u / param.dyCu, 'X') * param.dyT / param.dxT * param.wet
-        dvdy = grid.diff(data.v * param.wet_v / param.dxCv, 'Y') * param.dxT / param.dyT * param.wet
 
-        dudy = grid.diff(data.u * param.wet_u / param.dxCu, 'Y') * param.dxBu / param.dyBu * param.wet_c
-        dvdx = grid.diff(data.v * param.wet_v / param.dyCv, 'X') * param.dyBu / param.dxBu * param.wet_c
+        if compute:
+            compute = lambda x: x.compute()
+        else:
+            compute = lambda x: x
         
-        sh_xx = dudx-dvdy
+        dudx = grid.diff(data.u * param.wet_u / param.dyCu, 'X') * param.dyT / param.dxT
+        dvdy = grid.diff(data.v * param.wet_v / param.dxCv, 'Y') * param.dxT / param.dyT
+
+        dudy = compute(grid.diff(data.u * param.wet_u / param.dxCu, 'Y') * param.dxBu / param.dyBu * param.wet_c)
+        dvdx = compute(grid.diff(data.v * param.wet_v / param.dyCv, 'X') * param.dyBu / param.dxBu * param.wet_c)
+        
+        sh_xx = compute((dudx-dvdy) * param.wet)
         sh_xy = dvdx+dudy
         vort_xy=dvdx-dudy
         
@@ -277,11 +282,55 @@ class StateFunctions():
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
     
+    @lru_cache(maxsize=1)
+    def compute_features(self):
+        '''
+        Do all computations with xarrays so rest of the inference involves torch only.
+        If inference happens multiple times, caching helps to prevent recomputing
+        of features
+        '''
+        grid = self.grid
+        param = self.param
+
+        ########### Convert grid to torch #############
+        wet = tensor_from_xarray(param.wet)
+        wet_u = tensor_from_xarray(param.wet_u)
+        wet_v = tensor_from_xarray(param.wet_v)
+        wet_c = tensor_from_xarray(param.wet_c)
+        dyT = tensor_from_xarray(param.dyT)
+        dxT = tensor_from_xarray(param.dxT)
+        dxCu = tensor_from_xarray(param.dxCu)
+        dyCu = tensor_from_xarray(param.dyCu)
+        dyCv = tensor_from_xarray(param.dyCv)
+        dxCv = tensor_from_xarray(param.dxCv)
+        dxBu = tensor_from_xarray(param.dxBu)
+        dyBu = tensor_from_xarray(param.dyBu)
+        areaBu = dxBu * dyBu
+        areaT = dxT * dyT
+        areaCu = dxCu * dyCu
+        areaCv = dxCv * dyCv
+        
+        ############# Computation of velocity gradients #############
+        sh_xy, sh_xx, vort_xy = self.velocity_gradients(compute=True)
+
+        sh_xy_h = tensor_from_xarray(grid.interp(sh_xy, ['X','Y'])) * wet
+        vort_xy_h = tensor_from_xarray(grid.interp(vort_xy, ['X','Y'])) * wet
+        sh_xx_q = tensor_from_xarray(grid.interp(sh_xx, ['X','Y'])) * wet_c
+
+        sh_xy = tensor_from_xarray(sh_xy)
+        sh_xx = tensor_from_xarray(sh_xx)
+        vort_xy = tensor_from_xarray(vort_xy)
+
+        return sh_xy, sh_xx, vort_xy, sh_xy_h, vort_xy_h, sh_xx_q, \
+               wet, wet_u, wet_v, wet_c,                           \
+               dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
+               areaBu, areaT, areaCu, areaCv
+
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False, rotation=0, reflect_x=False, reflect_y=False):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
-        units in torch format
+        units in torch format, and its divergence
         '''
         if 'time' in self.data.dims:
             raise NotImplementedError("This operation is not implemented for many time slices. Use a single time.")
@@ -291,37 +340,9 @@ class StateFunctions():
         if ann_Txx_Tyy is None:
             ann_Txx_Tyy = import_ANN('trained_models/ANN_Txx_Tyy_ZB.nc')
             print('Warning: Prediction from default ANN')
-        
-        def norm(x):
-            return torch.sqrt((x**2).sum(dim=-1, keepdims=True))
-        
-        def tensor(x, torch_type=torch.float32):
-            return torch.tensor(x.values).type(torch_type)
 
-        grid = self.grid
-        param = self.param
-
-        def _pad(x):
-            return xgcm_pad(x, grid, {'X':1, 'Y':1})
-
-        def extract_3x3(x):
-            return image_to_3x3_stencil_gpt(tensor(_pad(x)), 
-                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
-        
-        sh_xy, sh_xx, vort_xy = self.velocity_gradients()
-
-        sh_xy_h = grid.interp(sh_xy, ['X','Y']) * param.wet
-        vort_xy_h = grid.interp(vort_xy, ['X','Y']) * param.wet
-        sh_xx_q = grid.interp(sh_xx, ['X','Y']) * param.wet_c
-
-        ########## First, do prediction for Txy stress ###########
-        ## Note on rotation ##
-        # Consider rotation=90 as an example
-        # We need not only to rotate input features, but also
-        # change sign of input sh_xy and sh_xx
-        # Also, output Txy should flip sign, but Txx and Tyy should
-        # flip each other
-        # Vorticity is a scalar and it does not change sign
+        ########## Symmetries treatment ###########
+        # Rotation symmetry
         if rotation in [0, 180]:
             rotation_sign = 1
         elif rotation in [90, 270]:
@@ -329,23 +350,37 @@ class StateFunctions():
         else:
             print('Error: use rotation one of 0, 90, 180, 270')
         
-        ## Note on reflection ##
-        # It does not change prediction of Txx, Tyy
+        # Reflection symmetry
         reflect_sign = 1
         if reflect_x:
             reflect_sign = - reflect_sign
         if reflect_y:
             reflect_sign = - reflect_sign
         
-        # This key enables prediction of
-        # -T(-features)
-        # For Smagorinsky model, it is the same value
-        # Reversibility does not contribute to feature rearrangement
+        # Time reversibility symmetry
         if time_revers:
             reverse_sign = -1
         else:
             reverse_sign = 1
+
+        ############# Helper functions ################
+        def norm(x):
+            '''
+            Norm is computed with double      ision to prevent overflow
+            '''
+            return torch.sqrt((x.type(torch.float64)**2).sum(dim=-1, keepdims=True)).type(torch.float32)
+
+        def extract_3x3(x):
+            y = torch_pad(x, left=True, right=True, top=True, bottom=True)
+            return image_to_3x3_stencil_gpt(y, 
+                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
         
+        sh_xy, sh_xx, vort_xy, sh_xy_h, vort_xy_h, sh_xx_q, \
+        wet, wet_u, wet_v, wet_c,                           \
+        dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
+        areaBu, areaT, areaCu, areaCv = self.compute_features()
+        
+        ############# Prediction of Txy ###############
         # Collect input features
         input_features = torch.concat(
                         [
@@ -355,22 +390,15 @@ class StateFunctions():
                         ],-1)
 
         # Normalize input features
-        input_norm = norm(input_features.type(torch.float64)).type(torch.float32)
+        input_norm = norm(input_features)
         input_features = (input_features / (input_norm+1e-30))
 
-        # Make prediction
-        # Note: rotation sign here transforms prediction back
-        # to original frame
+        # Make prediction with transforming prediction back to original frame
         Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign * reverse_sign)
 
         # Now denormalize the output
-        area = tensor((param.dxBu * param.dyBu)).reshape(-1,1)
-        Txy = - Txy * input_norm * input_norm * area
+        Txy = - Txy * input_norm * input_norm * (areaBu * wet_c).reshape(-1,1)
         Txy = Txy.reshape(sh_xy.shape)
-        
-        # Placing boundary conditions
-        wet = tensor(param.wet_c)
-        Txy = Txy * wet
 
         ########## Second, prediction of Txx, Tyy ###############
         input_features = torch.concat(
@@ -381,17 +409,16 @@ class StateFunctions():
                         ],-1)
 
         # Normalize input features
-        input_norm = norm(input_features.type(torch.float64)).type(torch.float32)
+        input_norm = norm(input_features)
         input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction
         Tdiag = ann_Txx_Tyy(input_features) * reverse_sign
 
         # Now denormalize the output
-        area = tensor((param.dxT * param.dyT)).reshape(-1,1)
-        Tdiag = - Tdiag * input_norm * input_norm * area
+        Tdiag = - Tdiag * input_norm * input_norm * (areaT * wet).reshape(-1,1)
         
-        # This transformation transforms the prediction 
+        # This transforms the prediction 
         # back to original frame
         if rotation in [0, 180]:
             Txx_idx = 0
@@ -405,39 +432,13 @@ class StateFunctions():
         Txx = Tdiag[:,Txx_idx].reshape(sh_xx.shape)
         Tyy = Tdiag[:,Tyy_idx].reshape(sh_xx.shape)
         
-        # Placing boundary conditions
-        wet = tensor(param.wet)
-        Txx = Txx * wet
-        Tyy = Tyy * wet
+        Txx_padded = torch_pad(Txx * dyT**2, right=True)
+        Txy_padded = torch_pad(Txy * dxBu**2, bottom=True)
+        ZB20u = wet_u * (torch.diff(Txx_padded,dim=-1) / dyCu + torch.diff(Txy_padded,dim=-2) / dxCu) / (areaCu)
         
-        wet_u = tensor(param.wet_u)
-        wet_v = tensor(param.wet_v)
-        dyT = tensor(param.dyT)
-        dxT = tensor(param.dxT)
-        dxCu = tensor(param.dxCu)
-        dyCu = tensor(param.dyCu)
-        dyCv = tensor(param.dyCv)
-        dxCv = tensor(param.dxCv)
-        dxBu = tensor(param.dxBu)
-        dyBu = tensor(param.dyBu)
-        
-        def zonal_circular_pad(x, right=True):
-            y = torch.zeros(x.shape[-2], x.shape[-1]+1)
-            if right:
-                y[:,:-1] = x
-                y[:,-1] = x[:,0]
-            else:
-                y[:,1:] = x
-                y[:,0] = x[:,-1]
-            return y
-                
-        Txx_padded = zonal_circular_pad(Txx * dyT**2)
-        Txy_padded = torch_pad(Txy * dxBu**2, (0,0,1,0)) # pad on the left with zero along meridional direction
-        ZB20u = wet_u * (torch.diff(Txx_padded,dim=-1) / dyCu + torch.diff(Txy_padded,dim=-2) / dxCu) / (dxCu * dyCu)
-        
-        Txy_padded = zonal_circular_pad(Txy * dyBu**2,right=False)
-        Tyy_padded = torch_pad(Tyy * dxT**2, (0,0,0,1)) # pad on the right with zero along meridional direction
-        ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (dxCv * dyCv)
+        Txy_padded = torch_pad(Txy * dyBu**2,left=True)
+        Tyy_padded = torch_pad(Tyy * dxT**2, top=True)
+        ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (areaCv)
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
                 'ZB20u': ZB20u, 'ZB20v': ZB20v, 
@@ -514,6 +515,7 @@ class StateFunctions():
         Analog of the function above but for torch tensors
         Here we assume that u and v are torch tensors
         '''
+        from torch.nn.functional import pad as torch_native_pad
         def tensor(x, torch_type=torch.float32):
             return torch.tensor(x.values).type(torch_type)
         
@@ -540,7 +542,7 @@ class StateFunctions():
         
         V_padded = zonal_circular_pad(V, right=True)
         dvdx = V_padded[:,1:] - V_padded[:,:-1]
-        U_padded = torch_pad(U, (0,0,0,1)) # pad on the right with zero along meridional 
+        U_padded = torch_native_pad(U, (0,0,0,1)) # pad on the right with zero along meridional 
         dudy = U_padded[1:,:] - U_padded[:-1,:]
         return (dvdx - dudy) * IareaBu * wet_c
 
