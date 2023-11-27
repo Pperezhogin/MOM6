@@ -437,6 +437,7 @@ class StateFunctions():
             return image_to_3x3_stencil_gpt(y, 
                 rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
         
+        ############# Compute features in torch ###############
         sh_xy, sh_xx, vort_xy, sh_xy_h, vort_xy_h, sh_xx_q, \
         wet, wet_u, wet_v, wet_c,                           \
         dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \

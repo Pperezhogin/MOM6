@@ -42,8 +42,8 @@ def train_ANN(operator_str, factors,
 
     ########## Init ANN ##############
     log_dict = {}
-    ann_Txy = ANN([27] + eval(hidden_layers) + [1])
-    ann_Txx_Tyy = ANN([27] + eval(hidden_layers) + [2])
+    ann_Txy = ANN([27] + hidden_layers + [1])
+    ann_Txx_Tyy = ANN([27] + hidden_layers + [2])
     
     ########## Init iterator for symmetries ######
     if symmetries:
@@ -60,7 +60,7 @@ def train_ANN(operator_str, factors,
     else:
         trevs = [False]
 
-    print('Training iterator: ', rots, refxs, refys, trevs)
+    print('Training iterator: ', rots, refxs, refys, trevs, '\n')
 
     ############ Init optimizer ##############
     all_parameters = list(ann_Txy.parameters()) + list(ann_Txx_Tyy.parameters())
@@ -78,14 +78,13 @@ def train_ANN(operator_str, factors,
             SGSx, SGSy, SGS_norm = get_SGS(batch)
 
             ######## Optionally, apply symmetries by data augmentation #########
-            lox = 0
             for rotation, reflect_x, reflect_y, time_revers in itertools.product(rots, refxs, refys, trevs):
-                lox += 1
                 optimizer.zero_grad()
                 MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
                     rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y, time_revers=time_revers)
                 MSE_train.backward()
-            print('lox=',lox)
+                optimizer.step()
+
             del batch
 
             ############ Testing step ##################
@@ -102,7 +101,7 @@ def train_ANN(operator_str, factors,
                 print(f'Factor: {factor}. '+'MSE train/test: [%.6f, %.6f]' % (float(MSE_train.data), float(MSE_test.data)))
         t = time()
         if (epoch+1) % print_epochs == 0:
-            print(f'erpoch/num_epochs [{epoch+1}/{num_epochs}]: Epoch time/Remaining time in seconds: [%d/%d]' % (t-t_e, (t-t_s)*(num_epochs/(epoch+1)-1)))
+            print(f'Epoch/num_epochs [{epoch+1}/{num_epochs}]. Epoch time/Remaining time in seconds: [%.2f/%.1f]' % (t-t_e, (t-t_s)*(num_epochs/(epoch+1)-1)))
         scheduler.step()
         
         ########### Saving model ###########
@@ -117,27 +116,97 @@ def train_ANN(operator_str, factors,
 
     ######### Offline testing ###########
     os.system(f'mkdir -p {path_save}/skill-test')
+    os.system(f'mkdir -p {path_save}/skill-train')
     for factor in factors:
-        dataset[f'test-{factor}'].predict_ANN(ann_Txy, ann_Txx_Tyy).SGS_skill().to_netcdf(f'{path_save}/skill-test/factor-{factor}.nc')
+        test = dataset[f'test-{factor}']
+        test.predict_ANN(ann_Txy, ann_Txx_Tyy).SGS_skill().to_netcdf(f'{path_save}/skill-test/factor-{factor}.nc')
+        train = dataset[f'train-{factor}'].split(slice(0,len(test)))
+        train.predict_ANN(ann_Txy, ann_Txx_Tyy).SGS_skill().to_netcdf(f'{path_save}/skill-train/factor-{factor}.nc')
         print(f'Offline skill for factor {factor} is saved')
 
+def list_of_experiments(args):
+    if args.exp == 'manual':
+        pass
+    elif args.exp == 'hdn-20':
+        pass # It is default experiment
+
+    elif args.exp == 'hdn-64-64':
+        args.hidden_layers = [64,64]
+        args.path_save = '/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hdn-64-64'
+
+    elif args.exp == 'hdn-64-64-sym':
+        args.hidden_layers = [64,64]
+        args.symmetries = True
+        args.path_save = '/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hdn-64-64-sym'
+
+    elif args.exp == 'hdn-64-64-sym-trev':
+        args.hidden_layers = [64,64]
+        args.symmetries = True
+        args.time_revers = True
+        args.path_save = '/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hdn-64-64-sym-trev'
+        
+    elif args.exp == 'test-1':
+        args.factors = [6]
+        args.num_epochs = 50
+        args.print_epochs = 1
+        args.save_epochs = 50
+        args.path_save = 'test-1'
+
+    elif args.exp == 'test-2':
+        args.factors = [6]
+        args.num_epochs = 50
+        args.print_epochs = 1
+        args.save_epochs = 50
+        args.symmetries = True
+        args.path_save = 'test-2'
+
+    elif args.exp == 'test-3':
+        args.factors = [6]
+        args.num_epochs = 50
+        args.print_epochs = 1
+        args.save_epochs = 50
+        args.symmetries = True
+        args.time_revers = True
+        args.path_save = 'test-3'
+
+    elif args.exp == 'test-4':
+        args.factors = [12]
+        args.num_epochs = 1
+        args.print_epochs = 1
+        args.save_epochs = 1
+        args.path_save = 'test-4'
+
+    else:
+        raise ValueError(f'Experiment {args.exp} is not defined')
+    
+    return args
+
 if __name__ == '__main__':
+    ########## Manual input of parameters ###############
     parser = argparse.ArgumentParser()
-    parser.add_argument('--operator_str', type=str, default='Filtering(FGR=2)+CoarsenKochkov()')
+    parser.add_argument('--exp', type=str, default='manual')
+    parser.add_argument('--operator_str', type=str, default='Gauss-FGR2')
     parser.add_argument('--factors', type=str, default='[4,6,9,12]')
     parser.add_argument('--num_epochs', type=int, default=2000)
     parser.add_argument('--print_epochs', type=int, default=10)
     parser.add_argument('--save_epochs', type=int, default=500)
-    parser.add_argument('--path_save', type=str, default='/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hidden-20')
+    parser.add_argument('--path_save', type=str, default='/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hdn-20')
     parser.add_argument('--hidden_layers', type=str, default='[20]')
     parser.add_argument('--symmetries', type=str, default='False')
     parser.add_argument('--time_revers', type=str, default='False')
-
     args = parser.parse_args()
-    print(args)
+    args.factors = eval(args.factors)
+    args.hidden_layers = eval(args.hidden_layers)
+    args.symmetries = eval(args.symmetries)
+    args.time_revers = eval(args.time_revers)
 
-    train_ANN(args.operator_str, eval(args.factors), 
+    # Check if there is predefined experiment
+    args = list_of_experiments(args)
+
+    print(args, '\n')
+
+    train_ANN(args.operator_str, args.factors, 
               args.num_epochs, args.print_epochs, 
               args.save_epochs, args.path_save,
               args.hidden_layers, 
-              eval(args.symmetries), eval(args.time_revers))
+              args.symmetries, args.time_revers)
