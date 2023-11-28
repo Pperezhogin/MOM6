@@ -228,13 +228,38 @@ if __name__ == '__main__':
     #             run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ANN_CM26_Kochkov_vorticity-{conf}/ZB-{ZB_SCALING}-Cs-{SMAG}', hpc, parameters)
 
     ################ new ANN experiments ####################
+    # for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[1.0, 2.0]:
+    #         for SMAG in [0.00]:#[0.00, 0.06]:
+    #             for ann in ['hdn-20', 'hdn-64-64', 'hdn-64-64-sym', 'hdn-64-64-sym-trev']:
+    #                 parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=SMAG,ZB_SCALING=ZB_SCALING, USE_ANN=2,
+    #                     ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txy_epoch_2000.nc',
+    #                     ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txx_Tyy_epoch_2000.nc').add(**configuration(conf))
+    #                 ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #                 hpc = HPC.add(mem=10, ntasks=ntasks)
+    #                 run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/{ann}-{conf}/ZB-{ZB_SCALING}-Cs-{SMAG}', hpc, parameters)
+
+    ################# Backscatter is balanced with biharmonic Smagorinsky ##################
+    # for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[1.0, 2.0]:
+    #         for ann in ['hdn-20', 'hdn-64-64', 'hdn-64-64-sym-trev']:
+    #             for STRESS_SMOOTH_PASS in [0, 1, 4]:
+    #                 parameters = PARAMETERS.add(USE_ZB2020='True',
+    #                     SMAG_BI_CONST=1., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False, # These are needed for simple scaling
+    #                     ZB_SCALING=ZB_SCALING, USE_ANN=2, ANN_SMAG_CONSERV=True, STRESS_SMOOTH_PASS=STRESS_SMOOTH_PASS,
+    #                     ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txy_epoch_2000.nc',
+    #                     ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txx_Tyy_epoch_2000.nc').add(**configuration(conf))
+    #                 ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #                 hpc = HPC.add(mem=10, ntasks=ntasks)
+    #                 run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/{ann}-{conf}/ZB-{ZB_SCALING}-Conserv-Smooth-{STRESS_SMOOTH_PASS}', hpc, parameters)
+
     for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         for ZB_SCALING in [1.0]:#[1.0, 2.0]:
-            for SMAG in [0.00]:#[0.00, 0.06]:
-                for ann in ['hdn-20', 'hdn-64-64', 'hdn-64-64-sym', 'hdn-64-64-sym-trev']:
-                    parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=SMAG,ZB_SCALING=ZB_SCALING, USE_ANN=2,
-                        ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txy_epoch_2000.nc',
-                        ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txx_Tyy_epoch_2000.nc').add(**configuration(conf))
-                    ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-                    hpc = HPC.add(mem=10, ntasks=ntasks)
-                    run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/{ann}-{conf}/ZB-{ZB_SCALING}-Cs-{SMAG}', hpc, parameters)
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                SMAG_BI_CONST=1., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False, # These are needed for simple scaling
+                ZB_SCALING=ZB_SCALING, USE_ANN=2, ANN_SMAG_CONSERV=True,
+                ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
+                ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-Conserv', hpc, parameters)

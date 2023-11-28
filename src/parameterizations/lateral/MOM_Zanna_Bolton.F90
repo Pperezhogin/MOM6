@@ -11,11 +11,13 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type, &
                               start_group_pass, complete_group_pass
+use MOM_coms,          only : reproducing_sum
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
 use MOM_ANN,           only : ANN_init, ANN_apply, ANN_end, ANN_CS
+use MOM_error_handler, only : MOM_mesg
 
 implicit none ; private
 
@@ -79,6 +81,7 @@ type, public :: ZB2020_CS ; private
 
   integer :: use_ann  !< 0: ANN is turned off, 1: default ANN with ZB20 model, 2: two separate ANNs on stencil 3x3 for corner and center
   logical :: rotation_invariant !< If true, the ANN is rotation invariant
+  logical :: ann_smag_conserv !< Energy-conservative ANN by imposing Smagorinsky model
   type(ANN_CS) :: ann_instance !< ANN instance
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
@@ -95,6 +98,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_Txy = -1
   integer :: id_cdiss = -1
   integer :: id_h = -1, id_u = -1, id_v = -1
+  integer :: id_smag = -1, id_KE_smag = -1, id_KE_ZB = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -156,6 +160,9 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "USE_ANN", CS%use_ann, &
                  "ANN inference of momentum fluxes: 0 off, 1: single ANN 2x2, 2: two ANNs 3x3", default=0)
+
+  call get_param(param_file, mdl, "ANN_SMAG_CONSERV", CS%ann_smag_conserv, &
+                 "Smagorinsky model makes SGS parameterization energy-conservative", default=.False.)
 
   call get_param(param_file, mdl, "ANN_FILE_TXY", CS%ann_file_Txy, &
                  "ANN parameters for prediction of Txy netcdf input", &
@@ -233,11 +240,18 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   endif
 
   CS%id_h = register_diag_field('ocean_model', 'h_ZB', diag%axesTL, Time, &
-  'Thickness in ZB module', 'm', conversion=GV%H_to_m)
+    'Thickness in ZB module', 'm', conversion=GV%H_to_m)
   CS%id_u = register_diag_field('ocean_model', 'u_ZB', diag%axesCuL, Time, &
     'Zonal velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
   CS%id_v = register_diag_field('ocean_model', 'v_ZB', diag%axesCvL, Time, &
     'Meridional velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
+
+  CS%id_smag = register_diag_field('ocean_model', 'smag_const', diag%axesNull, Time, &
+    'Smagorinsky coefficient determined energetically', 'nondim')
+  CS%id_KE_smag = register_diag_field('ocean_model', 'KE_smag', diag%axesNull, Time, &
+    'Energetic contribution of Smagorinsky integrated', 'm5 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2*US%L_to_m**2)*US%s_to_T)
+  CS%id_KE_ZB = register_diag_field('ocean_model', 'KE_ZB', diag%axesNull, Time, &
+    'Energetic contribution of ZB2020 integrated', 'm5 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2*US%L_to_m**2)*US%s_to_T)
 
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
@@ -951,6 +965,9 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
                           !! of along-coordinate stress tensor for ZB model
                           !! [L T-2 ~> m s-2]
 
+  real :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) !< A term in the kinetic energy budget
+                                            ! [H L2 T-3 ~> m3 s-3 or W m-2]
+
   real :: h_u ! Thickness interpolated to u points [H ~> m or kg m-2].
   real :: h_v ! Thickness interpolated to v points [H ~> m or kg m-2].
   real :: fx  ! Zonal acceleration      [L T-2 ~> m s-2]
@@ -963,6 +980,10 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
   integer :: i, j, k
   logical :: save_ZB2020u, save_ZB2020v ! Save the acceleration due to ZB2020 model
 
+  real :: global_integral_smag, global_integral_ZB2020
+  real :: SMAG_BI_CONST
+  character(len=100) :: message
+
   call cpu_clock_begin(CS%id_clock_divergence)
 
   save_ZB2020u = (CS%id_ZB2020u > 0) .or. (CS%id_KE_ZB2020 > 0)
@@ -972,6 +993,9 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   h_neglect  = GV%H_subroundoff
+
+  ZB2020u = 0.
+  ZB2020v = 0.
 
   do k=1,nz
     if (CS%Klower_R_diss > 0) then
@@ -1010,8 +1034,9 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IdxCu(I,j)*(dx2q(I,J-1)*Mxy(I,J-1)  - &
                             dx2q(I,J)  *Mxy(I,J)))  * &
               G%IareaCu(I,j)) / h_u
-      diffu(I,j,k) = diffu(I,j,k) + fx
-      if (save_ZB2020u) &
+      if (not(CS%ann_smag_conserv)) &
+        diffu(I,j,k) = diffu(I,j,k) + fx
+      if (save_ZB2020u .or. CS%ann_smag_conserv) &
         ZB2020u(I,j,k) = fx
     enddo ; enddo
 
@@ -1023,12 +1048,39 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IdxCv(i,J)*(Myy(i,j)                - &
                             Myy(i,j+1)))            * &
               G%IareaCv(i,J)) / h_v
-      diffv(i,J,k) = diffv(i,J,k) + fy
-      if (save_ZB2020v) &
+      if (not(CS%ann_smag_conserv)) &
+        diffv(i,J,k) = diffv(i,J,k) + fy
+      if (save_ZB2020v .or. CS%ann_smag_conserv) &
         ZB2020v(i,J,k) = fy
     enddo ; enddo
 
   enddo ! end of k loop
+
+  ! Here we choose the Smagorinsky coefficient such that the total KE energy contribution from
+  ! ANN + biharmonic Smagorinsky model is zero
+  if (CS%ann_smag_conserv) then
+    call compute_energy_source(u, v, h, diffu, diffv, G, GV, CS, KE_term, global_integral = global_integral_smag)
+    call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS, KE_term, global_integral = global_integral_ZB2020)
+    SMAG_BI_CONST = 0.
+    if (global_integral_ZB2020 > 0 .and. global_integral_smag < 0) then
+      SMAG_BI_CONST = - global_integral_ZB2020 / global_integral_smag
+    endif
+    diffu = diffu * SMAG_BI_CONST
+    diffv = diffv * SMAG_BI_CONST
+    diffu = diffu + ZB2020u
+    diffv = diffv + ZB2020v
+    global_integral_smag = global_integral_smag * SMAG_BI_CONST
+
+    if (CS%id_smag > 0) call post_data(CS%id_smag, SMAG_BI_CONST, CS%diag)
+    if (CS%id_KE_smag > 0) call post_data(CS%id_KE_smag, global_integral_smag, CS%diag)
+
+    ! write(message, '(a, g12.6)') 'Global Smagorinsky KE contribution: ', global_integral_smag
+    ! call MOM_mesg(message, 2)
+    ! write(message, '(a, g12.6)') 'Global ZB2020 KE contribution: ', global_integral_ZB2020
+    ! call MOM_mesg(message, 2)
+    ! write(message, '(a, g12.6)') 'Smagorinsky coefficient: ', SMAG_BI_CONST
+    ! call MOM_mesg(message, 2)
+  endif
 
   call cpu_clock_end(CS%id_clock_divergence)
 
@@ -1037,7 +1089,12 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
   if (CS%id_ZB2020v>0)   call post_data(CS%id_ZB2020v, ZB2020v, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
 
-  call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS)
+  call cpu_clock_begin(CS%id_clock_post)
+  if (not(CS%ann_smag_conserv)) &
+    call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS, KE_term, global_integral = global_integral_ZB2020)
+  if (CS%id_KE_ZB2020>0) call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
+  if (CS%id_KE_ZB > 0) call post_data(CS%id_KE_ZB, global_integral_ZB2020, CS%diag)
+  call cpu_clock_end(CS%id_clock_post)
 
 end subroutine compute_stress_divergence
 
@@ -1310,7 +1367,7 @@ end subroutine filter_3D
 
 !> Computes the 3D energy source term for the ZB2020 scheme
 !! similarly to MOM_diagnostics.F90, specifically 1125 line.
-subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
+subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS, KE_term, global_integral)
   type(ocean_grid_type),         intent(in)  :: G    !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV   !< The ocean's vertical grid structure.
   type(ZB2020_CS),               intent(in)  :: CS   !< ZB2020 control structure.
@@ -1329,12 +1386,18 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
                                  intent(in) :: fy    !< Meridional acceleration due to convergence
                                                      !! of along-coordinate stress tensor [L T-2 ~> m s-2]
 
-  real :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) ! A term in the kinetic energy budget
-                                            ! [H L2 T-3 ~> m3 s-3 or W m-2]
+  real, intent(out) :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) !< A term in the kinetic energy budget
+                                                         ! [H L2 T-3 ~> m3 s-3 or W m-2]
+  
+  real, optional, intent(out) :: global_integral         !< Global integral of the energy effect of ZB2020
+                                                         ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+
   real :: KE_u(SZIB_(G),SZJ_(G))            ! The area integral of a KE term in a layer at u-points
                                             ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
   real :: KE_v(SZI_(G),SZJB_(G))            ! The area integral of a KE term in a layer at v-points
                                             ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+
+  real :: tmp(SZI_(G),SZJ_(G),SZK_(GV))     ! temporary array for integration
 
   real :: uh                                ! Transport through zonal faces = u*h*dy,
                                             ! [H L2 T-1 ~> m3 s-1 or kg s-1].
@@ -1346,41 +1409,42 @@ subroutine compute_energy_source(u, v, h, fx, fy, G, GV, CS)
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
-  if (CS%id_KE_ZB2020 > 0) then
-    call cpu_clock_begin(CS%id_clock_source)
-    call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
+  call cpu_clock_begin(CS%id_clock_source)
+  call create_group_pass(pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
 
-    is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
-    Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-    KE_term(:,:,:) = 0.
-    ! Calculate the KE source from Zanna-Bolton2020 [H L2 T-3 ~> m3 s-3].
-    do k=1,nz
-      KE_u(:,:) = 0.
-      KE_v(:,:) = 0.
-      do j=js,je ; do I=Isq,Ieq
-        uh = u(I,j,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) * &
-          G%dyCu(I,j)
-        KE_u(I,j) = uh * G%dxCu(I,j) * fx(I,j,k)
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
-        vh = v(i,J,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) * &
-          G%dxCv(i,J)
-        KE_v(i,J) = vh * G%dyCv(i,J) * fy(i,J,k)
-      enddo ; enddo
-      call do_group_pass(pass_KE_uv, G%domain)
-      do j=js,je ; do i=is,ie
-        KE_term(i,j,k) = 0.5 * G%IareaT(i,j) &
-            * (KE_u(I,j) + KE_u(I-1,j) + KE_v(i,J) + KE_v(i,J-1))
-      enddo ; enddo
-    enddo
+  KE_term(:,:,:) = 0.
+  tmp(:,:,:) = 0.
+  ! Calculate the KE source from Zanna-Bolton2020 [H L2 T-3 ~> m3 s-3].
+  do k=1,nz
+    KE_u(:,:) = 0.
+    KE_v(:,:) = 0.
+    do j=js,je ; do I=Isq,Ieq
+      uh = u(I,j,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) * &
+        G%dyCu(I,j)
+      KE_u(I,j) = uh * G%dxCu(I,j) * fx(I,j,k)
+    enddo ; enddo
+    do J=Jsq,Jeq ; do i=is,ie
+      vh = v(i,J,k) * 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i,j+1)*h(i,j+1,k)) * &
+        G%dxCv(i,J)
+      KE_v(i,J) = vh * G%dyCv(i,J) * fy(i,J,k)
+    enddo ; enddo
+    call do_group_pass(pass_KE_uv, G%domain)
+    do j=js,je ; do i=is,ie
+      KE_term(i,j,k) = 0.5 * G%IareaT(i,j) &
+          * (KE_u(I,j) + KE_u(I-1,j) + KE_v(i,J) + KE_v(i,J-1))
+      
+      if (present(global_integral)) &
+        tmp(i,j,k) = KE_term(i,j,k) * G%areaT(i,j) * G%mask2dT(i,j)
+    enddo ; enddo
+  enddo
+  
+  if (present(global_integral)) &
+    global_integral = reproducing_sum(tmp)
 
-    call cpu_clock_end(CS%id_clock_source)
-
-    call cpu_clock_begin(CS%id_clock_post)
-    call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
-    call cpu_clock_end(CS%id_clock_post)
-  endif
+  call cpu_clock_end(CS%id_clock_source)
 
 end subroutine compute_energy_source
 

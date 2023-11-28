@@ -9,11 +9,16 @@
 "energy_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
 #"ML_TKE_%4yr_%3dy",   5,"days",1,"days","Time",10,"days"
 #"forcing_%4yr_%3dy",  30,"days",1,"days","Time",365,"days"
+"series_%4yr_%3dy",    1,"days",1,"days","Time",365,"days"
 
 #This is the field section of the diag_table.
 
 # Prognostic Ocean fields:
 #=========================
+
+"ocean_model","smag_const", "smag_const","series_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","KE_ZB", "KE_ZB","series_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","KE_smag", "KE_smag","series_%4yr_%3dy","all",.false.,"none",2
 
 "ocean_model","u","u","prog_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","v","v","prog_%4yr_%3dy","all",.false.,"none",2
