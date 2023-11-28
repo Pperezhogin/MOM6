@@ -83,8 +83,8 @@ type, public :: ZB2020_CS ; private
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
   character(len=200) :: ann_file = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_64_neurons_ZB-ver-1.2.nc" !< Default ANN with ZB20 model
-  character(len=200) :: ann_file_Txy = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_Kochkov_vorticity/Txy_epoch_1000.nc"
-  character(len=200) :: ann_file_Txx_Tyy = "/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_Kochkov_vorticity/Txx_Tyy_epoch_1000.nc"
+  character(len=200) :: ann_file_Txy
+  character(len=200) :: ann_file_Txx_Tyy
   real :: subroundoff_shear
 
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
@@ -156,6 +156,14 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "USE_ANN", CS%use_ann, &
                  "ANN inference of momentum fluxes: 0 off, 1: single ANN 2x2, 2: two ANNs 3x3", default=0)
+
+  call get_param(param_file, mdl, "ANN_FILE_TXY", CS%ann_file_Txy, &
+                 "ANN parameters for prediction of Txy netcdf input", &
+                 default="/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hdn-64-64/model/Txy_epoch_2000.nc")
+  
+  call get_param(param_file, mdl, "ANN_FILE_TXX_TYY", CS%ann_file_Txx_Tyy, &
+                 "ANN parameters for prediction of Txx and Tyy netcdf input", &
+                 default="/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/hdn-64-64/model/Txx_Tyy_epoch_2000.nc")
 
   call get_param(param_file, mdl, "ROT_INV", CS%rotation_invariant, &
                  "If true, rotation invariance is imposed as hard constraint", default=.false.)

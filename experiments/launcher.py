@@ -218,11 +218,23 @@ JansenHeld = dictionary(
 
 #########################################################################################
 if __name__ == '__main__':
-    ################ ANN experiments ####################
+    # ################ old ANN experiments ####################
+    # for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[1.0, 2.0]:
+    #         for SMAG in [0.00]:#[0.00, 0.06]:
+    #             parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=SMAG,ZB_SCALING=ZB_SCALING, USE_ANN=2).add(**configuration(conf))
+    #             ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #             hpc = HPC.add(mem=10, ntasks=ntasks)
+    #             run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ANN_CM26_Kochkov_vorticity-{conf}/ZB-{ZB_SCALING}-Cs-{SMAG}', hpc, parameters)
+
+    ################ new ANN experiments ####################
     for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         for ZB_SCALING in [1.0]:#[1.0, 2.0]:
             for SMAG in [0.00]:#[0.00, 0.06]:
-                parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=SMAG,ZB_SCALING=ZB_SCALING, USE_ANN=2).add(**configuration(conf))
-                ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-                hpc = HPC.add(mem=10, ntasks=ntasks)
-                run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ANN_CM26_Kochkov_vorticity-{conf}/ZB-{ZB_SCALING}-Cs-{SMAG}', hpc, parameters)
+                for ann in ['hdn-20', 'hdn-64-64', 'hdn-64-64-sym', 'hdn-64-64-sym-trev']:
+                    parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=SMAG,ZB_SCALING=ZB_SCALING, USE_ANN=2,
+                        ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txy_epoch_2000.nc',
+                        ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/Gauss-FGR2/{ann}/model/Txx_Tyy_epoch_2000.nc').add(**configuration(conf))
+                    ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+                    hpc = HPC.add(mem=10, ntasks=ntasks)
+                    run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/{ann}-{conf}/ZB-{ZB_SCALING}-Cs-{SMAG}', hpc, parameters)
