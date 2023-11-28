@@ -90,7 +90,7 @@ def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=T
     return im
 
 # We compare masked fields because outside there may be 1e+20 values
-def compare(tested, control, mask=None, vmax=None, selector=select_NA):
+def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_NA):
     if mask is not None:
         mask_nan = mask.data.copy()
         mask_nan[mask_nan==0.] = np.nan
@@ -109,13 +109,13 @@ def compare(tested, control, mask=None, vmax=None, selector=select_NA):
     cmap.set_bad('gray')
     
     ax = axes[0][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    im = tested.plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    im = tested.plot(ax=ax, vmax=vmax, vmin=vmin, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
     ax.set_title('Tested field')
     ax = axes[0][1]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    control.plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    control.plot(ax=ax, vmax=vmax, vmin=vmin, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
     ax.set_title('Control field')
     ax = axes[1][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    (tested-control).plot(ax=ax, vmax=vmax, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    (tested-control).plot(ax=ax, vmax=vmax, vmin=vmin, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
     ax.set_title('Tested-control')
     plt.tight_layout()
     plt.colorbar(im, ax=axes, shrink=0.9, aspect=30, extend='both')
