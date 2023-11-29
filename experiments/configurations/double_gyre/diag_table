@@ -21,6 +21,7 @@
 "ocean_model","KE_smag", "KE_smag","series_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","GM_coef", "GM_coef","series_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","PE_GM", "PE_GM","series_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","attenuation", "attenuation","series_%4yr_%3dy","all",.false.,"none",2
 
 "ocean_model","u","u","prog_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","v","v","prog_%4yr_%3dy","all",.false.,"none",2

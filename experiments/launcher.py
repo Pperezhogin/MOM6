@@ -264,25 +264,38 @@ if __name__ == '__main__':
     #         hpc = HPC.add(mem=10, ntasks=ntasks)
     #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-Conserv', hpc, parameters)
 
-    ################# Backscatter is balanced by GM ##################
-    for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.0]:#[1.0, 2.0]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',
-                SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
-                ZB_SCALING=ZB_SCALING, USE_ANN=2, GM_CONSERV=True, THICKNESSDIFFUSE=True, KHTH=1,
-                ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
-                ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-GM-Conserv', hpc, parameters)
+    # ################# Backscatter is balanced by GM ##################
+    # for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[1.0, 2.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
+    #             ZB_SCALING=ZB_SCALING, USE_ANN=2, GM_CONSERV=True, THICKNESSDIFFUSE=True, KHTH=1,
+    #             ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
+    #             ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-GM-Conserv', hpc, parameters)
 
+    # for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[1.0, 2.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             SMAG_BI_CONST=0.,
+    #             ZB_SCALING=ZB_SCALING, USE_ANN=2, GM_CONSERV=True, THICKNESSDIFFUSE=True, KHTH=1,
+    #             ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
+    #             ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-GM-Conserv-bound', hpc, parameters)
+
+    ################# Backscatter is attenuated ##################
     for conf in ['R4', 'R8']:#['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         for ZB_SCALING in [1.0]:#[1.0, 2.0]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',
-                SMAG_BI_CONST=0.,
-                ZB_SCALING=ZB_SCALING, USE_ANN=2, GM_CONSERV=True, THICKNESSDIFFUSE=True, KHTH=1,
-                ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
-                ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-GM-Conserv-bound', hpc, parameters)
+            for BACKSCATTER_RATIO in ['0.9', '1.0', '1.1']:
+                parameters = PARAMETERS.add(USE_ZB2020='True',
+                    SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
+                    ZB_SCALING=ZB_SCALING, USE_ANN=2, BACKSCATTER_RATIO=BACKSCATTER_RATIO,
+                    ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
+                    ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
+                ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+                hpc = HPC.add(mem=10, ntasks=ntasks)
+                run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-ratio-{BACKSCATTER_RATIO}', hpc, parameters)

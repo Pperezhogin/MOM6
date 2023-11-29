@@ -85,6 +85,8 @@ type, public :: ZB2020_CS ; private
         maskw_h,  & !< Mask of land point at h points multiplied by filter weight [nondim]
         maskw_q     !< Same mask but for q points [nondim]
 
+  real :: backscatter_ratio !< The ratio of backscattered energy to the dissipated energy
+
   integer :: use_ann  !< 0: ANN is turned off, 1: default ANN with ZB20 model, 2: two separate ANNs on stencil 3x3 for corner and center
   logical :: rotation_invariant !< If true, the ANN is rotation invariant
   logical :: ann_smag_conserv !< Energy-conservative ANN by imposing Smagorinsky model
@@ -106,6 +108,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_h = -1, id_u = -1, id_v = -1
   integer :: id_smag = -1, id_KE_smag = -1, id_KE_ZB = -1
   integer :: id_GM_coef = -1, id_PE_GM = -1
+  integer :: id_attenuation = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -164,6 +167,11 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "If true, turns on Zanna-Bolton-2020 (ZB) " //&
                  "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
   if (.not. use_ZB2020) return
+
+  call get_param(param_file, mdl, "BACKSCATTER_RATIO", CS%backscatter_ratio, &
+                 "The ratio between backscattered and dissipated energy." //&
+                 "-1 means that backscatter is not controlled", &
+                 units="nondim", default=-1.)
 
   call get_param(param_file, mdl, "USE_ANN", CS%use_ann, &
                  "ANN inference of momentum fluxes: 0 off, 1: single ANN 2x2, 2: two ANNs 3x3", default=0)
@@ -268,6 +276,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     'GM coefficient determined energetically', 'm2 s-1', conversion=US%L_to_m**2 / US%T_to_s)
   CS%id_PE_GM = register_diag_field('ocean_model', 'PE_GM', diag%axesNull, Time, &
     'Energetic contribution of GM integrated', 'm5 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2*US%L_to_m**2)*US%s_to_T)
+  CS%id_attenuation = register_diag_field('ocean_model', 'attenuation', diag%axesNull, Time, &
+    'Attenuation of large-scale part of SGS model', 'nondim')
 
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
@@ -329,7 +339,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     enddo; enddo
   endif
 
-  if (CS%Stress_iter > 0 .or. CS%HPF_iter > 0) then
+  if (CS%Stress_iter > 0 .or. CS%HPF_iter > 0 .or. CS%backscatter_ratio > 0.) then
     ! Include 1/16. factor to the mask for filter implementation
     allocate(CS%maskw_h(SZI_(G),SZJ_(G))); CS%maskw_h(:,:) = G%mask2dT(:,:) * 0.0625
     allocate(CS%maskw_q(SZIB_(G),SZJB_(G))); CS%maskw_q(:,:) = G%mask2dBu(:,:) * 0.0625
@@ -972,14 +982,24 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
         Mxy    ! Subgrid stress Txy multiplied by thickness [H L2 T-2 ~> m3 s-2]
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
+        Txx_smooth, & ! Subgrid stress Txx multiplied by thickness and dy^2 [H L4 T-2 ~> m5 s-2]
+        Tyy_smooth    ! Subgrid stress Tyy multiplied by thickness and dx^2 [H L4 T-2 ~> m5 s-2]
+
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
+        Txy_smooth    ! Subgrid stress Txy multiplied by thickness [H L2 T-2 ~> m3 s-2]
+
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
-        ZB2020u           !< Zonal acceleration due to convergence of
+        ZB2020u, &        !< Zonal acceleration due to convergence of
                           !! along-coordinate stress tensor for ZB model
                           !! [L T-2 ~> m s-2]
+        ZB2020u_smooth
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
-        ZB2020v           !< Meridional acceleration due to convergence
+        ZB2020v, &        !< Meridional acceleration due to convergence
                           !! of along-coordinate stress tensor for ZB model
                           !! [L T-2 ~> m s-2]
+        ZB2020v_smooth
 
   real :: KE_term(SZI_(G),SZJ_(G),SZK_(GV)) !< A term in the kinetic energy budget
                                             ! [H L2 T-3 ~> m3 s-3 or W m-2]
@@ -995,12 +1015,32 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
   logical :: save_ZB2020u, save_ZB2020v ! Save the acceleration due to ZB2020 model
+  integer :: remaining_iterations, current_halo
 
   real :: global_integral_smag, global_integral_ZB2020
+  real :: global_integral_smooth, global_integral_residual
   real :: SMAG_BI_CONST
+  real :: attenuation, current_backscatter_ratio
   character(len=100) :: message
 
   call cpu_clock_begin(CS%id_clock_divergence)
+
+  if (CS%backscatter_ratio > 0.) then
+    Txx_smooth = CS%Txx
+    Tyy_smooth = CS%Tyy
+    Txy_smooth = CS%Txy
+
+    call pass_var(Txy_smooth, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+    call pass_var(Txx_smooth, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(Tyy_smooth, G%Domain, clock=CS%id_clock_mpi)
+
+    current_halo=4; remaining_iterations = 1
+    call filter_hq(G, GV, CS, current_halo, remaining_iterations, q=Txy_smooth)
+    current_halo=4; remaining_iterations = 1
+    call filter_hq(G, GV, CS, current_halo, remaining_iterations, h=Txx_smooth)
+    current_halo=4; remaining_iterations = 1
+    call filter_hq(G, GV, CS, current_halo, remaining_iterations, h=Tyy_smooth)
+  endif
 
   save_ZB2020u = (CS%id_ZB2020u > 0) .or. (CS%id_KE_ZB2020 > 0)
   save_ZB2020v = (CS%id_ZB2020v > 0) .or. (CS%id_KE_ZB2020 > 0)
@@ -1021,10 +1061,20 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
                               + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))  &
                       )                                                       &
                      ) * CS%hq(I,J,k)
+          if (CS%backscatter_ratio>0.) then
+            Txy_smooth(I,J,k) = (Txy_smooth(I,J,k) *                                    &
+                                (0.25 * ( (CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
+                                        + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))  &
+                                )                                                       &
+                              ) * CS%hq(I,J,k)
+          endif
       enddo ; enddo
     else
       do J=js-1,Jeq ; do I=is-1,Ieq
         Mxy(I,J) = CS%Txy(I,J,k) * CS%hq(I,J,k)
+        if (CS%backscatter_ratio>0.) then
+          Txy_smooth(I,J,k) = Txy_smooth(I,J,k) * CS%hq(I,J,k)
+        endif
       enddo ; enddo
     endif
 
@@ -1032,11 +1082,19 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
       do j=js-1,je+1 ; do i=is-1,ie+1
         Mxx(i,j) = ((CS%Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
         Myy(i,j) = ((CS%Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+        if (CS%backscatter_ratio>0.) then
+          Txx_smooth(i,j,k) = ((Txx_smooth(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
+          Tyy_smooth(i,j,k) = ((Tyy_smooth(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+        endif
       enddo ; enddo
     else
       do j=js-1,je+1 ; do i=is-1,ie+1
         Mxx(i,j) = ((CS%Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
         Myy(i,j) = ((CS%Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
+        if (CS%backscatter_ratio>0.) then
+          Txx_smooth(i,j,k) = (Txx_smooth(i,j,k) * h(i,j,k)) * dy2h(i,j)
+          Tyy_smooth(i,j,k) = (Tyy_smooth(i,j,k) * h(i,j,k)) * dx2h(i,j)
+        endif
       enddo ; enddo
     endif
 
@@ -1050,10 +1108,18 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IdxCu(I,j)*(dx2q(I,J-1)*Mxy(I,J-1)  - &
                             dx2q(I,J)  *Mxy(I,J)))  * &
               G%IareaCu(I,j)) / h_u
-      if (not(CS%ann_smag_conserv)) &
+      if (not(CS%ann_smag_conserv) .and. not(CS%backscatter_ratio>0.)) &
         diffu(I,j,k) = diffu(I,j,k) + fx
-      if (save_ZB2020u .or. CS%ann_smag_conserv .or. GM_conserv) &
+      if (save_ZB2020u .or. CS%ann_smag_conserv .or. GM_conserv .or. CS%backscatter_ratio > 0.) &
         ZB2020u(I,j,k) = fx
+      if (CS%backscatter_ratio > 0.) then
+        ZB2020u_smooth(I,j,k) =                                &
+             -((G%IdyCu(I,j)*(Txx_smooth(i,j,k)              - &
+                              Txx_smooth(i+1,j,k))           + &
+              G%IdxCu(I,j)*(dx2q(I,J-1)*Txy_smooth(I,J-1,k)  - &
+                            dx2q(I,J)  *Txy_smooth(I,J,k)))  * &
+              G%IareaCu(I,j)) / h_u
+      endif
     enddo ; enddo
 
     ! Evaluate 1/h y.Div(h S) (Line 1517 of MOM_hor_visc.F90)
@@ -1064,10 +1130,18 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IdxCv(i,J)*(Myy(i,j)                - &
                             Myy(i,j+1)))            * &
               G%IareaCv(i,J)) / h_v
-      if (not(CS%ann_smag_conserv)) &
+      if (not(CS%ann_smag_conserv) .and. not(CS%backscatter_ratio>0.)) &
         diffv(i,J,k) = diffv(i,J,k) + fy
-      if (save_ZB2020v .or. CS%ann_smag_conserv .or. GM_conserv) &
+      if (save_ZB2020v .or. CS%ann_smag_conserv .or. GM_conserv .or. CS%backscatter_ratio > 0.) &
         ZB2020v(i,J,k) = fy
+      if (CS%backscatter_ratio > 0.) then
+        ZB2020v_smooth(i,J,k) =                                  &
+             -((G%IdyCv(i,J)*(dy2q(I-1,J)*Txy_smooth(I-1,J,k)  - &
+                              dy2q(I,J)  *Txy_smooth(I,J,k))   + & ! NOTE this plus
+              G%IdxCv(i,J)*(Tyy_smooth(i,j,k)                  - &
+                            Tyy_smooth(i,j+1,k)))              * &
+              G%IareaCv(i,J)) / h_v
+      endif
     enddo ; enddo
 
   enddo ! end of k loop
@@ -1112,6 +1186,35 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
 
   endif
 
+  if (CS%backscatter_ratio > 0.) then
+    call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS, KE_term, global_integral = global_integral_ZB2020)
+    call compute_energy_source(u, v, h, ZB2020u_smooth, ZB2020v_smooth, G, GV, CS, KE_term, global_integral = global_integral_smooth)
+    global_integral_residual = global_integral_ZB2020 - global_integral_smooth
+    attenuation = 1.0
+    ! Backscatter ratio can be defined only if energetic contributions have different signs
+    if (global_integral_residual < 0. .and. global_integral_smooth > 0.) then
+      current_backscatter_ratio = - global_integral_smooth / global_integral_residual
+      if (current_backscatter_ratio > CS%backscatter_ratio) then
+        attenuation = CS%backscatter_ratio / current_backscatter_ratio
+        ! Later I actually allowed for ratio more than 1
+        ! if (attenuation > 1.) then
+        !   write(*,*) 'Warning: attenuation > 1.'
+        ! endif
+        if (attenuation < 0.) then
+          write(*,*) 'Warning: attenuation < 0.'
+        endif
+        ! The final model will be ZB_residual + attenuation * ZB_smooth
+        ! Which is equivalent to (ZB - ZB_smooth) + attenuation * ZB_smooth = 
+        ! ZB + (attenuation-1) * smooth
+        ZB2020u = ZB2020u + (attenuation-1) * ZB2020u_smooth
+        ZB2020v = ZB2020v + (attenuation-1) * ZB2020v_smooth
+      endif
+    endif
+    diffu = diffu + ZB2020u
+    diffv = diffv + ZB2020v
+    if (CS%id_attenuation) call post_data(CS%id_attenuation, attenuation, CS%diag)
+  endif
+
   call cpu_clock_end(CS%id_clock_divergence)
 
   call cpu_clock_begin(CS%id_clock_post)
@@ -1120,8 +1223,7 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
   call cpu_clock_end(CS%id_clock_post)
 
   call cpu_clock_begin(CS%id_clock_post)
-  if (not(CS%ann_smag_conserv)) &
-    call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS, KE_term, global_integral = global_integral_ZB2020)
+  call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS, KE_term, global_integral = global_integral_ZB2020)
   if (CS%id_KE_ZB2020>0) call post_data(CS%id_KE_ZB2020, KE_term, CS%diag)
   if (CS%id_KE_ZB > 0) call post_data(CS%id_KE_ZB, global_integral_ZB2020, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
