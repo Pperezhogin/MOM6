@@ -21,6 +21,8 @@ use MOM_MEKE_types,            only : MEKE_type
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_variables,             only : thermo_var_ptrs, cont_diag_ptrs
 use MOM_verticalGrid,          only : verticalGrid_type
+use MOM_Zanna_Bolton,          only : GM_dissipation, GM_coefficient, GM_conserv
+use MOM_coms,                  only : reproducing_sum
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -476,6 +478,11 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
     endif
   endif
 
+  if (GM_conserv) then
+    Kh_u = GM_coefficient
+    Kh_v = GM_coefficient
+  endif
+
   ! Calculate uhD, vhD from h, e, KH_u, KH_v, tv%T/S
   if (use_stored_slopes) then
     call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
@@ -759,6 +766,7 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
                                                         ! [H L2 T-1 ~> m3 s-1 or kg s-1]
   real :: diag_sfn_unlim_y(SZI_(G),SZJB_(G),SZK_(GV)+1) ! Diagnostic of the y-face streamfunction before
                                                         ! applying limiters [Z L2 T-1 ~> m3 s-1]
+  real :: GM_src_for_ZB(SZI_(G), SZJ_(G)) ! GM source term for ZB parameterization
   logical :: present_slope_x, present_slope_y, calc_derivatives
   integer, dimension(2) :: EOSdom_u  ! The shifted I-computational domain to use for equation of
                                      ! state calculations at u-points.
@@ -795,6 +803,10 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
 
   find_work = allocated(MEKE%GM_src)
   find_work = (allocated(CS%GMwork) .or. find_work)
+  find_work = .True.
+  if (GM_conserv) then
+    find_work = .True.
+  endif
 
   if (use_EOS) then
     halo = 1 ! Default halo to fill is 1
@@ -1540,7 +1552,9 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
     enddo
   endif
 
-  if (find_work) then ; do j=js,je ; do i=is,ie
+  if (find_work .or. GM_conserv) then ; 
+  GM_src_for_ZB(:,:) = 0.
+  do j=js,je ; do i=is,ie
     ! Note that the units of Work_v and Work_u are [R Z L4 T-3 ~> W], while Work_h is in [R Z L2 T-3 ~> W m-2].
     Work_h = 0.5 * G%IareaT(i,j) * &
       ((Work_u(I-1,j) + Work_u(I,j)) + (Work_v(i,J-1) + Work_v(i,J)))
@@ -1548,7 +1562,30 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
     if (.not. CS%GM_src_alt) then ; if (allocated(MEKE%GM_src)) then
       MEKE%GM_src(i,j) = MEKE%GM_src(i,j) + Work_h
     endif ; endif
-  enddo ; enddo ; endif
+    ! Here we rescale back to a unit diffusivity, integrate, and divide by density
+    if (GM_conserv) &
+      GM_src_for_ZB(i,j) = Work_h * G%areaT(i,j) * G%mask2dT(i,j) / (GM_coefficient * GV%H_to_RZ)
+  enddo ; enddo ; 
+  if (GM_conserv) &
+    GM_dissipation = reproducing_sum(GM_src_for_ZB)
+  endif
+
+  ! if (GM_conserv) then 
+  !   do j=js,je ; do i=is,ie ; do k=nz,1,-1
+  !     ! Note here we remove GV%H_to_RZ to rescale it to units not accounting for density
+  !     ! PE_release_h = -0.25 * (US%L_to_Z**2) * &
+  !     !                      ((Slope_x_PE(I,j,k)**2) * hN2_x_PE(I,j,k) + &
+  !     !                       (Slope_x_PE(I-1,j,k)**2) * hN2_x_PE(I-1,j,k) + &
+  !     !                       (Slope_y_PE(i,J,k)**2) * hN2_y_PE(i,J,k) + &
+  !     !                       (Slope_y_PE(i,J-1,k)**2) * hN2_y_PE(i,J-1,k))
+  !     ! GM_src_for_ZB(i,j) = GM_src_for_ZB(i,j) + PE_release_h * G%areaT(i,j) * G%mask2dT(i,j)
+  !     PE_release_h = 0.5 * G%IareaT(i,j) * &
+  !     ((Work_u(I-1,j) + Work_u(I,j)) + (Work_v(i,J-1) + Work_v(i,J)))
+  !   enddo ; enddo ; enddo
+  !   GM_dissipation = reproducing_sum(GM_src_for_ZB)
+  !   write(*,*) 'GM dissipation is calculated',  GM_dissipation
+  !   write(*,*) 'Flags:', find_work, CS%GM_src_alt
+  ! endif
 
   if (find_work .and. CS%GM_src_alt) then ; if (allocated(MEKE%GM_src)) then
     do j=js,je ; do i=is,ie ; do k=nz,1,-1

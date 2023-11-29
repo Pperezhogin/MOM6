@@ -111,6 +111,11 @@ class Experiment:
     
     ################### Getters for netcdf files as xarrays #####################
     @cached_property
+    def series_diag(self):
+        result = xr.open_mfdataset(os.path.join(self.folder, 'series*.nc'), decode_times=False)
+        return result
+
+    @cached_property
     def series(self):
         result = xr.open_dataset(os.path.join(self.folder, 'ocean.stats.nc'), decode_times=False)
         return result

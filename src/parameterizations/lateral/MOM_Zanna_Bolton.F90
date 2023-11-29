@@ -25,6 +25,12 @@ implicit none ; private
 
 public ZB2020_lateral_stress, ZB2020_init, ZB2020_end, ZB2020_copy_gradient_and_thickness
 
+real, public :: GM_dissipation !< Dissipation by the GM parameterization in units of 
+                         !! Watt divided by the density, when the GM diffusivity equals 1 m2/s
+real, public :: GM_coefficient !< The GM coefficient which is used to equilibrate the overwhelming
+                         ! KE backscatter
+logical, public :: GM_conserv  !< If true, adds GM dissipation to equilibrate bakcscatter of KE
+
 !> Control structure for Zanna-Bolton-2020 parameterization.
 type, public :: ZB2020_CS ; private
   ! Parameters
@@ -99,6 +105,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_cdiss = -1
   integer :: id_h = -1, id_u = -1, id_v = -1
   integer :: id_smag = -1, id_KE_smag = -1, id_KE_ZB = -1
+  integer :: id_GM_coef = -1, id_PE_GM = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -163,6 +170,11 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "ANN_SMAG_CONSERV", CS%ann_smag_conserv, &
                  "Smagorinsky model makes SGS parameterization energy-conservative", default=.False.)
+
+  call get_param(param_file, mdl, "GM_CONSERV", GM_conserv, &
+                 "GM model makes parameterization energy-conservative", default=.False.)
+  GM_coefficient = 1e-10
+  GM_dissipation = 0.
 
   call get_param(param_file, mdl, "ANN_FILE_TXY", CS%ann_file_Txy, &
                  "ANN parameters for prediction of Txy netcdf input", &
@@ -252,6 +264,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
     'Energetic contribution of Smagorinsky integrated', 'm5 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2*US%L_to_m**2)*US%s_to_T)
   CS%id_KE_ZB = register_diag_field('ocean_model', 'KE_ZB', diag%axesNull, Time, &
     'Energetic contribution of ZB2020 integrated', 'm5 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2*US%L_to_m**2)*US%s_to_T)
+  CS%id_GM_coef = register_diag_field('ocean_model', 'GM_coef', diag%axesNull, Time, &
+    'GM coefficient determined energetically', 'm2 s-1', conversion=US%L_to_m**2 / US%T_to_s)
+  CS%id_PE_GM = register_diag_field('ocean_model', 'PE_GM', diag%axesNull, Time, &
+    'Energetic contribution of GM integrated', 'm5 s-3', conversion=GV%H_to_m*(US%L_T_to_m_s**2*US%L_to_m**2)*US%s_to_T)
 
   ! Clock IDs
   ! Only module is measured with syncronization. While smaller
@@ -1036,7 +1052,7 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IareaCu(I,j)) / h_u
       if (not(CS%ann_smag_conserv)) &
         diffu(I,j,k) = diffu(I,j,k) + fx
-      if (save_ZB2020u .or. CS%ann_smag_conserv) &
+      if (save_ZB2020u .or. CS%ann_smag_conserv .or. GM_conserv) &
         ZB2020u(I,j,k) = fx
     enddo ; enddo
 
@@ -1050,7 +1066,7 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IareaCv(i,J)) / h_v
       if (not(CS%ann_smag_conserv)) &
         diffv(i,J,k) = diffv(i,J,k) + fy
-      if (save_ZB2020v .or. CS%ann_smag_conserv) &
+      if (save_ZB2020v .or. CS%ann_smag_conserv .or. GM_conserv) &
         ZB2020v(i,J,k) = fy
     enddo ; enddo
 
@@ -1080,6 +1096,20 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
     ! call MOM_mesg(message, 2)
     ! write(message, '(a, g12.6)') 'Smagorinsky coefficient: ', SMAG_BI_CONST
     ! call MOM_mesg(message, 2)
+  endif
+
+  ! Here we choose the GM diffusivity coefficient such that the total KE energy contribution from
+  ! ANN + GM model is zero
+  if (GM_conserv) then
+    call compute_energy_source(u, v, h, ZB2020u, ZB2020v, G, GV, CS, KE_term, global_integral = global_integral_ZB2020)
+    GM_coefficient = 1e-10
+    if (global_integral_ZB2020 > 0. .and. GM_dissipation < 0.) then
+      GM_coefficient = - global_integral_ZB2020 / GM_dissipation
+    endif
+
+    if (CS%id_GM_coef>0) call post_data(CS%id_GM_coef, GM_coefficient, CS%diag)
+    if (CS%id_PE_GM>0) call post_data(CS%id_PE_GM, GM_dissipation * GM_coefficient, CS%diag)
+
   endif
 
   call cpu_clock_end(CS%id_clock_divergence)
