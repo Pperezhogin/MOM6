@@ -851,10 +851,15 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
            G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))           &
         )
 
-      ! Transform energy source term to the relaxation term of lagrangially-averaged equation
-      Esource_smag(i,j) = CS%dt * shear(i,j) * (Esource_smag(i,j) - CS%Esource_smag(i,j,k))
-      Esource_ZB(i,j)   = CS%dt * shear(i,j) * (Esource_ZB(i,j)   - CS%Esource_ZB(i,j,k))
+    enddo; enddo
 
+    if (CS%Esource_smag(20,20,k) == 0.) then
+      ! This is lazy initial condition
+      CS%Esource_smag(:,:,k) = Esource_smag(:,:) * G%mask2dT(:,:)
+      CS%Esource_ZB(:,:,k) = Esource_ZB(:,:) * G%mask2dT(:,:)
+    endif
+
+    do j=js-1,je+1 ; do i=is-1,ie+1
       ! Below we update the relaxation term with value on a fluid particle backward in time
       uT = (u(I,j,k) + u(I-1,j,k)) * 0.5
       vT = (v(i,J,k) + v(i,J-1,k)) * 0.5
@@ -895,52 +900,26 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       endif
       
       ! we update the relaxation term with a value on a fluid particle backward in time
-      Esource_smag(i,j) = Esource_smag(i,j) +                                          &
+      Esource_smag(i,j) =                                                              &
           bilin_interp(CS%Esource_smag(i0,j0,k),   CS%Esource_smag(i0,j0+1,k),         &
                        CS%Esource_smag(i0+1,j0,k), CS%Esource_smag(i0+1,j0+1,k), x, y)
 
-      Esource_ZB(i,j) = Esource_ZB(i,j) +                                          &
-          bilin_interp(CS%Esource_ZB(i0,j0,k),   CS%Esource_ZB(i0,j0+1,k),         &
+      Esource_ZB(i,j) =                                                             &
+          bilin_interp(CS%Esource_ZB(i0,j0,k),   CS%Esource_ZB(i0,j0+1,k),          &
                        CS%Esource_ZB(i0+1,j0,k), CS%Esource_ZB(i0+1,j0+1,k), x, y)
     enddo; enddo
 
     ! Save computations to storage array and enforcing zero B.C.
     CS%Esource_smag(:,:,k) = Esource_smag(:,:) * G%mask2dT(:,:)
     CS%Esource_ZB(:,:,k) = Esource_ZB(:,:) * G%mask2dT(:,:)
-    
+
   enddo ! end of k loop
-
-  Smag_coef = 0.
-  ! Remove excessive energy backscatter, if it is present
-  do k=1,nz
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      ! If Smagorinsky locally dissipates energy and ANN locally generates energy (dissipatioin is negative)
-      if (CS%Esource_smag(i,j,k) > 0. .and. CS%Esource_ZB(i,j,k) < 0.) then
-        Smag_coef(i,j,k) = - CS%Esource_ZB(i,j,k) / CS%Esource_smag(i,j,k)
-      endif
-    enddo; enddo
-    ! Update the Smagorinsky model with computed coefficient
-    Txx(:,:,k) = Txx(:,:,k) * Smag_coef(:,:,k)
-    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-      Txy(I,J,k) = Txy(I,J,k) * &
-        0.25 * ((Smag_coef(i,j,k) + Smag_coef(i+1,j+1,k)) + (Smag_coef(i+1,j,k) + Smag_coef(i,j+1,k)))
-    enddo; enddo
-  enddo
-
-  CS%Txx = CS%Txx + Txx
-  CS%Txy = CS%Txy + Txy
-  CS%Tyy = CS%Tyy - Txx ! Because we are working with deviatoric stress
-
-  if (CS%id_Txx_smag)  call post_data(CS%id_Txx_smag, Txx, CS%diag)
-  if (CS%id_Txy_smag)  call post_data(CS%id_Txy_smag, Txy, CS%diag)
-  if (CS%id_Esrc_smag) call post_data(CS%id_Esrc_smag, CS%Esource_smag, CS%diag)
-  if (CS%id_Esrc_ZB)   call post_data(CS%id_Esrc_ZB, CS%Esource_ZB, CS%diag)
-  if (CS%id_smag_coef) call post_data(CS%id_smag_coef, Smag_coef, CS%diag)
-  if (CS%id_smag) then
-    Smag_coef_mean = global_volume_mean(Smag_coef, h, G, GV)
-    call post_data(CS%id_smag, Smag_coef_mean, CS%diag)
-  endif
-
+  
+  if (CS%id_Txx_smag>0)  call post_data(CS%id_Txx_smag, Txx, CS%diag)
+  if (CS%id_Txy_smag>0)  call post_data(CS%id_Txy_smag, Txy, CS%diag)
+  if (CS%id_Esrc_smag>0) call post_data(CS%id_Esrc_smag, CS%Esource_smag, CS%diag)
+  if (CS%id_Esrc_ZB>0)   call post_data(CS%id_Esrc_ZB, CS%Esource_ZB, CS%diag)
+  
   call cpu_clock_end(CS%id_clock_cdiss)
 
 end subroutine Bound_backscatter_lagrangian
