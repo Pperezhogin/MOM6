@@ -88,8 +88,8 @@ type, public :: ZB2020_CS ; private
         maskw_q     !< Same mask but for q points [nondim]
 
   real, dimension(:,:,:), allocatable :: &
-        Esource_smag, & !< Subgrid Energy source due to Smagorinsky model [L5 T-3 ~> m5 s-3]
-        Esource_ZB      !< Subgrid Energy source due to ZB2020 model [L5 T-3 ~> m5 s-3]
+        Visc_coef,    & !< Predicted Viscosity coefficient
+        SGS_KE          !< Subgrid kinetic energy
 
   real :: backscatter_ratio !< The ratio of backscattered energy to the dissipated energy
 
@@ -117,8 +117,8 @@ type, public :: ZB2020_CS ; private
   integer :: id_GM_coef = -1, id_PE_GM = -1
   integer :: id_attenuation = -1
   integer :: id_Txx_smag = -1, id_Txy_smag = -1
-  integer :: id_Esrc_smag = -1, id_Esrc_ZB = -1
-  integer :: id_smag_coef = -1
+  integer :: id_SGS_KE = -1
+  integer :: id_visc_coef = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -277,12 +277,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_Txy_smag = register_diag_field('ocean_model', 'Txy_smag', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
 
-  CS%id_Esrc_smag = register_diag_field('ocean_model', 'Esrc_smag', diag%axesTL, Time, &
-      'Subgrid KE source by Smagorinsky model', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m)
-  CS%id_Esrc_ZB = register_diag_field('ocean_model', 'Esrc_ZB', diag%axesTL, Time, &
-      'Subgrid KE source by ZB20 model', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m)
-  CS%id_smag_coef = register_diag_field('ocean_model', 'smag_coef', diag%axesTL, Time, &
-      'Local Smagorinsky coefficient', 'nondim')
+  CS%id_visc_coef = register_diag_field('ocean_model', 'visc_coef', diag%axesTL, Time, &
+      'Local Viscosity coefficient', 'm2 s-1')
+  CS%id_SGS_KE = register_diag_field('ocean_model', 'SGS_KE', diag%axesTL, Time, &
+      'Subgrid kinetic energy', 'm3 s-2', conversion=US%L_T_to_m_s**2 * GV%H_to_m)
 
   if (CS%Klower_R_diss > 0) then
     CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
@@ -341,8 +339,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
 
   if (CS%smag_conserv_lagrangian) then
-    allocate(CS%Esource_smag(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
-    allocate(CS%Esource_ZB(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+    allocate(CS%SGS_KE(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+    allocate(CS%Visc_coef(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   endif
 
   allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
@@ -784,18 +782,18 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   integer :: i0, j0 ! Index of the left bottom corner of the unit square used for interpolation
 
   real, dimension(SZI_(G),SZJ_(G))            :: shear       ! Shear of Smagorinsky model [T-1 ~> s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Txx         ! Smagorinsky model
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: Txy         ! Smagorinsky model
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Smag_coef   ! Local Smagorinsky coefficient
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Txx         ! Stress tensor of eddy viscosity model
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: Txy         ! Stress tensor of eddy viscosity model
   
   real, dimension(SZI_(G),SZJ_(G)) :: Esource_smag  ! Source of Smagorinsky model
   real, dimension(SZI_(G),SZJ_(G)) :: Esource_ZB    ! Source of ZB model
+  real, dimension(SZI_(G),SZJ_(G)) :: SGS_KE        ! Subgrid kinetic energy
 
   real :: Tdd ! Deviatoric stress of ZB model
   real :: uT, vT ! Interpolation of advective velocity to T points
   real :: dx, dy ! Displacement of the fluid particle backward in time in metres
   real :: x, y   ! Nondimension coordinate on unit square of the interpolation point
-  real :: Smag_coef_mean ! Volume-averaged Smagorinsky coefficient
+  real :: error_E ! m2 s-2 error in prediction of KE
 
   call cpu_clock_begin(CS%id_clock_cdiss)
 
@@ -818,12 +816,12 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
-      Txx(i,j,k) = G%areaT(i,j) * G%mask2dT(i,j) * shear(i,j) * CS%sh_xx(i,j,k)
+      Txx(i,j,k) = CS%Visc_coef(i,j,k) * G%mask2dT(i,j) * CS%sh_xx(i,j,k)
     enddo; enddo
 
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-      Txy(I,J,k) = G%areaBu(I,J) * G%mask2dBu(I,J) * & 
-        0.25 * ((shear(i,j) + shear(i+1,j+1)) + (shear(i+1,j) + shear(i,j+1))) * &
+      Txy(I,J,k) = G%mask2dBu(I,J) * & 
+        0.25 * ((CS%Visc_coef(i,j,k) + CS%Visc_coef(i,j+1,k)) + (CS%Visc_coef(i+1,j,k) + CS%Visc_coef(i,j+1,k))) * &
         CS%sh_xy(I,J,k)
     enddo; enddo
 
@@ -851,13 +849,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
            G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))           &
         )
 
-    enddo; enddo
-
-    if (CS%Esource_smag(20,20,k) == 0.) then
-      ! This is lazy initial condition
-      CS%Esource_smag(:,:,k) = Esource_smag(:,:) * G%mask2dT(:,:)
-      CS%Esource_ZB(:,:,k) = Esource_ZB(:,:) * G%mask2dT(:,:)
-    endif
+    enddo; enddo 
 
     do j=js-1,je+1 ; do i=is-1,ie+1
       ! Below we update the relaxation term with value on a fluid particle backward in time
@@ -900,25 +892,39 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       endif
       
       ! we update the relaxation term with a value on a fluid particle backward in time
-      Esource_smag(i,j) =                                                              &
-          bilin_interp(CS%Esource_smag(i0,j0,k),   CS%Esource_smag(i0,j0+1,k),         &
-                       CS%Esource_smag(i0+1,j0,k), CS%Esource_smag(i0+1,j0+1,k), x, y)
-
-      Esource_ZB(i,j) =                                                             &
-          bilin_interp(CS%Esource_ZB(i0,j0,k),   CS%Esource_ZB(i0,j0+1,k),          &
-                       CS%Esource_ZB(i0+1,j0,k), CS%Esource_ZB(i0+1,j0+1,k), x, y)
+      SGS_KE(i,j) = (Esource_smag(i,j) + Esource_ZB(i,j)) * CS%dt          &
+        + bilin_interp(CS%SGS_KE(i0,j0,k),   CS%SGS_KE(i0,j0+1,k),         &
+                       CS%SGS_KE(i0+1,j0,k), CS%SGS_KE(i0+1,j0+1,k), x, y)
     enddo; enddo
 
-    ! Save computations to storage array and enforcing zero B.C.
-    CS%Esource_smag(:,:,k) = Esource_smag(:,:) * G%mask2dT(:,:)
-    CS%Esource_ZB(:,:,k) = Esource_ZB(:,:) * G%mask2dT(:,:)
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      ! Save computations to storage array and enforcing zero B.C.
+      CS%SGS_KE(i,j,k) = SGS_KE(i,j) * G%mask2dT(i,j)
+      ! The first term is the estimation of SGS KE according to ZB model itself
+      ! as half trace. We also put max in a case of severe numerical instability
+      ! Second term is the actual SGS_KE as we integrated in time, per unit mass
+      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k) / (h(i,j,k) + GV%H_subroundoff)
+      ! If error is positive, i.e. estimation is larger than the actual SGS KE, we introduce viscosity
+      ! To estimate the viscosity, we use estimation by Yankovsky 2023
+      CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
+      ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient (1, while common value is around )
+      CS%Visc_coef(i,j,k) = min(CS%Visc_coef(i,j,k), G%areaT(i,j) * shear(i,j))
+    enddo; enddo;
 
   enddo ! end of k loop
+
+  call pass_var(CS%SGS_KE, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Visc_coef, G%Domain, clock=CS%id_clock_mpi)
   
+  ! Coupling to dynamics
+  CS%Txx = CS%Txx + Txx
+  CS%Txy = CS%Txy + Txy
+  CS%Tyy = CS%Tyy - Txx
+
   if (CS%id_Txx_smag>0)  call post_data(CS%id_Txx_smag, Txx, CS%diag)
   if (CS%id_Txy_smag>0)  call post_data(CS%id_Txy_smag, Txy, CS%diag)
-  if (CS%id_Esrc_smag>0) call post_data(CS%id_Esrc_smag, CS%Esource_smag, CS%diag)
-  if (CS%id_Esrc_ZB>0)   call post_data(CS%id_Esrc_ZB, CS%Esource_ZB, CS%diag)
+  if (CS%id_visc_coef>0) call post_data(CS%id_visc_coef, CS%Visc_coef, CS%diag)
+  if (CS%id_SGS_KE>0)    call post_data(CS%id_SGS_KE, CS%SGS_KE, CS%diag)
   
   call cpu_clock_end(CS%id_clock_cdiss)
 
