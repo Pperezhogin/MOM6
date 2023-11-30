@@ -18,6 +18,7 @@ use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
 use MOM_ANN,           only : ANN_init, ANN_apply, ANN_end, ANN_CS
 use MOM_error_handler, only : MOM_mesg
+use MOM_spatial_means, only : global_volume_mean
 
 implicit none ; private
 
@@ -57,6 +58,7 @@ type, public :: ZB2020_CS ; private
                               !! 1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
   integer   :: Marching_halo  !< The number of filter iterations per a single MPI
                               !! exchange
+  real      :: DT             !< The (baroclinic) dynamics time step [T ~> s]
 
   real, dimension(:,:,:), allocatable :: &
           sh_xx,   & !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
@@ -85,11 +87,16 @@ type, public :: ZB2020_CS ; private
         maskw_h,  & !< Mask of land point at h points multiplied by filter weight [nondim]
         maskw_q     !< Same mask but for q points [nondim]
 
+  real, dimension(:,:,:), allocatable :: &
+        Esource_smag, & !< Subgrid Energy source due to Smagorinsky model [L5 T-3 ~> m5 s-3]
+        Esource_ZB      !< Subgrid Energy source due to ZB2020 model [L5 T-3 ~> m5 s-3]
+
   real :: backscatter_ratio !< The ratio of backscattered energy to the dissipated energy
 
   integer :: use_ann  !< 0: ANN is turned off, 1: default ANN with ZB20 model, 2: two separate ANNs on stencil 3x3 for corner and center
   logical :: rotation_invariant !< If true, the ANN is rotation invariant
   logical :: ann_smag_conserv !< Energy-conservative ANN by imposing Smagorinsky model
+  logical :: smag_conserv_lagrangian !< Energy conservation is imposed by introducing Smagorinsky model and performing averaging in Lagrangian frame
   type(ANN_CS) :: ann_instance !< ANN instance
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
@@ -109,6 +116,9 @@ type, public :: ZB2020_CS ; private
   integer :: id_smag = -1, id_KE_smag = -1, id_KE_ZB = -1
   integer :: id_GM_coef = -1, id_PE_GM = -1
   integer :: id_attenuation = -1
+  integer :: id_Txx_smag = -1, id_Txy_smag = -1
+  integer :: id_Esrc_smag = -1, id_Esrc_ZB = -1
+  integer :: id_smag_coef = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -179,6 +189,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   call get_param(param_file, mdl, "ANN_SMAG_CONSERV", CS%ann_smag_conserv, &
                  "Smagorinsky model makes SGS parameterization energy-conservative", default=.False.)
 
+  call get_param(param_file, mdl, "SMAG_CONSERV_LAGRANGIAN", CS%smag_conserv_lagrangian, &
+                 "Smagorinsky model makes SGS parameterization energy-conservative in lagrangian frame", &
+                 default=.False.)
+
   call get_param(param_file, mdl, "GM_CONSERV", GM_conserv, &
                  "GM model makes parameterization energy-conservative", default=.False.)
   GM_coefficient = 1e-10
@@ -236,6 +250,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "The number of filter iterations per single MPI " //&
                  "exchange", default=4, do_not_log=(CS%Stress_iter==0).and.(CS%HPF_iter==0))
 
+  call get_param(param_file, mdl, "DT", CS%dt, &
+                 "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
+                 fail_if_missing=.true.)
+
   ! Register fields for output from this module.
   CS%diag => diag
 
@@ -253,6 +271,18 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
       'Diagonal term (Tyy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+  
+  CS%id_Txx_smag = register_diag_field('ocean_model', 'Txx_smag', diag%axesTL, Time, &
+      'Diagonal term (Txx) in the Smagorinsky stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+  CS%id_Txy_smag = register_diag_field('ocean_model', 'Txy_smag', diag%axesBL, Time, &
+      'Off-diagonal term (Txy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+
+  CS%id_Esrc_smag = register_diag_field('ocean_model', 'Esrc_smag', diag%axesTL, Time, &
+      'Subgrid KE source by Smagorinsky model', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m)
+  CS%id_Esrc_ZB = register_diag_field('ocean_model', 'Esrc_ZB', diag%axesTL, Time, &
+      'Subgrid KE source by ZB20 model', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m)
+  CS%id_smag_coef = register_diag_field('ocean_model', 'smag_coef', diag%axesTL, Time, &
+      'Local Smagorinsky coefficient', 'nondim')
 
   if (CS%Klower_R_diss > 0) then
     CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
@@ -309,6 +339,11 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
+
+  if (CS%smag_conserv_lagrangian) then
+    allocate(CS%Esource_smag(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+    allocate(CS%Esource_ZB(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  endif
 
   allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   allocate(CS%Tyy(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
@@ -531,6 +566,10 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
   ! Smooth the stress tensor if specified
   call filter_stress(G, GV, CS)
 
+  if (CS%smag_conserv_lagrangian) then
+    call Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
+  endif
+
   ! Update the acceleration due to eddy viscosity (diffu, diffv)
   ! with the ZB2020 lateral parameterization
   call compute_stress_divergence(u, v, h, diffu, diffv,    &
@@ -710,6 +749,201 @@ subroutine compute_stress(G, GV, CS)
   call cpu_clock_end(CS%id_clock_stress)
 
 end subroutine compute_stress
+
+! Interpolation on a unit square is explained here:
+! https://en.wikipedia.org/wiki/Bilinear_interpolation#:~:text=On%20the%20unit-,square,-%5Bedit%5D
+pure function bilin_interp(f00, f01, f10, f11, x, y) result(interpolated)
+  real, intent(in) :: f00, f01, f10, f11, x, y
+  real :: interpolated
+
+  interpolated = &
+    f00 * (1-x) * (1-y) + &
+    f01 * (1-x) * y     + &
+    f10 * x * (1-y)     + &
+    f11 * x * y
+
+end function bilin_interp
+
+!> Compute local energy source due to ZB model
+!! and Smagorinsky (Laplacian) model and average in lagrangian frame
+!! Then, Smagorinsky model is applied to enforce KE conservation
+!! on lagrangian particles
+subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+        intent(in)    :: u  !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+        intent(in)    :: v  !< The meridional velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
+        intent(in) :: h     !< Layer thicknesses [H ~> m or kg m-2].
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+  integer :: i0, j0 ! Index of the left bottom corner of the unit square used for interpolation
+
+  real, dimension(SZI_(G),SZJ_(G))            :: shear       ! Shear of Smagorinsky model [T-1 ~> s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Txx         ! Smagorinsky model
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: Txy         ! Smagorinsky model
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Smag_coef   ! Local Smagorinsky coefficient
+  
+  real, dimension(SZI_(G),SZJ_(G)) :: Esource_smag  ! Source of Smagorinsky model
+  real, dimension(SZI_(G),SZJ_(G)) :: Esource_ZB    ! Source of ZB model
+
+  real :: Tdd ! Deviatoric stress of ZB model
+  real :: uT, vT ! Interpolation of advective velocity to T points
+  real :: dx, dy ! Displacement of the fluid particle backward in time in metres
+  real :: x, y   ! Nondimension coordinate on unit square of the interpolation point
+  real :: Smag_coef_mean ! Volume-averaged Smagorinsky coefficient
+
+  call cpu_clock_begin(CS%id_clock_cdiss)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  shear = 0.
+  Txx = 0.
+  Txy = 0.
+  Esource_smag = 0.
+  Esource_ZB = 0.
+
+  do k=1,nz
+
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      shear(i,j) = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (     &
+        (CS%sh_xy(I-1,J-1,k)**2 + CS%sh_xy(I,J  ,k)**2)   &
+      + (CS%sh_xy(I-1,J  ,k)**2 + CS%sh_xy(I,J-1,k)**2)   &
+      ))
+    enddo; enddo
+
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      Txx(i,j,k) = G%areaT(i,j) * G%mask2dT(i,j) * shear(i,j) * CS%sh_xx(i,j,k)
+    enddo; enddo
+
+    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+      Txy(I,J,k) = G%areaBu(I,J) * G%mask2dBu(I,J) * & 
+        0.25 * ((shear(i,j) + shear(i+1,j+1)) + (shear(i+1,j) + shear(i,j+1))) * &
+        CS%sh_xy(I,J,k)
+    enddo; enddo
+
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      ! Note here we account for deviatoric stress and for off-diagonal term once
+      ! Probably, more accurate source term should be multiplied by two
+      ! Note that it is dissipation. I.e., if model dissipates, like Smagorinsky, it is positive
+      Esource_smag(i,j) = h(i,j,k) * Txx(i,j,k) * CS%sh_xx(i,j,k) +                          &
+        0.25 * G%IareaT(i,j) *                                                               &
+        (                                                                                    &
+          (G%areaBu(I,J) * CS%hq(I,J,k) * Txy(I,J,k) * CS%sh_xy(I,J,k) +                     &
+           G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) +    &
+          (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +             &
+           G%areaBu(I,J-1) * CS%hq(I,J-1,k) * Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))              &
+        )
+      
+      ! Here we neglect contribution of the trace part which correlated only with divergence
+      Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
+      Esource_ZB(i,j) = h(i,j,k) * Tdd * CS%sh_xx(i,j,k) +                                   &
+        0.25 * G%IareaT(i,j) *                                                               &
+        (                                                                                    &
+          (G%areaBu(I,J) * CS%hq(I,J,k) * CS%Txy(I,J,k) * CS%sh_xy(I,J,k) +                  &
+           G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * CS%Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) + &
+          (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * CS%Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +          &
+           G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))           &
+        )
+
+      ! Transform energy source term to the relaxation term of lagrangially-averaged equation
+      Esource_smag(i,j) = CS%dt * shear(i,j) * (Esource_smag(i,j) - CS%Esource_smag(i,j,k))
+      Esource_ZB(i,j)   = CS%dt * shear(i,j) * (Esource_ZB(i,j)   - CS%Esource_ZB(i,j,k))
+
+      ! Below we update the relaxation term with value on a fluid particle backward in time
+      uT = (u(I,j,k) + u(I-1,j,k)) * 0.5
+      vT = (v(i,J,k) + v(i,J-1,k)) * 0.5
+      
+      ! Displacement backward in time, so the sign is minus
+      dx = - uT * CS%dt
+      dy = - vT * CS%dt
+
+      ! Now we determine the left bottom corner of the unit square
+      ! used for interpolation.
+      if (dx > 0) then
+        i0 = i
+      else
+        i0 = i-1
+      endif
+
+      if (dy>0) then
+        j0 = j
+      else
+        j0 = j-1
+      endif
+
+      ! Here we determine the relative position of the interpolation point
+      ! Note in every case the corner point is the center of the square
+      ! on which bilinear interpolation is performed.
+      ! If dx<0, we need to convert the non-dimensional coordinate to positive one,
+      ! which is w.r.t. leftmost corner of the unit square
+      if (dx > 0.) then
+        x = dx / G%dxBu(i0,j0)
+      else
+        x = 1. + dx / G%dxBu(i0,j0) ! this is smaller than 1
+      endif
+      
+      if (dy > 0.) then
+        y = dy / G%dyBu(i0,j0)
+      else
+        y = 1. + dy / G%dyBu(i0,j0)
+      endif
+      
+      ! we update the relaxation term with a value on a fluid particle backward in time
+      Esource_smag(i,j) = Esource_smag(i,j) +                                          &
+          bilin_interp(CS%Esource_smag(i0,j0,k),   CS%Esource_smag(i0,j0+1,k),         &
+                       CS%Esource_smag(i0+1,j0,k), CS%Esource_smag(i0+1,j0+1,k), x, y)
+
+      Esource_ZB(i,j) = Esource_ZB(i,j) +                                          &
+          bilin_interp(CS%Esource_ZB(i0,j0,k),   CS%Esource_ZB(i0,j0+1,k),         &
+                       CS%Esource_ZB(i0+1,j0,k), CS%Esource_ZB(i0+1,j0+1,k), x, y)
+    enddo; enddo
+
+    ! Save computations to storage array and enforcing zero B.C.
+    CS%Esource_smag(:,:,k) = Esource_smag(:,:) * G%mask2dT(:,:)
+    CS%Esource_ZB(:,:,k) = Esource_ZB(:,:) * G%mask2dT(:,:)
+    
+  enddo ! end of k loop
+
+  Smag_coef = 0.
+  ! Remove excessive energy backscatter, if it is present
+  do k=1,nz
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      ! If Smagorinsky locally dissipates energy and ANN locally generates energy (dissipatioin is negative)
+      if (CS%Esource_smag(i,j,k) > 0. .and. CS%Esource_ZB(i,j,k) < 0.) then
+        Smag_coef(i,j,k) = - CS%Esource_ZB(i,j,k) / CS%Esource_smag(i,j,k)
+      endif
+    enddo; enddo
+    ! Update the Smagorinsky model with computed coefficient
+    Txx(:,:,k) = Txx(:,:,k) * Smag_coef(:,:,k)
+    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+      Txy(I,J,k) = Txy(I,J,k) * &
+        0.25 * ((Smag_coef(i,j,k) + Smag_coef(i+1,j+1,k)) + (Smag_coef(i+1,j,k) + Smag_coef(i,j+1,k)))
+    enddo; enddo
+  enddo
+
+  CS%Txx = CS%Txx + Txx
+  CS%Txy = CS%Txy + Txy
+  CS%Tyy = CS%Tyy - Txx ! Because we are working with deviatoric stress
+
+  if (CS%id_Txx_smag)  call post_data(CS%id_Txx_smag, Txx, CS%diag)
+  if (CS%id_Txy_smag)  call post_data(CS%id_Txy_smag, Txy, CS%diag)
+  if (CS%id_Esrc_smag) call post_data(CS%id_Esrc_smag, CS%Esource_smag, CS%diag)
+  if (CS%id_Esrc_ZB)   call post_data(CS%id_Esrc_ZB, CS%Esource_ZB, CS%diag)
+  if (CS%id_smag_coef) call post_data(CS%id_smag_coef, Smag_coef, CS%diag)
+  if (CS%id_smag) then
+    Smag_coef_mean = global_volume_mean(Smag_coef, h, G, GV)
+    call post_data(CS%id_smag, Smag_coef_mean, CS%diag)
+  endif
+
+  call cpu_clock_end(CS%id_clock_cdiss)
+
+end subroutine Bound_backscatter_lagrangian
 
 pure function norm(x,n) result (y)
   real, dimension(n), intent(in) :: x
