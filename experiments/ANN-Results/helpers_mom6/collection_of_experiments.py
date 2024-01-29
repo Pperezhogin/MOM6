@@ -253,13 +253,22 @@ class CollectionOfExperiments:
 
         plt.tight_layout()
 
-    def plot_ssh_std(self, exps, labels=None, target='R64_R2'):
+    def plot_ssh_std(self, exps, labels=None, target='R64_R2', ncols=3):
         if labels is None:
             labels=exps
-        plt.figure(figsize=(4*len(exps),3))
         nfig = len(exps)
+        ncol = min(ncols,nfig)
+        nrows = nfig / ncols
+        if nrows > 1:
+            nrows = int(np.ceil(nrows))
+        else:
+            nrows = 1
+
+        plt.figure(figsize=(5*ncol,4*nrows))
+        plt.subplots_adjust(hspace=0.3, wspace=0.3)
+
         for ifig, exp in enumerate(exps):
-            plt.subplot(1,nfig,ifig+1)
+            plt.subplot(nrows,ncol,ifig+1)
             ssh = remesh(self[exp].ssh_std,self[target].ssh_std)
             levels = np.arange(0,1.3,0.1)
             label = 'SSH std [m]'
@@ -304,7 +313,7 @@ class CollectionOfExperiments:
 
         plt.tight_layout()
 
-    def plot_RV(self, exps, labels=None,idx=-1, zl=0, ncols=3):
+    def plot_RV(self, exps, labels=None,idx=-1, zl=0, ncols=3, vmax=0.2):
         if labels is None:
             labels=exps
         nfig = len(exps)
@@ -319,7 +328,7 @@ class CollectionOfExperiments:
         for ifig, exp in enumerate(exps):
             plt.subplot(nrows,ncol,ifig+1)
             field = self[exp].RV_f.isel(zl=zl,Time=idx)
-            im = field.plot.imshow(vmin=-0.2, vmax=0.2, cmap=cmocean.cm.balance, 
+            im = field.plot.imshow(vmin=-vmax, vmax=vmax, cmap=cmocean.cm.balance, 
                 add_colorbar=False, interpolation='none')
             plt.xticks([0,5,10,15,20])
             plt.yticks([30,35,40,45,50])
@@ -332,6 +341,37 @@ class CollectionOfExperiments:
         
         plt.colorbar(im, ax=plt.gcf().axes, label='Relative vorticity in \n Coriolis units, $\zeta/f$', extend='both')
         
+    def plot_velocity_snapshot(self, exps, labels=None,idx=-1, zl=0, ncols=3):
+        if labels is None:
+            labels=exps
+        nfig = len(exps)
+        ncol = min(ncols,nfig)
+        nrows = nfig / ncols
+        if nrows > 1:
+            nrows = int(np.ceil(nrows))
+        else:
+            nrows = 1
+        plt.figure(figsize=(5*ncol,4*nrows))
+        plt.subplots_adjust(hspace=0.3, wspace=0.3)
+        for ifig, exp in enumerate(exps):
+            plt.subplot(nrows,ncol,ifig+1)
+            field = self[exp].velocity.isel(zl=zl,Time=idx)
+            cmap = plt.get_cmap('inferno')
+            norm = matplotlib.colors.LogNorm(vmin=0.02, vmax=0.5)
+            im = field.plot.imshow(cmap=cmap, norm=norm, 
+                add_colorbar=False, interpolation='none')
+            plt.xticks([0,5,10,15,20])
+            plt.yticks([30,35,40,45,50])
+            plt.xlim([0,22])
+            plt.ylim([30,50])
+            plt.xlabel('Longitude')
+            plt.ylabel('Latitude')
+            plt.title(labels[ifig])
+            plt.gca().set_aspect(1)
+        
+        cbar = plt.colorbar(im, ax=plt.gcf().axes, extend='both')
+        cbar.set_label(label='Surface velocity, m/s' ,weight='bold', fontsize=20)
+        cbar.set_ticks(ticks=[2e-2, 0.05, 0.1, 0.2, 0.5], labels=[2e-2, 0.05, 0.1, 0.2, 0.5])
 
     def plot_velocity(self, exps, labels=None, key='u_mean'):
         if labels is None:

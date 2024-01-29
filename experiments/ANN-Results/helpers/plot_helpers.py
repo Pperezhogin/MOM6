@@ -43,9 +43,9 @@ def create_animation_ffmpeg(fun, idx, filename='my-video.mp4', dpi=200, FPS=18, 
     folder = '.ffmpeg/'+filename.split('.')[0]
 
     def create_snapshots():
-        for i in idx:
+        for frame, i in enumerate(idx):
             fun(i)
-            plt.savefig(f'{folder}/frame-{i}.png', dpi=dpi, bbox_inches='tight')
+            plt.savefig(f'{folder}/frame-{frame}.png', dpi=dpi, bbox_inches='tight')
             plt.close()
             print(f'Frame {i} is created', end='\r')
 
