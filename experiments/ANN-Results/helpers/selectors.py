@@ -94,6 +94,7 @@ def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_
     if mask is not None:
         mask_nan = mask.data.copy()
         mask_nan[mask_nan==0.] = np.nan
+        mask_nan = mask_nan + mask*0
         tested = tested * mask_nan
         control = control * mask_nan
     tested = selector(tested).compute()

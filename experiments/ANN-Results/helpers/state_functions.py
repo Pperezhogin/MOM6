@@ -104,7 +104,7 @@ class StateFunctions():
         
         # Energy source Galilean-invariant form
         if Txy is not None:
-            sh_xy, sh_xx, vort_xy = self.velocity_gradients()
+            sh_xy, sh_xx, vort_xy, _ = self.velocity_gradients()
             dEdt_G = - 0.5 * ((Txx * sh_xx - Tyy * sh_xx) * areaT + \
                 grid.interp(2 * Txy * sh_xy * areaB,['X','Y']))
             dEdt_G = dEdt_G * param.wet / areaT
@@ -269,11 +269,12 @@ class StateFunctions():
         sh_xx = compute((dudx-dvdy) * param.wet)
         sh_xy = dvdx+dudy
         vort_xy=dvdx-dudy
+        div = (dudx+dvdy) * param.wet # For VGM model
         
-        return sh_xy, sh_xx, vort_xy
+        return sh_xy, sh_xx, vort_xy, div
     
     def Smagorinsky(self, Cs_biharm=0.06):
-        sh_xy, sh_xx, vort_xy = self.velocity_gradients()
+        sh_xy, sh_xx, vort_xy, _ = self.velocity_gradients()
         grid = self.grid
         param = self.param
         
@@ -311,11 +312,11 @@ class StateFunctions():
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy, 'smagx': smagx, 'smagy': smagy}
         
-    def ZB20(self, ZB_scaling=1.0):
+    def ZB20(self, ZB_scaling=1.0, VGM='False'):
         param = self.param
         grid = self.grid
         
-        sh_xy, sh_xx, vort_xy = self.velocity_gradients()
+        sh_xy, sh_xx, vort_xy, div = self.velocity_gradients()
 
         vort_xy_center = grid.interp(vort_xy,['X','Y']) * param.wet
         sh_xy_center = grid.interp(sh_xy,['X','Y']) * param.wet
@@ -325,13 +326,22 @@ class StateFunctions():
 
         sum_sq = 0.5 * (vort_xy_center**2 + sh_xy_center**2 + sh_xx**2)
 
+        Txx = - vort_sh + sum_sq
+        Tyy = + vort_sh + sum_sq
+        Txy = vort_xy * sh_xx_corner
+
+        if VGM == 'VGM_flux':
+            div_corner = grid.interp(div, ['X', 'Y']) * param.wet_c
+            Txx +=   div * sh_xx + div**2
+            Tyy += - div * sh_xx + div**2
+            Txy += div_corner * sh_xy
+
         kappa_t = - param.dxT * param.dyT * param.wet * ZB_scaling
         kappa_q = - param.dxBu * param.dyBu * param.wet_c * ZB_scaling
 
-
-        Txx = kappa_t * (- vort_sh + sum_sq)
-        Tyy = kappa_t * (+ vort_sh + sum_sq)
-        Txy = kappa_q * (vort_xy * sh_xx_corner)
+        Txx = kappa_t * Txx
+        Tyy = kappa_t * Tyy
+        Txy = kappa_q * Txy
 
         ZB20u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
                + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
@@ -340,6 +350,22 @@ class StateFunctions():
         ZB20v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
                    + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
                    / (param.dxCv*param.dyCv)
+        
+        if VGM == 'VGM_full':
+            kappa_u = - param.dxCu * param.dyCu * param.wet_u * ZB_scaling
+            kappa_v = - param.dxCv * param.dyCv * param.wet_v * ZB_scaling
+            
+            Dxy = grid.diff(sh_xx, 'X') / param.dxCu + grid.diff(sh_xy, 'Y') / param.dyCu
+            div_u = grid.interp(div, 'X') * param.wet_u
+            vort_xy_u = grid.interp(vort_xy, 'Y')
+            div_y = grid.interp(grid.diff(div, 'Y') / param.dyCv,['X', 'Y'])
+            ZB20u += kappa_u * (div_u * Dxy + vort_xy_u * div_y)
+
+            Dxy = -grid.diff(sh_xx, 'Y') / param.dyCv + grid.diff(sh_xy, 'X') / param.dxCv
+            div_v = grid.interp(div, 'Y') * param.wet_v
+            vort_xy_v = grid.interp(vort_xy, 'X')
+            div_x = grid.interp(grid.diff(div, 'X') / param.dxCu,['X', 'Y'])
+            ZB20v += kappa_v * (div_v * Dxy - vort_xy_v * div_x)
 
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
@@ -373,7 +399,7 @@ class StateFunctions():
         areaCv = dxCv * dyCv
         
         ############# Computation of velocity gradients #############
-        sh_xy, sh_xx, vort_xy = self.velocity_gradients(compute=True)
+        sh_xy, sh_xx, vort_xy, _ = self.velocity_gradients(compute=True)
 
         sh_xy_h = tensor_from_xarray(grid.interp(sh_xy, ['X','Y'])) * wet
         vort_xy_h = tensor_from_xarray(grid.interp(vort_xy, ['X','Y'])) * wet
