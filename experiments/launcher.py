@@ -41,8 +41,8 @@ def create_MOM_override(p, filename):
 
 def run_experiment(folder, hpc, parameters):
     if os.path.exists(folder):
-        print('Folder '+folder+' already exists. We skip it')
-        return
+        #print('Folder '+folder+' already exists. We skip it')
+        #return
         print('Folder '+folder+' already exists. Delete it? (y/n)')
         if input()!='y':
             print('Experiment is not launched. Exit.')
@@ -50,16 +50,17 @@ def run_experiment(folder, hpc, parameters):
         else:
             os.system('rm -r '+folder)
     os.system('mkdir -p '+folder)
-    
+    os.system('mkdir -p '+folder+'/RESTART')
+
     create_slurm(hpc, os.path.join(folder,'mom.sub'))
     create_MOM_override(parameters, os.path.join(folder,'MOM_override'))
-    
+
     os.system('cp -r ~/MOM6-examples/src/MOM6/experiments/configurations/double_gyre/* '+folder)
     os.system('cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 '+folder)
 
     with open(os.path.join(folder,'args.json'), 'w') as f:
         json.dump(parameters, f, indent=2)
-    
+
     os.system('cd '+folder+'; sbatch mom.sub')
 
 #########################################################################################
@@ -421,33 +422,33 @@ if __name__ == '__main__':
 
 
     ############################################ generalization experiments ################################################
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.5, 1.6, 2.5]:#[2.0]:#[2.4, 2.6]:#[0.8, 1.2, 1.8, 2.2, 2.8]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=4,VG_SHARP_SEL=1).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.5, 1.6, 2.5]:#[2.0]:#[2.4, 2.6]:#[0.8, 1.2, 1.8, 2.2, 2.8]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=4,VG_SHARP_SEL=1).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.5, 1.6, 2.0, 2.4, 2.5]:#[0.8, 1.2, 1.8, 2.2, 2.8]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=2,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=2,VG_SHARP_SEL=1).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-2-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.5, 1.6, 2.0, 2.4, 2.5]:#[0.8, 1.2, 1.8, 2.2, 2.8]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=2,STRESS_SMOOTH_SEL=1,VG_SHARP_PASS=2,VG_SHARP_SEL=1).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-2-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
     
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.0]:#[0.5, 0.7, 0.9, 1.1, 1.3, 1.5]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[0.5, 0.7, 0.9, 1.1, 1.3, 1.5]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.0]:#[0.5, 0.7, 0.9, 1.1, 1.3, 1.5]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=2,STRESS_SMOOTH_SEL=1).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-2-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[0.5, 0.7, 0.9, 1.1, 1.3, 1.5]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=2,STRESS_SMOOTH_SEL=1).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-2-{conf}/ZB-{ZB_SCALING}', hpc, parameters)
 
     # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
     #     for ZB_SCALING in [0.3, 0.4, 0.5]:
@@ -489,3 +490,11 @@ if __name__ == '__main__':
     #     ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
     #     hpc = HPC.add(mem=4, ntasks=ntasks)
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Jansen-Held-{conf}/ref', hpc, parameters)
+
+    # Trace
+    for conf in ['R2', 'R3', 'R4', 'R5']:
+        for ZB_SCALING in [1.0]:
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,ZB_TRACE_MODE=1).add(**configuration(conf))
+            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+            hpc = HPC.add(mem=4, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-{conf}/ZB-{ZB_SCALING}-trace-free', hpc, parameters)
