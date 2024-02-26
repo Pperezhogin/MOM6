@@ -515,7 +515,7 @@ class CollectionOfExperiments:
             axes.set_xlabel('Longitude', labelpad=5)
             axes.set_ylabel('Latitude', labelpad=5)
             axes.zaxis.set_rotate_label(False)
-            axes.set_zlabel('Depth, $km$', labelpad=5, rotation=90)
+            axes.set_zlabel('Depth, $\mathrm{km}$', labelpad=5, rotation=90)
             axes.set_yticks([30,35,40,45,50])
             axes.set_ylim([30,50])
             axes.set_xlim([0,22])
