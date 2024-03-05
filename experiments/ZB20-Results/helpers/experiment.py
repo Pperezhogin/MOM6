@@ -385,11 +385,13 @@ class Experiment:
         H0 = 1000. # 1000 is reference depth (see series.H0.isel(Interface=1))
         hint = e.isel(zi=1)+H0 # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L655
         hbot = np.maximum(self.e.isel(zi=2, Time=0)+1000,0) # Time-independent bottom profile, where there is no fluid at rest; https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L656
-        return 0.5 * self.vert_grid.R.isel(zl=1)*self.vert_grid.g.isel(zl=1)*((hint**2 - hbot**2) * self.param.dxT * self.param.dyT).sum(dim=('xh','yh')) # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L657
+        vert_coord = 'Interface' if 'Interface' in self.vert_grid.g.dims else 'zl'
+        return 0.5 * self.vert_grid.R.isel(zl=1)*self.vert_grid.g[{vert_coord:1}]*((hint**2 - hbot**2) * self.param.dxT * self.param.dyT).sum(dim=('xh','yh')) # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/diagnostics/MOM_sum_output.F90#L657
     
     def PE_ssh(self, e):
         hint = e.isel(zi=0)
-        return 0.5 * self.vert_grid.R.isel(zl=0)*self.vert_grid.g.isel(zl=0)*(hint**2 * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
+        vert_coord = 'Interface' if 'Interface' in self.vert_grid.g.dims else 'zl'
+        return 0.5 * self.vert_grid.R.isel(zl=0)*self.vert_grid.g[{vert_coord:0}]*(hint**2 * self.param.dxT * self.param.dyT).sum(dim=('xh','yh'))
 
     @netcdf_property
     def PE_joul_series(self):

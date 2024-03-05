@@ -25,3 +25,9 @@ experiments/Results/Paper-Figures/*
 experiments/Results/Cs-ZB/*
 experiments/Results/presentation/*
 experiments/Results/SGS_generator/*
+*.ffmpeg*
+*pdf*
+*mp4*
+*gif*
+*png*
+*out*

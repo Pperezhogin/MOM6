@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 # creates slurm script mom.sub
-def create_slurm(p, filename):
+def create_slurm(p, filename, MOM6_file='MOM6'):
     # p - dictionary with parameters
     if p['mem'] < 1:
         mem = str(int(p['mem']*1000))+'MB'
@@ -22,7 +22,7 @@ def create_slurm(p, filename):
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
     'source ~/MOM6-examples/build/intel/env',
-    'time mpiexec ./MOM6 > out.txt',
+    f'time mpiexec ./{MOM6_file} > out.txt',
     'sacct -j $SLURM_JOB_ID --format=JobID,JobName,MaxRSS,Elapsed',
     'sacct -j $SLURM_JOB_ID --units=G --format=User,JobID%24,JobName,state,elapsed,TotalCPU,ReqMem,MaxRss,MaxVMSize,nnodes,ncpus,nodelist,Elapsed',
     'mkdir -p output',
@@ -39,7 +39,7 @@ def create_MOM_override(p, filename):
     with open(filename,'w') as fid:
         fid.writelines([ line+'\n' for line in lines])
 
-def run_experiment(folder, hpc, parameters):
+def run_experiment(folder, hpc, parameters, MOM6_exe='/MOM6-examples/build/intel/ocean_only/repro/MOM6'):
     if os.path.exists(folder):
         #print('Folder '+folder+' already exists. We skip it')
         #return
@@ -52,11 +52,11 @@ def run_experiment(folder, hpc, parameters):
     os.system('mkdir -p '+folder)
     os.system('mkdir -p '+folder+'/RESTART')
 
-    create_slurm(hpc, os.path.join(folder,'mom.sub'))
-    create_MOM_override(parameters, os.path.join(folder,'MOM_override'))
-
     os.system('cp -r ~/MOM6-examples/src/MOM6/experiments/configurations/double_gyre/* '+folder)
-    os.system('cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 '+folder)
+    os.system(f'cp {MOM6_exe} {folder}/{MOM6_exe.split("/")[-1]}')
+
+    create_slurm(hpc, os.path.join(folder,'mom.sub'), MOM6_exe.split('/')[-1])
+    create_MOM_override(parameters, os.path.join(folder,'MOM_override'))
 
     with open(os.path.join(folder,'args.json'), 'w') as f:
         json.dump(parameters, f, indent=2)
@@ -492,9 +492,62 @@ if __name__ == '__main__':
     #     run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Jansen-Held-{conf}/ref', hpc, parameters)
 
     # Trace
-    for conf in ['R2', 'R3', 'R4', 'R5']:
+    # for conf in ['R2', 'R3', 'R4', 'R5']:
+    #     for ZB_SCALING in [1.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,ZB_TRACE_MODE=1).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-{conf}/ZB-{ZB_SCALING}-trace-free', hpc, parameters)
+
+    # MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+
+    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         for ZB_SCALING in [1.0]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,ZB_TRACE_MODE=1).add(**configuration(conf))
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+                                        ZB_SCHEME=0).add(**configuration(conf))
             ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
             hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-{conf}/ZB-{ZB_SCALING}-trace-free', hpc, parameters)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-non-cons-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+
+    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+        for ZB_SCALING in [1.0]:
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+                                        ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+            hpc = HPC.add(mem=4, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-non-cons-attenuation-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+
+    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+        for ZB_SCALING in [1.0]:
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+                                        ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+            hpc = HPC.add(mem=4, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-attenuation-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+
+    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+        for ZB_SCALING in [2.5]:
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+                                        ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+            hpc = HPC.add(mem=4, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+
+    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+        for ZB_SCALING in [2.5]:
+            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1, VG_SHARP_PASS = 4,
+                                        ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+            hpc = HPC.add(mem=4, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
