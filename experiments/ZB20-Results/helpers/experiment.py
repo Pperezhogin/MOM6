@@ -784,7 +784,7 @@ class Experiment:
         return (fx,fy)
     
     # --------------------------- Smagorinsky biharmonic model --------------------------- #
-    def Smagorinsky(self, Cs=0.03):
+    def Smagorinsky(self, Cs=0.06):
         dx2h = self.param.dxT**2
         dy2h = self.param.dyT**2
         grid_sp2 = (2 * dx2h * dy2h) / (dx2h + dy2h)
@@ -867,15 +867,12 @@ class Experiment:
         '''
         return self.divergence(self.sh_xx(), self.sh_xy(), -self.sh_xx(), h=True)
 
-    def JansenHeld(self, ratio=1, Cs=0.03, nu=1):
+    def JansenHeld(self, ratio=1, Cs=0.06):
         Dx,Dy = self.Smagorinsky(Cs=Cs)
         Bx,By = self.LaplacianViscosity()
 
-        #Ediss = select_LatLon(Dx * self.u).mean(dim=('xq','yh')) + select_LatLon(Dy * self.v).mean(dim=('xh','yq'))
-        #Eback = select_LatLon(Bx * self.u).mean(dim=('xq','yh')) + select_LatLon(By * self.v).mean(dim=('xh','yq'))
-        
-        #mass_average(remesh(Dx*self.u,self.h)+remesh(Dy*self.v,self.h), self.h, self.param.dxT, self.param.dyT)
-        #Eback = mass_average(remesh(Bx*self.u,self.h)+remesh(By*self.v,self.h), self.h, self.param.dxT, self.param.dyT)
-        
-#        nu = -ratio * Ediss / Eback
+        Eback = (remesh(Bx*self.u, self.h)+remesh(By*self.v, self.h)) * self.h
+        Ediss = (remesh(Dx*self.u, self.h)+remesh(Dy*self.v, self.h)) * self.h
+
+        nu = - ratio * Ediss.sum() / Eback.sum()
         return (nu*Bx+Dx, nu*By+Dy)
