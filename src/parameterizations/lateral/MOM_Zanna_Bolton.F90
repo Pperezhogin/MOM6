@@ -67,6 +67,7 @@ type, public :: ZB2020_CS ; private
                      !! points including metric terms [T-1 ~> s-1]
           vort_xy, & !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
                      !! points including metric terms [T-1 ~> s-1]
+          div_xx,  & !< Estimate of horizontal divergence at h-points [T-1 ~> s-1]
           hq         !< Thickness in CORNER points [H ~> m or kg m-2]
 
   real, dimension(:,:,:), allocatable :: &
@@ -334,6 +335,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   ! with full halo because they potentially may be filtered
   ! with marching halo algorithm
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  allocate(CS%div_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
@@ -414,6 +416,7 @@ subroutine ZB2020_end(CS)
   deallocate(CS%sh_xx)
   deallocate(CS%sh_xy)
   deallocate(CS%vort_xy)
+  deallocate(CS%div_xx)
   deallocate(CS%hq)
 
   deallocate(CS%Txx)
@@ -448,7 +451,7 @@ end subroutine ZB2020_end
 !! and halo 1 for sh_xy and vort_xy
 !! We apply zero boundary conditions to velocity gradients
 !! which is required for filtering operations
-subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
+subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, div_xx, hq, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
@@ -467,6 +470,9 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   real, dimension(SZI_(G),SZJ_(G)), &
     intent(in) :: sh_xx       !< horizontal tension (du/dx - dv/dy)
                               !! including metric terms [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)), &
+    intent(in) :: div_xx      !< Estimate of horizontal divergence at h-points [T-1 ~> s-1]
 
   integer, intent(in) :: k    !< The vertical index of the layer to be passed.
 
@@ -487,6 +493,7 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   ! may require BC
   do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
     CS%sh_xx(i,j,k) = sh_xx(i,j) * G%mask2dT(i,j)
+    CS%div_xx(i,j,k) = div_xx(i,j) * G%mask2dT(i,j)
   enddo ; enddo
 
   ! We multiply by mask to remove
@@ -789,7 +796,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G)) :: Esource_ZB    ! Source of ZB model
   real, dimension(SZI_(G),SZJ_(G)) :: SGS_KE        ! Subgrid kinetic energy
 
-  real :: Tdd ! Deviatoric stress of ZB model
+  real :: Tdd, Ttr ! Deviatoric and isotropic stresses of ZB model
   real :: uT, vT ! Interpolation of advective velocity to T points
   real :: dx, dy ! Displacement of the fluid particle backward in time in metres
   real :: x, y   ! Nondimension coordinate on unit square of the interpolation point
@@ -840,7 +847,8 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       
       ! Here we neglect contribution of the trace part which correlated only with divergence
       Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
-      Esource_ZB(i,j) = h(i,j,k) * Tdd * CS%sh_xx(i,j,k) +                                   &
+      Ttr = 0.5 * (CS%Txx(i,j,k) + CS%Tyy(i,j,k))
+      Esource_ZB(i,j) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +                                   &
         0.25 * G%IareaT(i,j) *                                                               &
         (                                                                                    &
           (G%areaBu(I,J) * CS%hq(I,J,k) * CS%Txy(I,J,k) * CS%sh_xy(I,J,k) +                  &
@@ -920,6 +928,16 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   CS%Txx = CS%Txx + Txx
   CS%Txy = CS%Txy + Txy
   CS%Tyy = CS%Tyy - Txx
+
+  if (CS%ZB_type == 1) then
+    do k=1,nz
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
+        CS%Txx(i,j,k) = + Tdd
+        CS%Tyy(i,j,k) = - Tdd
+      enddo; enddo
+    enddo
+  endif
 
   if (CS%id_Txx_smag>0)  call post_data(CS%id_Txx_smag, Txx, CS%diag)
   if (CS%id_Txy_smag>0)  call post_data(CS%id_Txy_smag, Txy, CS%diag)
