@@ -119,6 +119,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_attenuation = -1
   integer :: id_Txx_smag = -1, id_Txy_smag = -1
   integer :: id_SGS_KE = -1
+  integer :: id_Esource_smag = -1, id_Esource_ZB = -1, id_Esource_adv = -1
   integer :: id_visc_coef = -1
   !>@}
 
@@ -282,6 +283,12 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
       'Local Viscosity coefficient', 'm2 s-1')
   CS%id_SGS_KE = register_diag_field('ocean_model', 'SGS_KE', diag%axesTL, Time, &
       'Subgrid kinetic energy', 'm3 s-2', conversion=US%L_T_to_m_s**2 * GV%H_to_m)
+  CS%id_Esource_smag = register_diag_field('ocean_model', 'Esource_smag', diag%axesTL, Time, &
+      'SGS KE budget: Energy source by Smagorinsky', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m / US%T_to_s)
+  CS%id_Esource_ZB = register_diag_field('ocean_model', 'Esource_ZB', diag%axesTL, Time, &
+      'SGS KE budget: Energy source by ZB20', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m / US%T_to_s)
+  CS%id_Esource_adv = register_diag_field('ocean_model', 'Esource_adv', diag%axesTL, Time, &
+      'SGS KE budget: Energy source by advection of SGS KE', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m / US%T_to_s)
 
   if (CS%Klower_R_diss > 0) then
     CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
@@ -792,15 +799,17 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Txx         ! Stress tensor of eddy viscosity model
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: Txy         ! Stress tensor of eddy viscosity model
   
-  real, dimension(SZI_(G),SZJ_(G)) :: Esource_smag  ! Source of Smagorinsky model
-  real, dimension(SZI_(G),SZJ_(G)) :: Esource_ZB    ! Source of ZB model
-  real, dimension(SZI_(G),SZJ_(G)) :: SGS_KE        ! Subgrid kinetic energy
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_smag  ! Source of Smagorinsky model
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_ZB    ! Source of ZB model
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_adv   ! Source of advection of SGS KE
+  real, dimension(SZI_(G),SZJ_(G)) :: SGS_KE                 ! Subgrid kinetic energy
 
   real :: Tdd, Ttr ! Deviatoric and isotropic stresses of ZB model
   real :: uT, vT ! Interpolation of advective velocity to T points
   real :: dx, dy ! Displacement of the fluid particle backward in time in metres
   real :: x, y   ! Nondimension coordinate on unit square of the interpolation point
   real :: error_E ! m2 s-2 error in prediction of KE
+  real :: SGS_KE_interpolated ! Application of Semi-lagrangian method to SGS KE
 
   call cpu_clock_begin(CS%id_clock_cdiss)
 
@@ -836,7 +845,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       ! Note here we account for deviatoric stress and for off-diagonal term once
       ! Probably, more accurate source term should be multiplied by two
       ! Note that it is dissipation. I.e., if model dissipates, like Smagorinsky, it is positive
-      Esource_smag(i,j) = h(i,j,k) * Txx(i,j,k) * CS%sh_xx(i,j,k) +                          &
+      Esource_smag(i,j,k) = h(i,j,k) * Txx(i,j,k) * CS%sh_xx(i,j,k) +                        &
         0.25 * G%IareaT(i,j) *                                                               &
         (                                                                                    &
           (G%areaBu(I,J) * CS%hq(I,J,k) * Txy(I,J,k) * CS%sh_xy(I,J,k) +                     &
@@ -848,7 +857,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       ! Here we neglect contribution of the trace part which correlated only with divergence
       Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
       Ttr = 0.5 * (CS%Txx(i,j,k) + CS%Tyy(i,j,k))
-      Esource_ZB(i,j) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +                                   &
+      Esource_ZB(i,j,k) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +      &
         0.25 * G%IareaT(i,j) *                                                               &
         (                                                                                    &
           (G%areaBu(I,J) * CS%hq(I,J,k) * CS%Txy(I,J,k) * CS%sh_xy(I,J,k) +                  &
@@ -899,10 +908,15 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
         y = 1. + dy / G%dyBu(i0,j0)
       endif
       
-      ! we update the relaxation term with a value on a fluid particle backward in time
-      SGS_KE(i,j) = (Esource_smag(i,j) + Esource_ZB(i,j)) * CS%dt          &
-        + bilin_interp(CS%SGS_KE(i0,j0,k),   CS%SGS_KE(i0,j0+1,k),         &
-                       CS%SGS_KE(i0+1,j0,k), CS%SGS_KE(i0+1,j0+1,k), x, y)
+      SGS_KE_interpolated = bilin_interp(CS%SGS_KE(i0,j0,k),   CS%SGS_KE(i0,j0+1,k),         &
+                                         CS%SGS_KE(i0+1,j0,k), CS%SGS_KE(i0+1,j0+1,k), x, y)
+
+      SGS_KE(i,j) = SGS_KE_interpolated + (Esource_smag(i,j,k) + Esource_ZB(i,j,k)) * CS%dt
+
+      ! Here we transform the semi-lagrangian method to the advection tendency
+      if (CS%id_Esource_adv>0) then
+        Esource_adv(i,j,k) = (SGS_KE_interpolated - CS%SGS_KE(i,j,k)) / CS%dt
+      endif
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
@@ -939,10 +953,13 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
     enddo
   endif
 
-  if (CS%id_Txx_smag>0)  call post_data(CS%id_Txx_smag, Txx, CS%diag)
-  if (CS%id_Txy_smag>0)  call post_data(CS%id_Txy_smag, Txy, CS%diag)
-  if (CS%id_visc_coef>0) call post_data(CS%id_visc_coef, CS%Visc_coef, CS%diag)
-  if (CS%id_SGS_KE>0)    call post_data(CS%id_SGS_KE, CS%SGS_KE, CS%diag)
+  if (CS%id_Txx_smag>0)     call post_data(CS%id_Txx_smag, Txx, CS%diag)
+  if (CS%id_Txy_smag>0)     call post_data(CS%id_Txy_smag, Txy, CS%diag)
+  if (CS%id_visc_coef>0)    call post_data(CS%id_visc_coef, CS%Visc_coef, CS%diag)
+  if (CS%id_SGS_KE>0)       call post_data(CS%id_SGS_KE, CS%SGS_KE, CS%diag)
+  if (CS%id_Esource_ZB>0)   call post_data(CS%id_Esource_ZB, Esource_ZB, CS%diag)
+  if (CS%id_Esource_smag>0) call post_data(CS%id_Esource_smag, Esource_smag, CS%diag)
+  if (CS%id_Esource_adv>0)  call post_data(CS%id_Esource_adv, Esource_adv, CS%diag)
   
   call cpu_clock_end(CS%id_clock_cdiss)
 
