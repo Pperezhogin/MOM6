@@ -911,11 +911,13 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       SGS_KE_interpolated = bilin_interp(CS%SGS_KE(i0,j0,k),   CS%SGS_KE(i0,j0+1,k),         &
                                          CS%SGS_KE(i0+1,j0,k), CS%SGS_KE(i0+1,j0+1,k), x, y)
 
-      SGS_KE(i,j) = SGS_KE_interpolated + (Esource_smag(i,j,k) + Esource_ZB(i,j,k)) * CS%dt
+      ! Here we divide the energy source by h because the SGS KE equation is reformulated in layer-averaged quantities
+      SGS_KE(i,j) = SGS_KE_interpolated + (Esource_smag(i,j,k) + Esource_ZB(i,j,k)) * CS%dt / (h(i,j,k) + GV%H_subroundoff)
 
       ! Here we transform the semi-lagrangian method to the advection tendency
+      ! Here we multiply by h to formulate diagnostics in layer-integrated quantities
       if (CS%id_Esource_adv>0) then
-        Esource_adv(i,j,k) = (SGS_KE_interpolated - CS%SGS_KE(i,j,k)) / CS%dt
+        Esource_adv(i,j,k) = (SGS_KE_interpolated - CS%SGS_KE(i,j,k)) / CS%dt * h(i,j,k)
       endif
     enddo; enddo
 
@@ -925,7 +927,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       ! The first term is the estimation of SGS KE according to ZB model itself
       ! as half trace. We also put max in a case of severe numerical instability
       ! Second term is the actual SGS_KE as we integrated in time, per unit mass
-      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k) / (h(i,j,k) + GV%H_subroundoff)
+      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k)
       ! If error is positive, i.e. estimation is larger than the actual SGS KE, we introduce viscosity
       ! To estimate the viscosity, we use estimation by Yankovsky 2023
       CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
@@ -956,7 +958,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   if (CS%id_Txx_smag>0)     call post_data(CS%id_Txx_smag, Txx, CS%diag)
   if (CS%id_Txy_smag>0)     call post_data(CS%id_Txy_smag, Txy, CS%diag)
   if (CS%id_visc_coef>0)    call post_data(CS%id_visc_coef, CS%Visc_coef, CS%diag)
-  if (CS%id_SGS_KE>0)       call post_data(CS%id_SGS_KE, CS%SGS_KE, CS%diag)
+  if (CS%id_SGS_KE>0)       call post_data(CS%id_SGS_KE, CS%SGS_KE * h, CS%diag)
   if (CS%id_Esource_ZB>0)   call post_data(CS%id_Esource_ZB, Esource_ZB, CS%diag)
   if (CS%id_Esource_smag>0) call post_data(CS%id_Esource_smag, Esource_smag, CS%diag)
   if (CS%id_Esource_adv>0)  call post_data(CS%id_Esource_adv, Esource_adv, CS%diag)
