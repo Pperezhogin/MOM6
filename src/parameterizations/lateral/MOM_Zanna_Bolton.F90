@@ -802,7 +802,6 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_smag  ! Source of Smagorinsky model
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_ZB    ! Source of ZB model
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_adv   ! Source of advection of SGS KE
-  real, dimension(SZI_(G),SZJ_(G)) :: SGS_KE                 ! Subgrid kinetic energy
 
   real, dimension(SZIB_(G),SZJ_(G)) :: flux_u  !< The advective flux of SGS KE in u-points
   real, dimension(SZI_(G),SZJB_(G)) :: flux_v  !< The advective flux of SGS KE in v-points
@@ -829,11 +828,21 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
 
   do k=1,nz
 
-    do j=js-1,je+1 ; do i=is-1,ie+1
+    do j=js-2,je+2 ; do i=is-2,ie+2
       shear(i,j) = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (     &
         (CS%sh_xy(I-1,J-1,k)**2 + CS%sh_xy(I,J  ,k)**2)   &
       + (CS%sh_xy(I-1,J  ,k)**2 + CS%sh_xy(I,J-1,k)**2)   &
       ))
+
+      ! The first term is the estimation of SGS KE according to ZB model itself
+      ! as half trace. We also put max in a case of severe numerical instability
+      ! Second term is the actual SGS_KE as we integrated in time, per unit mass
+      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k) / (h(i,j,k) + GV%H_subroundoff)
+      ! If error is positive, i.e. estimation is larger than the actual SGS KE, we introduce viscosity
+      ! To estimate the viscosity, we use estimation by Yankovsky 2023
+      CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
+      ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient (1, while common value is around )
+      CS%Visc_coef(i,j,k) = min(CS%Visc_coef(i,j,k), G%areaT(i,j) * shear(i,j))
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
@@ -895,27 +904,12 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
-      SGS_KE(i,j) = CS%SGS_KE(i,j,k) + (Esource_smag(i,j,k) + Esource_ZB(i,j,k) + Esource_adv(i,j,k)) * CS%dt
+      CS%SGS_KE(i,j,k) = (CS%SGS_KE(i,j,k) + (Esource_smag(i,j,k) + Esource_ZB(i,j,k) + Esource_adv(i,j,k)) * CS%dt) * G%mask2dT(i,j)
     enddo; enddo
-
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      ! Save computations to storage array and enforcing zero B.C.
-      CS%SGS_KE(i,j,k) = SGS_KE(i,j) * G%mask2dT(i,j)
-      ! The first term is the estimation of SGS KE according to ZB model itself
-      ! as half trace. We also put max in a case of severe numerical instability
-      ! Second term is the actual SGS_KE as we integrated in time, per unit mass
-      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k) / (h(i,j,k) + GV%H_subroundoff)
-      ! If error is positive, i.e. estimation is larger than the actual SGS KE, we introduce viscosity
-      ! To estimate the viscosity, we use estimation by Yankovsky 2023
-      CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
-      ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient (1, while common value is around )
-      CS%Visc_coef(i,j,k) = min(CS%Visc_coef(i,j,k), G%areaT(i,j) * shear(i,j))
-    enddo; enddo;
 
   enddo ! end of k loop
 
   call pass_var(CS%SGS_KE, G%Domain, clock=CS%id_clock_mpi)
-  call pass_var(CS%Visc_coef, G%Domain, clock=CS%id_clock_mpi)
   
   ! Coupling to dynamics
   CS%Txx = CS%Txx + Txx
