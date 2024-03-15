@@ -804,12 +804,16 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_adv   ! Source of advection of SGS KE
   real, dimension(SZI_(G),SZJ_(G)) :: SGS_KE                 ! Subgrid kinetic energy
 
+  real, dimension(SZIB_(G),SZJ_(G)) :: flux_u  !< The advective flux of SGS KE in u-points
+  real, dimension(SZI_(G),SZJB_(G)) :: flux_v  !< The advective flux of SGS KE in v-points
+
   real :: Tdd, Ttr ! Deviatoric and isotropic stresses of ZB model
   real :: uT, vT ! Interpolation of advective velocity to T points
   real :: dx, dy ! Displacement of the fluid particle backward in time in metres
   real :: x, y   ! Nondimension coordinate on unit square of the interpolation point
   real :: error_E ! m2 s-2 error in prediction of KE
   real :: SGS_KE_interpolated ! Application of Semi-lagrangian method to SGS KE
+  real :: SGS_KE_upstream ! value of SGS_KE in upstream direciton. Used for upwinding
 
   call cpu_clock_begin(CS%id_clock_cdiss)
 
@@ -821,6 +825,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   Txy = 0.
   Esource_smag = 0.
   Esource_ZB = 0.
+  Esource_adv = 0.
 
   do k=1,nz
 
@@ -869,56 +874,28 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
     enddo; enddo 
 
     do j=js-1,je+1 ; do i=is-1,ie+1
-      ! Below we update the relaxation term with value on a fluid particle backward in time
-      uT = (u(I,j,k) + u(I-1,j,k)) * 0.5
-      vT = (v(i,J,k) + v(i,J-1,k)) * 0.5
-      
-      ! Displacement backward in time, so the sign is minus
-      dx = - uT * CS%dt
-      dy = - vT * CS%dt
-
-      ! Now we determine the left bottom corner of the unit square
-      ! used for interpolation.
-      if (dx > 0) then
-        i0 = i
+      if (u(I,j,k) > 0.) then
+        SGS_KE_upstream = CS%SGS_KE(i,j,k)
       else
-        i0 = i-1
+        SGS_KE_upstream = CS%SGS_KE(i+1,j,k)
       endif
+      flux_u(I,j) = u(I,j,k) * SGS_KE_upstream * G%dyCu(I,j) * G%mask2dCu(I,j)
 
-      if (dy>0) then
-        j0 = j
+      if (v(i,J,k) > 0.) then
+        SGS_KE_upstream = CS%SGS_KE(i,j,k)
       else
-        j0 = j-1
+        SGS_KE_upstream = CS%SGS_KE(i,j+1,k)
       endif
 
-      ! Here we determine the relative position of the interpolation point
-      ! Note in every case the corner point is the center of the square
-      ! on which bilinear interpolation is performed.
-      ! If dx<0, we need to convert the non-dimensional coordinate to positive one,
-      ! which is w.r.t. leftmost corner of the unit square
-      if (dx > 0.) then
-        x = dx / G%dxBu(i0,j0)
-      else
-        x = 1. + dx / G%dxBu(i0,j0) ! this is smaller than 1
-      endif
-      
-      if (dy > 0.) then
-        y = dy / G%dyBu(i0,j0)
-      else
-        y = 1. + dy / G%dyBu(i0,j0)
-      endif
-      
-      SGS_KE_interpolated = bilin_interp(CS%SGS_KE(i0,j0,k),   CS%SGS_KE(i0,j0+1,k),         &
-                                         CS%SGS_KE(i0+1,j0,k), CS%SGS_KE(i0+1,j0+1,k), x, y)
+      flux_v(i,J) = v(i,J,k) * SGS_KE_upstream * G%dxCv(i,J) * G%mask2dCv(i,J)
+    enddo; enddo
 
-      ! Here we divide the energy source by h because the SGS KE equation is reformulated in layer-averaged quantities
-      SGS_KE(i,j) = SGS_KE_interpolated + (Esource_smag(i,j,k) + Esource_ZB(i,j,k)) * CS%dt / (h(i,j,k) + GV%H_subroundoff)
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      Esource_adv(i,j,k) = - (flux_u(I,j) - flux_u(I-1,j) + flux_v(i,J) - flux_v(i,J-1)) * G%IareaT(i,j)
+    enddo; enddo
 
-      ! Here we transform the semi-lagrangian method to the advection tendency
-      ! Here we multiply by h to formulate diagnostics in layer-integrated quantities
-      if (CS%id_Esource_adv>0) then
-        Esource_adv(i,j,k) = (SGS_KE_interpolated - CS%SGS_KE(i,j,k)) / CS%dt * h(i,j,k)
-      endif
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      SGS_KE(i,j) = CS%SGS_KE(i,j,k) + (Esource_smag(i,j,k) + Esource_ZB(i,j,k) + Esource_adv(i,j,k)) * CS%dt
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
@@ -927,7 +904,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       ! The first term is the estimation of SGS KE according to ZB model itself
       ! as half trace. We also put max in a case of severe numerical instability
       ! Second term is the actual SGS_KE as we integrated in time, per unit mass
-      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k)
+      error_E = max(-(CS%Txx(i,j,k) + CS%Tyy(i,j,k)) * 0.5, 0.) - CS%SGS_KE(i,j,k) / (h(i,j,k) + GV%H_subroundoff)
       ! If error is positive, i.e. estimation is larger than the actual SGS KE, we introduce viscosity
       ! To estimate the viscosity, we use estimation by Yankovsky 2023
       CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
@@ -958,7 +935,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   if (CS%id_Txx_smag>0)     call post_data(CS%id_Txx_smag, Txx, CS%diag)
   if (CS%id_Txy_smag>0)     call post_data(CS%id_Txy_smag, Txy, CS%diag)
   if (CS%id_visc_coef>0)    call post_data(CS%id_visc_coef, CS%Visc_coef, CS%diag)
-  if (CS%id_SGS_KE>0)       call post_data(CS%id_SGS_KE, CS%SGS_KE * h, CS%diag)
+  if (CS%id_SGS_KE>0)       call post_data(CS%id_SGS_KE, CS%SGS_KE, CS%diag)
   if (CS%id_Esource_ZB>0)   call post_data(CS%id_Esource_ZB, Esource_ZB, CS%diag)
   if (CS%id_Esource_smag>0) call post_data(CS%id_Esource_smag, Esource_smag, CS%diag)
   if (CS%id_Esource_adv>0)  call post_data(CS%id_Esource_adv, Esource_adv, CS%diag)
