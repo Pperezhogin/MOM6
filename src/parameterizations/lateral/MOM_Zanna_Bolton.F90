@@ -98,6 +98,7 @@ type, public :: ZB2020_CS ; private
   logical :: rotation_invariant !< If true, the ANN is rotation invariant
   logical :: ann_smag_conserv !< Energy-conservative ANN by imposing Smagorinsky model
   logical :: smag_conserv_lagrangian !< Energy conservation is imposed by introducing Smagorinsky model and performing averaging in Lagrangian frame
+  logical :: SGS_KE_dissipation !< Include dissipation SGS KE to eliminate mismatch between simulated and estimated SGS KE
   type(ANN_CS) :: ann_instance !< ANN instance
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
@@ -119,7 +120,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_attenuation = -1
   integer :: id_Txx_smag = -1, id_Txy_smag = -1
   integer :: id_SGS_KE = -1
-  integer :: id_Esource_smag = -1, id_Esource_ZB = -1, id_Esource_adv = -1
+  integer :: id_Esource_smag = -1, id_Esource_ZB = -1, id_Esource_adv = -1, id_Esource_dis = -1
   integer :: id_visc_coef = -1
   !>@}
 
@@ -193,6 +194,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   call get_param(param_file, mdl, "SMAG_CONSERV_LAGRANGIAN", CS%smag_conserv_lagrangian, &
                  "Smagorinsky model makes SGS parameterization energy-conservative in lagrangian frame", &
+                 default=.False.)
+
+  call get_param(param_file, mdl, "SGS_KE_DISSIPATION", CS%SGS_KE_dissipation, &
+                 "Include dissipation SGS KE to eliminate mismatch between simulated and estimated SGS KE", &
                  default=.False.)
 
   call get_param(param_file, mdl, "GM_CONSERV", GM_conserv, &
@@ -288,6 +293,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_Esource_ZB = register_diag_field('ocean_model', 'Esource_ZB', diag%axesTL, Time, &
       'SGS KE budget: Energy source by ZB20', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m / US%T_to_s)
   CS%id_Esource_adv = register_diag_field('ocean_model', 'Esource_adv', diag%axesTL, Time, &
+      'SGS KE budget: Energy source by advection of SGS KE', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m / US%T_to_s)
+  CS%id_Esource_dis = register_diag_field('ocean_model', 'Esource_dis', diag%axesTL, Time, &
       'SGS KE budget: Energy source by advection of SGS KE', 'm3 s-3', conversion=US%L_T_to_m_s**2 * GV%H_to_m / US%T_to_s)
 
   if (CS%Klower_R_diss > 0) then
@@ -802,6 +809,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_smag  ! Source of Smagorinsky model
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_ZB    ! Source of ZB model
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_adv   ! Source of advection of SGS KE
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_dis   ! Source of advection of SGS KE
 
   real, dimension(SZIB_(G),SZJ_(G)) :: flux_u  !< The advective flux of SGS KE in u-points
   real, dimension(SZI_(G),SZJB_(G)) :: flux_v  !< The advective flux of SGS KE in v-points
@@ -825,6 +833,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   Esource_smag = 0.
   Esource_ZB = 0.
   Esource_adv = 0.
+  Esource_dis = 0.
 
   do k=1,nz
 
@@ -843,6 +852,10 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
       ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient (1, while common value is around )
       CS%Visc_coef(i,j,k) = min(CS%Visc_coef(i,j,k), G%areaT(i,j) * shear(i,j))
+
+      if (CS%SGS_KE_dissipation) then
+        Esource_dis(i,j,k) = min(error_E, 0.0) * h(i,j,k) / CS%dt
+      endif
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
@@ -904,7 +917,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
     enddo; enddo
 
     do j=js-1,je+1 ; do i=is-1,ie+1
-      CS%SGS_KE(i,j,k) = (CS%SGS_KE(i,j,k) + (Esource_smag(i,j,k) + Esource_ZB(i,j,k) + Esource_adv(i,j,k)) * CS%dt) * G%mask2dT(i,j)
+      CS%SGS_KE(i,j,k) = (CS%SGS_KE(i,j,k) + (Esource_smag(i,j,k) + Esource_ZB(i,j,k) + Esource_adv(i,j,k) + Esource_dis(i,j,k)) * CS%dt) * G%mask2dT(i,j)
     enddo; enddo
 
   enddo ! end of k loop
@@ -933,6 +946,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   if (CS%id_Esource_ZB>0)   call post_data(CS%id_Esource_ZB, Esource_ZB, CS%diag)
   if (CS%id_Esource_smag>0) call post_data(CS%id_Esource_smag, Esource_smag, CS%diag)
   if (CS%id_Esource_adv>0)  call post_data(CS%id_Esource_adv, Esource_adv, CS%diag)
+  if (CS%id_Esource_dis>0)  call post_data(CS%id_Esource_dis, Esource_dis, CS%diag)
   
   call cpu_clock_end(CS%id_clock_cdiss)
 
