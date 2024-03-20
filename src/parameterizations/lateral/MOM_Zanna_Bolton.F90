@@ -99,6 +99,7 @@ type, public :: ZB2020_CS ; private
   logical :: ann_smag_conserv !< Energy-conservative ANN by imposing Smagorinsky model
   logical :: smag_conserv_lagrangian !< Energy conservation is imposed by introducing Smagorinsky model and performing averaging in Lagrangian frame
   logical :: SGS_KE_dissipation !< Include dissipation SGS KE to eliminate mismatch between simulated and estimated SGS KE
+  integer :: ZB_limiter !< Limit momentum fluxes to prohibit growth of local min/max. 
   type(ANN_CS) :: ann_instance !< ANN instance
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
@@ -118,7 +119,8 @@ type, public :: ZB2020_CS ; private
   integer :: id_smag = -1, id_KE_smag = -1, id_KE_ZB = -1
   integer :: id_GM_coef = -1, id_PE_GM = -1
   integer :: id_attenuation = -1
-  integer :: id_Txx_smag = -1, id_Txy_smag = -1
+  integer :: id_Txx_smag = -1, id_Txy_smag = -1, id_Tyy_smag = -1
+  integer :: id_FCT_Txx = -1, id_FCT_Txy = -1, id_FCT_Tyy = -1
   integer :: id_SGS_KE = -1
   integer :: id_Esource_smag = -1, id_Esource_ZB = -1, id_Esource_adv = -1, id_Esource_dis = -1
   integer :: id_visc_coef = -1
@@ -199,6 +201,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   call get_param(param_file, mdl, "SGS_KE_DISSIPATION", CS%SGS_KE_dissipation, &
                  "Include dissipation SGS KE to eliminate mismatch between simulated and estimated SGS KE", &
                  default=.False.)
+
+  call get_param(param_file, mdl, "ZB_LIMITER", CS%ZB_limiter, &
+                 "If equals 0, applies simplified Zalesak1979 limiter to preserve local min/max of u/v fields", &
+                 default=-1)
 
   call get_param(param_file, mdl, "GM_CONSERV", GM_conserv, &
                  "GM model makes parameterization energy-conservative", default=.False.)
@@ -281,8 +287,17 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   
   CS%id_Txx_smag = register_diag_field('ocean_model', 'Txx_smag', diag%axesTL, Time, &
       'Diagonal term (Txx) in the Smagorinsky stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+  CS%id_Tyy_smag = register_diag_field('ocean_model', 'Tyy_smag', diag%axesTL, Time, &
+      'Diagonal term (Tyy) in the Smagorinsky stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
   CS%id_Txy_smag = register_diag_field('ocean_model', 'Txy_smag', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+
+  CS%id_FCT_Txx = register_diag_field('ocean_model', 'FCT_Txx', diag%axesTL, Time, &
+      'FCT attenuation number for Txx component of momentum flux', 'nondim')
+  CS%id_FCT_Tyy = register_diag_field('ocean_model', 'FCT_Tyy', diag%axesTL, Time, &
+      'FCT attenuation number for Tyy component of momentum flux', 'nondim')
+  CS%id_FCT_Txy = register_diag_field('ocean_model', 'FCT_Txy', diag%axesBL, Time, &
+      'FCT attenuation number for Txy component of momentum flux', 'nondim')
 
   CS%id_visc_coef = register_diag_field('ocean_model', 'visc_coef', diag%axesTL, Time, &
       'Local Viscosity coefficient', 'm2 s-1')
@@ -587,6 +602,10 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
 
   if (CS%smag_conserv_lagrangian) then
     call Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
+  endif
+
+  if (CS%ZB_limiter > -1) then
+    call Bound_backscatter_limiters(u, v, h, G, GV, CS)
   endif
 
   ! Update the acceleration due to eddy viscosity (diffu, diffv)
@@ -951,6 +970,201 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
   call cpu_clock_end(CS%id_clock_cdiss)
 
 end subroutine Bound_backscatter_lagrangian
+
+!> This function bounds the kinetic energy backscatter
+!! such that monotonicity in velocity field is preserved
+!! There are three options:
+!! 0 - apply Zalesak 1979 limiter to the ZB fluxes. Our limiting procedure
+!! is agnostic to the grid step and limit fluxes whenever there is local minimum or
+!! maximum
+!! 1 - compensate all upgradient fluxes with the physical downgradient model -- Smagorinsky model
+!! 2 - mixture of these two approaches. We compensate upgradient fluxes with the Smagorinsky model
+!! only in local minimum OR local maximum
+subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+        intent(in)    :: u  !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+        intent(in)    :: v  !< The meridional velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
+        intent(in) :: h     !< Layer thicknesses [H ~> m or kg m-2].
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+  integer :: i0, j0 ! Index of the left bottom corner of the unit square used for interpolation
+
+  real, dimension(SZI_(G),SZJ_(G))            :: shear       ! Shear of Smagorinsky model [T-1 ~> s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: Txx, Tyy    ! Stress tensor of eddy viscosity model
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: Txy         ! Stress tensor of eddy viscosity model
+  
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_smag  ! Source of Smagorinsky model
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: Esource_ZB    ! Source of ZB model
+
+  real, dimension(SZIB_(G),SZJ_(G)) :: R_plus_u, R_minus_u  !< The attenuation of convergent and divergent fluxes in u points
+  real, dimension(SZI_(G),SZJB_(G)) :: R_plus_v, R_minus_v  !< The attenuation of convergent and divergent fluxes in v points
+  
+  real :: Tdd, Ttr        ! Deviatoric, isotropic and off-diagonal stresses of ZB model
+  real :: flux_correction ! Local number between 0 and 1 used for attenuation of fluxes
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: FCT_Txx, FCT_Tyy ! Flux correction constant between 0 and 1
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: FCT_Txy          ! Flux correction constant between 0 and 1
+  
+
+  call cpu_clock_begin(CS%id_clock_cdiss)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  shear = 0.
+  Txx = 0.
+  Txy = 0.
+  Esource_smag = 0.
+  Esource_ZB = 0.
+
+  do k=1,nz
+
+    if (CS%ZB_limiter == 0 .or. CS%ZB_limiter == 2) then
+      ! According to the notebook 10-flux-limiter.ipynb,
+      ! the simplest limiter computes R_plus and R_minus
+      ! having only information about local min/max in the solution
+      do j=js-2,je+2 ; do i=is-2,ie+2
+        ! Local maximum in u field
+        if (u(I,j,k) > u(I-1,j,k) .and. &
+            u(I,j,k) > u(I+1,j,k) .and. &
+            u(I,j,k) > u(I,j-1,k) .and. &
+            u(I,j,k) > u(I,j+1,k)) then
+          R_plus_u(I,j) = 0. ! attenuate fluxes
+        else
+          R_plus_u(I,j) = 1. ! keep fluxes as is
+        endif
+        
+        ! Local minimum in u field
+        if (u(I,j,k) < u(I-1,j,k) .and. &
+            u(I,j,k) < u(I+1,j,k) .and. &
+            u(I,j,k) < u(I,j-1,k) .and. &
+            u(I,j,k) < u(I,j+1,k)) then
+          R_minus_u(I,j) = 0. ! attenuate fluxes
+        else
+          R_minus_u(I,j) = 1. ! keep fluxes as is
+        endif
+
+        ! Local maximum in v field
+        if (v(i,J,k) > v(i-1,J,k) .and. &
+            v(i,J,k) > v(i+1,J,k) .and. &
+            v(i,J,k) > v(i,J-1,k) .and. &
+            v(i,J,k) > v(i,J+1,k)) then
+          R_plus_v(i,J) = 0. ! attenuate fluxes
+        else
+          R_plus_v(i,J) = 1. ! keep fluxes as is
+        endif
+
+        ! Local minimum in v field
+        if (v(i,J,k) < v(i-1,J,k) .and. &
+            v(i,J,k) < v(i+1,J,k) .and. &
+            v(i,J,k) < v(i,J-1,k) .and. &
+            v(i,J,k) < v(i,J+1,k)) then
+          R_minus_v(i,J) = 0. ! attenuate fluxes
+        else
+          R_minus_v(i,J) = 1. ! keep fluxes as is
+        endif
+      enddo; enddo
+    endif
+
+    ! Here we attentuate ZB fluxes according to simplified Zalesak1979 limiter
+    if (CS%ZB_limiter == 0) then
+      ! Here we compute the attentuation (FCT) for every component of the stress tensor
+      do j=js-2,je+2 ; do i=is-2,ie+2
+        ! Such flux contributes to the minimum of u(I,j,k)
+        ! and to the maximum of u(I-1,j,k)
+        if (CS%Txx(i,j,k)>0) then
+          flux_correction = min(R_minus_u(I,j), R_plus_u(I-1,j))
+        else
+        ! Such flux contributes to the maximum of u(I,j,k)
+        ! and to the minimum of u(I-1,j,k)
+          flux_correction = min(R_plus_u(I,j), R_minus_u(I-1,j))
+        endif
+        FCT_Txx(i,j,k) = flux_correction
+
+        ! Such flux contributes to the minimum of v(i,J,k)
+        ! and to the maximum of v(i,J-1,k)
+        if (CS%Tyy(i,j,k) > 0) then
+          flux_correction = min(R_minus_v(i,J), R_plus_v(i,J-1))
+        else
+        ! Such flux contributes to the maximum of v(i,J,k)
+        ! and to the minimum of v(i,J-1,k)
+          flux_correction = min(R_plus_v(i,J), R_minus_v(i,J-1))
+        endif
+        FCT_Tyy(i,j,k) = flux_correction
+
+        ! Such flux contributes to the maximum of u(I,j,k) and v(i,J,k)
+        ! and to the minimum of u(I,j+1,k) and v(i+1,J,k)
+        if (CS%Txy(I,J,k) > 0) then
+          flux_correction = min(R_plus_u(I,j), R_plus_v(i,J),       &
+                                R_minus_u(I,j+1), R_minus_v(i+1,J))
+        else
+          flux_correction = min(R_minus_u(I,j), R_minus_v(i,J),     &
+                                R_plus_u(I,j+1), R_plus_v(i+1,J))
+        endif
+        FCT_Txy(I,J,k) = flux_correction
+
+        ! Apply limiters to compute the correction to the flux
+        ! Note that for physical consistency we multiply FCT_Txx and FCT_tyy to turn off
+        ! the whole diagonal stress but not only one component which would result in producing
+        ! big deviatoric stress
+        ! Note that corrected flux will be Txx_corrected = CS%Txx + Txx, and so on
+        Txx(i,j,k) = - CS%Txx(i,j,k) * (1. - FCT_Txx(i,j,k) * FCT_Tyy(i,j,k))
+        Tyy(i,j,k) = - CS%Tyy(i,j,k) * (1. - FCT_Txx(i,j,k) * FCT_Tyy(i,j,k))
+        Txy(I,J,k) = - CS%Txy(I,J,k) * (1. - FCT_Txy(i,j,k))
+      enddo; enddo
+    endif
+
+    ! Here we compute the energetic contributions of the ZB stress tensor
+    ! and the flux correction
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      Tdd = 0.5 * (Txx(i,j,k) - Tyy(i,j,k))
+      Ttr = 0.5 * (Txx(i,j,k) + Tyy(i,j,k))
+      Esource_smag(i,j,k) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +  &
+        0.25 * G%IareaT(i,j) *                                                             &
+        (                                                                                  &
+          (G%areaBu(I,J) * CS%hq(I,J,k) * Txy(I,J,k) * CS%sh_xy(I,J,k) +                   &
+          G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) +   &
+          (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +           &
+          G%areaBu(I,J-1) * CS%hq(I,J-1,k) * Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))             &
+        )
+
+      Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
+      Ttr = 0.5 * (CS%Txx(i,j,k) + CS%Tyy(i,j,k))
+      Esource_ZB(i,j,k) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +      &
+        0.25 * G%IareaT(i,j) *                                                               &
+        (                                                                                    &
+          (G%areaBu(I,J) * CS%hq(I,J,k) * CS%Txy(I,J,k) * CS%sh_xy(I,J,k) +                  &
+          G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * CS%Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) +  &
+          (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * CS%Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +          &
+          G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))            &
+        )
+    enddo; enddo 
+
+  enddo ! end of k loop
+
+  ! Coupling to dynamics
+  CS%Txx = CS%Txx + Txx
+  CS%Tyy = CS%Tyy + Tyy
+  CS%Txy = CS%Txy + Txy
+
+  if (CS%id_FCT_Txx>0)      call post_data(CS%id_FCT_Txx, FCT_Txx, CS%diag)
+  if (CS%id_FCT_Tyy>0)      call post_data(CS%id_FCT_Tyy, FCT_Tyy, CS%diag)
+  if (CS%id_FCT_Txy>0)      call post_data(CS%id_FCT_Txy, FCT_Txy, CS%diag)
+  if (CS%id_Txx_smag>0)     call post_data(CS%id_Txx_smag, Txx, CS%diag)
+  if (CS%id_Tyy_smag>0)     call post_data(CS%id_Tyy_smag, Tyy, CS%diag)
+  if (CS%id_Txy_smag>0)     call post_data(CS%id_Txy_smag, Txy, CS%diag)
+  if (CS%id_Esource_ZB>0)   call post_data(CS%id_Esource_ZB, Esource_ZB, CS%diag)
+  if (CS%id_Esource_smag>0) call post_data(CS%id_Esource_smag, Esource_smag, CS%diag)
+  
+  call cpu_clock_end(CS%id_clock_cdiss)
+
+end subroutine Bound_backscatter_limiters
 
 pure function norm(x,n) result (y)
   real, dimension(n), intent(in) :: x
