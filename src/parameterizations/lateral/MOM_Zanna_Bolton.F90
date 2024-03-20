@@ -371,8 +371,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   if (CS%smag_conserv_lagrangian) then
     allocate(CS%SGS_KE(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
-    allocate(CS%Visc_coef(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   endif
+  allocate(CS%Visc_coef(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
 
   allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   allocate(CS%Tyy(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
@@ -869,7 +869,7 @@ subroutine Bound_backscatter_lagrangian(u, v, h, G, GV, CS)
       ! If error is positive, i.e. estimation is larger than the actual SGS KE, we introduce viscosity
       ! To estimate the viscosity, we use estimation by Yankovsky 2023
       CS%Visc_coef(i,j,k) = max(error_E, 0.0) / (shear(i,j) + 1e-23)
-      ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient (1, while common value is around )
+      ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient (1)
       CS%Visc_coef(i,j,k) = min(CS%Visc_coef(i,j,k), G%areaT(i,j) * shear(i,j))
 
       if (CS%SGS_KE_dissipation) then
@@ -1007,6 +1007,7 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
   
   real :: Tdd, Ttr        ! Deviatoric, isotropic and off-diagonal stresses of ZB model
   real :: flux_correction ! Local number between 0 and 1 used for attenuation of fluxes
+  real :: Esource_unit_visc
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: FCT_Txx, FCT_Tyy ! Flux correction constant between 0 and 1
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: FCT_Txy          ! Flux correction constant between 0 and 1
@@ -1022,6 +1023,12 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
   Txy = 0.
   Esource_smag = 0.
   Esource_ZB = 0.
+
+  call pass_var(CS%div_xx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Txx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Tyy, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%hq, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
 
   do k=1,nz
 
@@ -1120,8 +1127,71 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
       enddo; enddo
     endif
 
-    ! Here we compute the energetic contributions of the ZB stress tensor
-    ! and the flux correction
+    ! Compute energy source for ZB model. Required for computing of upgradient fluxes
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
+      Ttr = 0.5 * (CS%Txx(i,j,k) + CS%Tyy(i,j,k))
+      Esource_ZB(i,j,k) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +      &
+        0.25 * G%IareaT(i,j) *                                                               &
+        (                                                                                    &
+          (G%areaBu(I,J) * CS%hq(I,J,k) * CS%Txy(I,J,k) * CS%sh_xy(I,J,k) +                  &
+          G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * CS%Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) +  &
+          (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * CS%Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +          &
+          G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))            &
+        )
+    enddo; enddo
+
+    ! In these two methods we compute the upgradient fluxes of ZB model
+    ! and compensate them with downgradient "Smagorinsky" closure
+    ! Note: Esource_ZB<0 is the backscatter event, and it should be 
+    ! compensated by positive Esource_smag>0
+    if (CS%ZB_limiter == 1 .or. CS%ZB_limiter == 2) then
+      do j=js-2,je+2 ; do i=is-2,ie+2
+        ! This is the energy dissipation when eddy viscosity equals 1
+        Esource_unit_visc = h(i,j,k) * CS%sh_xx(i,j,k)**2 +                     &
+          0.25 * G%IareaT(i,j) *                                                &
+          (                                                                     &
+            (G%areaBu(I,J) * CS%hq(I,J,k) * CS%sh_xy(I,J,k)**2 +                &
+            G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)**2) +    &
+            (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * CS%sh_xy(I-1,J,k)**2 +          &
+            G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%sh_xy(I,J-1,k)**2)            &
+          )
+
+        ! Now we want to satisfy an equality:
+        ! Esource_unit_visc * Visc_coef(i,j,k) + min(Esource_ZB(i,j,k),0) = 0
+        CS%Visc_coef(i,j,k) = - min(Esource_ZB(i,j,k),0.) / (Esource_unit_visc+1e-23)
+        
+        ! Now bound viscosity coefficient from above with Smagorinsky model having pretty high coefficient:
+        ! nu < dx * dy * |S|
+        CS%Visc_coef(i,j,k) = min(CS%Visc_coef(i,j,k), G%areaT(i,j) * \
+             sqrt(Esource_unit_visc / (h(i,j,k) + GV%H_subroundoff)))
+
+        ! Here we apply viscosity correction only in points in the neighbourhood of the local maximum or minimum
+        ! of u or v. That is we apply downgradient diffusion instead of bounding ZB fluxes
+        if (CS%ZB_limiter == 2) then
+          flux_correction = min(R_plus_u(I,j), R_plus_u(I-1,j),   &
+                                R_minus_u(I,j), R_minus_u(I-1,j), &
+                                R_plus_v(i,J), R_plus_v(i,J-1),   &
+                                R_minus_v(i,J), R_minus_v(i,J-1))
+          FCT_Txx(i,j,k) = flux_correction
+          CS%Visc_coef(i,j,k) = CS%Visc_coef(i,j,k) * (1-flux_correction)
+        endif
+      enddo; enddo
+
+      ! Here we compute the downgradient model according to the viscosity coefficient we just estimated
+      do j=js-2,je+2 ; do i=is-2,ie+2
+        Txx(i,j,k) = + CS%Visc_coef(i,j,k) * G%mask2dT(i,j) * CS%sh_xx(i,j,k)
+        Tyy(i,j,k) = - Txx(i,j,k)
+      enddo; enddo
+  
+      do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
+        Txy(I,J,k) = G%mask2dBu(I,J) * & 
+          0.25 * ((CS%Visc_coef(i,j,k) + CS%Visc_coef(i,j+1,k)) + (CS%Visc_coef(i+1,j,k) + CS%Visc_coef(i,j+1,k))) * &
+          CS%sh_xy(I,J,k)
+      enddo; enddo
+    endif
+
+    ! Here we compute the energetic contributions of the flux correction
     do j=js-1,je+1 ; do i=is-1,ie+1
       Tdd = 0.5 * (Txx(i,j,k) - Tyy(i,j,k))
       Ttr = 0.5 * (Txx(i,j,k) + Tyy(i,j,k))
@@ -1132,17 +1202,6 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
           G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) +   &
           (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +           &
           G%areaBu(I,J-1) * CS%hq(I,J-1,k) * Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))             &
-        )
-
-      Tdd = 0.5 * (CS%Txx(i,j,k) - CS%Tyy(i,j,k))
-      Ttr = 0.5 * (CS%Txx(i,j,k) + CS%Tyy(i,j,k))
-      Esource_ZB(i,j,k) = h(i,j,k) * (Tdd * CS%sh_xx(i,j,k) + Ttr * CS%div_xx(i,j,k)) +      &
-        0.25 * G%IareaT(i,j) *                                                               &
-        (                                                                                    &
-          (G%areaBu(I,J) * CS%hq(I,J,k) * CS%Txy(I,J,k) * CS%sh_xy(I,J,k) +                  &
-          G%areaBu(I-1,J-1) * CS%hq(I-1,J-1,k) * CS%Txy(I-1,J-1,k) * CS%sh_xy(I-1,J-1,k)) +  &
-          (G%areaBu(I-1,J) * CS%hq(I-1,J,k) * CS%Txy(I-1,J,k) * CS%sh_xy(I-1,J,k) +          &
-          G%areaBu(I,J-1) * CS%hq(I,J-1,k) * CS%Txy(I,J-1,k) * CS%sh_xy(I,J-1,k))            &
         )
     enddo; enddo 
 
@@ -1159,6 +1218,7 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
   if (CS%id_Txx_smag>0)     call post_data(CS%id_Txx_smag, Txx, CS%diag)
   if (CS%id_Tyy_smag>0)     call post_data(CS%id_Tyy_smag, Tyy, CS%diag)
   if (CS%id_Txy_smag>0)     call post_data(CS%id_Txy_smag, Txy, CS%diag)
+  if (CS%id_visc_coef>0)    call post_data(CS%id_visc_coef, CS%Visc_coef, CS%diag)
   if (CS%id_Esource_ZB>0)   call post_data(CS%id_Esource_ZB, Esource_ZB, CS%diag)
   if (CS%id_Esource_smag>0) call post_data(CS%id_Esource_smag, Esource_smag, CS%diag)
   
