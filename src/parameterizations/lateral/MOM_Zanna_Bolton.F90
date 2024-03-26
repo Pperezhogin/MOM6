@@ -73,7 +73,9 @@ type, public :: ZB2020_CS ; private
   real, dimension(:,:,:), allocatable :: &
           Txx,     & !< Subgrid stress xx component in h [L2 T-2 ~> m2 s-2]
           Tyy,     & !< Subgrid stress yy component in h [L2 T-2 ~> m2 s-2]
-          Txy        !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
+          Txy,     & !< Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
+          str_xx,  & !< Subgrid stress xx component in h, copy from MOM_hor_visc.F90 [L2 T-2 ~> m2 s-2]
+          str_xy     !< Subgrid stress xy component in q, copy from MOM_hor_visc.F90 [L2 T-2 ~> m2 s-2]
 
   real, dimension(:,:), allocatable :: &
           kappa_h, & !< Scaling coefficient in h points [L2 ~> m2]
@@ -120,7 +122,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_GM_coef = -1, id_PE_GM = -1
   integer :: id_attenuation = -1
   integer :: id_Txx_smag = -1, id_Txy_smag = -1, id_Tyy_smag = -1
-  integer :: id_FCT_Txx = -1, id_FCT_Txy = -1, id_FCT_Tyy = -1
+  integer :: id_FCT_Txx = -1, id_FCT_Txy = -1, id_FCT_Tyy = -1, id_FCT_Tdd = -1
   integer :: id_SGS_KE = -1
   integer :: id_Esource_smag = -1, id_Esource_ZB = -1, id_Esource_adv = -1, id_Esource_dis = -1
   integer :: id_visc_coef = -1
@@ -298,6 +300,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
       'FCT attenuation number for Tyy component of momentum flux', 'nondim')
   CS%id_FCT_Txy = register_diag_field('ocean_model', 'FCT_Txy', diag%axesBL, Time, &
       'FCT attenuation number for Txy component of momentum flux', 'nondim')
+  CS%id_FCT_Tdd = register_diag_field('ocean_model', 'FCT_Tdd', diag%axesTL, Time, &
+      'FCT attenuation number for Txx and Tyy components of momentum flux', 'nondim')
 
   CS%id_visc_coef = register_diag_field('ocean_model', 'visc_coef', diag%axesTL, Time, &
       'Local Viscosity coefficient', 'm2 s-1')
@@ -379,6 +383,8 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%Txy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%kappa_h(SZI_(G),SZJ_(G)))
   allocate(CS%kappa_q(SZIB_(G),SZJB_(G)))
+  allocate(CS%str_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  allocate(CS%str_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
 
   ! Precomputing the scaling coefficient
   ! Mask is included to automatically satisfy B.C.
@@ -453,6 +459,8 @@ subroutine ZB2020_end(CS)
   deallocate(CS%Txy)
   deallocate(CS%kappa_h)
   deallocate(CS%kappa_q)
+  deallocate(CS%str_xx)
+  deallocate(CS%str_xy)
 
   if (CS%Klower_R_diss > 0) then
     deallocate(CS%ICoriolis_h)
@@ -480,8 +488,11 @@ end subroutine ZB2020_end
 !! and halo 1 for sh_xy and vort_xy
 !! We apply zero boundary conditions to velocity gradients
 !! which is required for filtering operations
-subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, div_xx, hq, &
-                                       G, GV, CS, k)
+subroutine ZB2020_copy_gradient_and_thickness(                        &
+                                      sh_xx, sh_xy, vort_xy, div_xx,  &
+                                      str_xx, str_xy,                 &
+                                      hq,                             &    
+                                      G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
   type(ZB2020_CS),               intent(inout) :: CS     !< ZB2020 control structure.
@@ -502,6 +513,12 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, div_xx, hq,
 
   real, dimension(SZI_(G),SZJ_(G)), &
     intent(in) :: div_xx      !< Estimate of horizontal divergence at h-points [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)), &
+    intent(inout) :: str_xx      !< horizontal stress due to eddy viscosity model
+  
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(inout) :: str_xy      !< horizontal stress due to eddy viscosity model
 
   integer, intent(in) :: k    !< The vertical index of the layer to be passed.
 
@@ -535,6 +552,18 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, div_xx, hq,
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
+
+  if (CS%ZB_limiter == 3 .or. CS%ZB_limiter == 4) then
+    do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
+      CS%str_xx(i,j,k) = str_xx(i,j)
+      str_xx(i,j) = 0.
+    enddo ; enddo
+
+    do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+      CS%str_xy(I,J,k) = str_xy(I,J) * G%mask2dBu(I,J)
+      str_xy(I,J) = 0.
+    enddo; enddo
+  endif
 
   call cpu_clock_end(CS%id_clock_copy)
 
@@ -1005,14 +1034,17 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
   real, dimension(SZIB_(G),SZJ_(G)) :: R_plus_u, R_minus_u  !< The attenuation of convergent and divergent fluxes in u points
   real, dimension(SZI_(G),SZJB_(G)) :: R_plus_v, R_minus_v  !< The attenuation of convergent and divergent fluxes in v points
   
+  logical, dimension(SZIB_(G),SZJ_(G)) :: R_extr_u  !< If true, there is a local extremum in u field
+  logical, dimension(SZI_(G),SZJB_(G)) :: R_extr_v  !< If true, there is a local extremum in v field
+
   real :: Tdd, Ttr        ! Deviatoric, isotropic and off-diagonal stresses of ZB model
   real :: flux_correction ! Local number between 0 and 1 used for attenuation of fluxes
   real :: Esource_unit_visc
+  real :: max_value, min_value
 
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: FCT_Txx, FCT_Tyy ! Flux correction constant between 0 and 1
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: FCT_Txx, FCT_Tyy, FCT_Tdd ! Flux correction constant between 0 and 1
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: FCT_Txy          ! Flux correction constant between 0 and 1
   
-
   call cpu_clock_begin(CS%id_clock_cdiss)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -1020,6 +1052,7 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
 
   shear = 0.
   Txx = 0.
+  Tyy = 0.
   Txy = 0.
   Esource_smag = 0.
   Esource_ZB = 0.
@@ -1191,6 +1224,63 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
       enddo; enddo
     endif
 
+    if (CS%ZB_limiter == 3 .or. CS%ZB_limiter == 4) then
+      ! Here we look for local extrema in u and v fields
+      do j=js-2,je+2 ; do i=is-2,ie+2
+        max_value = max(u(I,j,k), u(I-1,j,k), u(I+1,j,k), u(I,j-1,k), u(I,j+1,k))
+        min_value = min(u(I,j,k), u(I-1,j,k), u(I+1,j,k), u(I,j-1,k), u(I,j+1,k))
+        if (u(I,j,k) == max_value .or. u(I,j,k) == min_value) then
+          R_extr_u(I,j) = .True. ! Local extremum
+        else
+          R_extr_u(I,j) = .False.
+        endif
+
+        max_value = max(v(i,J,k), v(i-1,J,k), v(i+1,J,k), v(i,J-1,k), v(i,J+1,k))
+        min_value = min(v(i,J,k), v(i-1,J,k), v(i+1,J,k), v(i,J-1,k), v(i,J+1,k))
+        if (v(i,J,k) == max_value .or. v(i,J,k) == min_value) then
+          R_extr_v(i,J) = .True. ! Local extremum
+        else
+          R_extr_v(i,J) = .False.
+        endif        
+      enddo; enddo
+
+      ! Here we look for all faces which surround the local extrema
+      do j=js-2,je+2 ; do i=is-2,ie+2
+        ! The limiter to Txx flux is applied if there is a local extremum
+        ! in two neighbouring grid cells
+        ! Same for Tyy
+        if (R_extr_u(I,j) .or. R_extr_u(I-1,j) .or. R_extr_v(i,J) .or. R_extr_v(i,J-1)) then
+          FCT_Tdd(i,j,k) = 0. ! Limit high-order fluxes
+        else
+          FCT_Tdd(i,j,k) = 1.
+        endif
+
+        ! Flux Txy contributes both to u and v fields, so we look
+        ! for local extremum in both of them
+        if (R_extr_u(I,j) .or. R_extr_u(I,j+1) .or. R_extr_v(i,J) .or. R_extr_v(i+1,J)) then
+          FCT_Txy(I,J,k) = 0. ! Limit high-order fluxes
+        else
+          FCT_Txy(I,J,k) = 1.
+        endif
+
+        if (CS%ZB_limiter == 3) then
+          ! Mask of corrected flux points is 1-FCT. In this mask, we subtract the
+          ! high-order model (ZB) and add low-order model (Smagorinsky)
+          ! Note minus in front of Smagorinsky stress tensor. It is because
+          ! Sign notation between ZB20 and MOM_hor_visc is different
+          Txx(i,j,k) = (1. - FCT_Tdd(i,j,k)) * (- CS%Txx(i,j,k) - CS%str_xx(i,j,k))
+          Tyy(i,j,k) = (1. - FCT_Tdd(i,j,k)) * (- CS%Tyy(i,j,k) + CS%str_xx(i,j,k)) ! Here plus for str_xx, because it is trace-free
+          Txy(I,J,k) = (1. - FCT_Txy(I,J,k)) * (- CS%Txy(I,J,k) - CS%str_xy(I,J,k))
+        else if (CS%ZB_limiter == 4) then
+          ! Here we test that our saved stress tensor is ok. 
+          ! Note here we change sign, because sign notation in ZB20 and MOM6 are different
+          Txx(i,j,k) = - CS%str_xx(i,j,k)
+          Tyy(i,j,k) = + CS%str_xx(i,j,k)
+          Txy(I,J,k) = - CS%str_xy(I,J,k)
+        endif
+      enddo; enddo
+    endif
+
     ! Here we compute the energetic contributions of the flux correction
     do j=js-1,je+1 ; do i=is-1,ie+1
       Tdd = 0.5 * (Txx(i,j,k) - Tyy(i,j,k))
@@ -1214,6 +1304,7 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
 
   if (CS%id_FCT_Txx>0)      call post_data(CS%id_FCT_Txx, FCT_Txx, CS%diag)
   if (CS%id_FCT_Tyy>0)      call post_data(CS%id_FCT_Tyy, FCT_Tyy, CS%diag)
+  if (CS%id_FCT_Tdd>0)      call post_data(CS%id_FCT_Tdd, FCT_Tdd, CS%diag)
   if (CS%id_FCT_Txy>0)      call post_data(CS%id_FCT_Txy, FCT_Txy, CS%diag)
   if (CS%id_Txx_smag>0)     call post_data(CS%id_Txx_smag, Txx, CS%diag)
   if (CS%id_Tyy_smag>0)     call post_data(CS%id_Tyy_smag, Tyy, CS%diag)
