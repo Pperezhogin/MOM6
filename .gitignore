@@ -45,3 +45,10 @@ experiments/ANN-Results/figures/*
 *.out*
 *.mp4*
 *.gif*
+*.pdf*
+*.png*
+out.txt
+config_src/drivers/ice_solo_driver/atmos_ocean_fluxes_mod.mod
+experiments/ANN-Results/greene-notebooks/test.nc
+experiments/ANN-Results/greene-notebooks/my_func_stats
+experiments/MOM6compiled/*
