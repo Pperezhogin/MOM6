@@ -210,11 +210,11 @@ class Experiment:
     
     @property
     def smagu(self):
-        return self.mom.diffu-self.mom.ZB2020u
+        return self.mom.diffu
     
     @property
     def smagv(self):
-        return self.mom.diffv-self.mom.ZB2020v
+        return self.mom.diffv
 
     ########################  Statistical tools  #########################
     #################  Express through main properties ###################

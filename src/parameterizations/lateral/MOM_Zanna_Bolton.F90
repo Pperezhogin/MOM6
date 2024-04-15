@@ -102,6 +102,7 @@ type, public :: ZB2020_CS ; private
   logical :: smag_conserv_lagrangian !< Energy conservation is imposed by introducing Smagorinsky model and performing averaging in Lagrangian frame
   logical :: SGS_KE_dissipation !< Include dissipation SGS KE to eliminate mismatch between simulated and estimated SGS KE
   integer :: ZB_limiter !< Limit momentum fluxes to prohibit growth of local min/max. 
+  real :: ZB_limiter_p !< Limiter value. -1 means not applies. p=1 means no additional limiting is applied
   type(ANN_CS) :: ann_instance !< ANN instance
   type(ANN_CS) :: ann_Txy !< ANN instance for Txy
   type(ANN_CS) :: ann_Txx_Tyy !< ANN instance for diagonal stress
@@ -207,6 +208,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   call get_param(param_file, mdl, "ZB_LIMITER", CS%ZB_limiter, &
                  "If equals 0, applies simplified Zalesak1979 limiter to preserve local min/max of u/v fields", &
                  default=-1)
+
+  call get_param(param_file, mdl, "ZB_LIMITER_P", CS%ZB_limiter_p, &
+                 "Limiting value in range 0..1", units="nondim", &
+                 default=-1.)
 
   call get_param(param_file, mdl, "GM_CONSERV", GM_conserv, &
                  "GM model makes parameterization energy-conservative", default=.False.)
@@ -1225,24 +1230,71 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
     endif
 
     if (CS%ZB_limiter == 3 .or. CS%ZB_limiter == 4) then
-      ! Here we look for local extrema in u and v fields
-      do j=js-2,je+2 ; do i=is-2,ie+2
-        max_value = max(u(I,j,k), u(I-1,j,k), u(I+1,j,k), u(I,j-1,k), u(I,j+1,k))
-        min_value = min(u(I,j,k), u(I-1,j,k), u(I+1,j,k), u(I,j-1,k), u(I,j+1,k))
-        if (u(I,j,k) == max_value .or. u(I,j,k) == min_value) then
-          R_extr_u(I,j) = .True. ! Local extremum
-        else
-          R_extr_u(I,j) = .False.
-        endif
+      if (CS%ZB_limiter == 3) then
+        ! Here we look for local extrema in u and v fields
+        do j=js-2,je+2 ; do i=is-2,ie+2
+          max_value = max(u(I,j,k), u(I-1,j,k), u(I+1,j,k), u(I,j-1,k), u(I,j+1,k))
+          min_value = min(u(I,j,k), u(I-1,j,k), u(I+1,j,k), u(I,j-1,k), u(I,j+1,k))
+          if (u(I,j,k) == max_value .or. u(I,j,k) == min_value) then
+            R_extr_u(I,j) = .True. ! Local extremum
+          else
+            R_extr_u(I,j) = .False.
+          endif
 
-        max_value = max(v(i,J,k), v(i-1,J,k), v(i+1,J,k), v(i,J-1,k), v(i,J+1,k))
-        min_value = min(v(i,J,k), v(i-1,J,k), v(i+1,J,k), v(i,J-1,k), v(i,J+1,k))
-        if (v(i,J,k) == max_value .or. v(i,J,k) == min_value) then
-          R_extr_v(i,J) = .True. ! Local extremum
-        else
-          R_extr_v(i,J) = .False.
-        endif        
-      enddo; enddo
+          max_value = max(v(i,J,k), v(i-1,J,k), v(i+1,J,k), v(i,J-1,k), v(i,J+1,k))
+          min_value = min(v(i,J,k), v(i-1,J,k), v(i+1,J,k), v(i,J-1,k), v(i,J+1,k))
+          if (v(i,J,k) == max_value .or. v(i,J,k) == min_value) then
+            R_extr_v(i,J) = .True. ! Local extremum
+          else
+            R_extr_v(i,J) = .False.
+          endif        
+        enddo; enddo
+      endif
+
+      if (CS%ZB_limiter == 4) then
+      ! Here we look for local extrema in u and v fields, which are directional in x and y
+        do j=js-2,je+2 ; do i=is-2,ie+2
+          max_value = max(u(I,j,k), u(I-1,j,k), u(I+1,j,k))
+          min_value = min(u(I,j,k), u(I-1,j,k), u(I+1,j,k))
+          ! Local extremum in x
+          R_extr_u(I,j) = (u(I,j,k) == max_value .or. u(I,j,k) == min_value) ! Local extremum in x
+
+          max_value = max(u(I,j,k), u(I,j-1,k), u(I,j+1,k))
+          min_value = min(u(I,j,k), u(I,j-1,k), u(I,j+1,k))
+          ! Local extremum in x or y
+          R_extr_u(I,j) = R_extr_u(I,j) .OR. (u(I,j,k) == max_value .or. u(I,j,k) == min_value)
+          
+
+          max_value = max(v(i,J,k), v(i-1,J,k), v(i+1,J,k))
+          min_value = min(v(i,J,k), v(i-1,J,k), v(i+1,J,k))
+          ! Local extremum in x
+          R_extr_v(i,J) = (v(i,J,k) == max_value .or. v(i,J,k) == min_value)
+          
+          max_value = max(v(i,J,k), v(i,J-1,k), v(i,J+1,k))
+          min_value = min(v(i,J,k), v(i,J-1,k), v(i,J+1,k))
+          ! Local extremum in x or y
+          R_extr_v(i,J) = R_extr_v(i,J) .OR. (v(i,J,k) == max_value .or. v(i,J,k) == min_value)
+
+          if (CS%ZB_limiter_p > 0.) then
+            ! Here we add additional limiting in points which are not local
+            ! extremum (strict or not strict)
+            if (.NOT. R_extr_u(I,j)) then
+              R_extr_u(I,j) = R_extr_u(I,j) .OR. &
+                (u(I-1,j,k) - 2. * u(I,j,k) + u(I+1,j,k))**2 >= CS%ZB_limiter_p * (u(I-1,j,k) - u(I+1,j,k))**2
+
+              R_extr_u(I,j) = R_extr_u(I,j) .OR. &
+                (u(I,j-1,k) - 2. * u(I,j,k) + u(I,j+1,k))**2 >= CS%ZB_limiter_p * (u(I,j-1,k) - u(I,j+1,k))**2
+            endif
+
+            if (.NOT. R_extr_v(i,J)) then
+              R_extr_v(i,J) = R_extr_v(i,J) .OR. &
+                (v(i-1,J,k) - 2. * v(i,J,k) + v(i+1,J,k))**2 >= CS%ZB_limiter_p * (v(i-1,J,k) - v(i+1,J,k))**2
+              R_extr_v(i,J) = R_extr_v(i,J) .OR. &
+                (v(i,J-1,k) - 2. * v(i,J,k) + v(i,J+1,k))**2 >= CS%ZB_limiter_p * (v(i,J-1,k) - v(i,J+1,k))**2
+            endif
+          endif
+        enddo; enddo
+      endif
 
       ! Here we look for all faces which surround the local extrema
       do j=js-2,je+2 ; do i=is-2,ie+2
@@ -1263,21 +1315,13 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
           FCT_Txy(I,J,k) = 1.
         endif
 
-        if (CS%ZB_limiter == 3) then
-          ! Mask of corrected flux points is 1-FCT. In this mask, we subtract the
-          ! high-order model (ZB) and add low-order model (Smagorinsky)
-          ! Note minus in front of Smagorinsky stress tensor. It is because
-          ! Sign notation between ZB20 and MOM_hor_visc is different
-          Txx(i,j,k) = (1. - FCT_Tdd(i,j,k)) * (- CS%Txx(i,j,k) - CS%str_xx(i,j,k))
-          Tyy(i,j,k) = (1. - FCT_Tdd(i,j,k)) * (- CS%Tyy(i,j,k) + CS%str_xx(i,j,k)) ! Here plus for str_xx, because it is trace-free
-          Txy(I,J,k) = (1. - FCT_Txy(I,J,k)) * (- CS%Txy(I,J,k) - CS%str_xy(I,J,k))
-        else if (CS%ZB_limiter == 4) then
-          ! Here we test that our saved stress tensor is ok. 
-          ! Note here we change sign, because sign notation in ZB20 and MOM6 are different
-          Txx(i,j,k) = - CS%str_xx(i,j,k)
-          Tyy(i,j,k) = + CS%str_xx(i,j,k)
-          Txy(I,J,k) = - CS%str_xy(I,J,k)
-        endif
+        ! Mask of corrected flux points is 1-FCT. In this mask, we subtract the
+        ! high-order model (ZB) and add low-order model (Smagorinsky)
+        ! Note minus in front of Smagorinsky stress tensor. It is because
+        ! Sign notation between ZB20 and MOM_hor_visc is different
+        Txx(i,j,k) = (1. - FCT_Tdd(i,j,k)) * (- CS%Txx(i,j,k) - CS%str_xx(i,j,k))
+        Tyy(i,j,k) = (1. - FCT_Tdd(i,j,k)) * (- CS%Tyy(i,j,k) + CS%str_xx(i,j,k)) ! Here plus for str_xx, because it is trace-free
+        Txy(I,J,k) = (1. - FCT_Txy(I,J,k)) * (- CS%Txy(I,J,k) - CS%str_xy(I,J,k))
       enddo; enddo
     endif
 

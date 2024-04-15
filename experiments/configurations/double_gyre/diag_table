@@ -99,8 +99,12 @@
 
 "ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","visc_coef","visc_coef","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","SGS_KE","SGS_KE","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","FCT_Tdd","FCT_Tdd","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","FCT_Txy","FCT_Txy","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","Esource_ZB","Esource_ZB","mom_%4yr_%3dy","all",.false.,"none",2
+"ocean_model","Esource_smag","Esource_smag","mom_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","visc_coef","visc_coef","mom_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","SGS_KE","SGS_KE","mom_%4yr_%3dy","all",.false.,"none",2
 
 # Barotropic Momentum Balance Terms:
 # (only available with split time stepping.)

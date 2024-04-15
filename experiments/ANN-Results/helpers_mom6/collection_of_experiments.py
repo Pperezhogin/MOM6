@@ -98,7 +98,7 @@ class CollectionOfExperiments:
 
         return cls(exps, experiments_dict, names_dict)
     
-    def plot_KE_spectrum(self, exps, key='EKE_spectrum', labels=None):
+    def plot_KE_spectrum(self, exps, labels=None, key='EKE_spectrum'):
         if labels is None:
             labels=exps
         fig, ax = plt.subplots(1,2,figsize=(15,6))

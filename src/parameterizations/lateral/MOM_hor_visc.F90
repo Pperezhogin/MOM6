@@ -1367,14 +1367,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       enddo ; enddo
     endif
 
-    ! Pass the velocity gradients and thickness to ZB2020
-    if (CS%use_ZB2020) then
-      call ZB2020_copy_gradient_and_thickness( &
-           sh_xx, sh_xy, vort_xy, div_xx,      &
-           hq,                                 &
-           G, GV, CS%ZB2020, k)
-    endif
-
     if (CS%Laplacian) then
       ! Determine the Laplacian viscosity at q points, using the
       ! largest value from several parameterizations. Also get the
@@ -1589,6 +1581,15 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         bhstr_xy(I,J) = d_str * (hq(I,J) * G%mask2dBu(I,J) * CS%reduction_xy(I,J))
       enddo ; enddo
     endif ! Get Ah at q points and biharmonic part of str_xy
+
+    ! Pass the velocity gradients and thickness to ZB2020
+    if (CS%use_ZB2020) then
+      call ZB2020_copy_gradient_and_thickness( &
+           sh_xx, sh_xy, vort_xy, div_xx,      &
+           str_xx, str_xy,                     &
+           hq,                                 &
+           G, GV, CS%ZB2020, k)
+    endif
 
     if (CS%use_GME) then
       ! The wider halo here is to permit one pass of smoothing without a halo update.

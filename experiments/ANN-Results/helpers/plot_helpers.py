@@ -73,6 +73,12 @@ def create_animation_ffmpeg(fun, idx, filename='my-video.mp4', dpi=200, FPS=18, 
 
     print(f'Animation {filename} at FPS={FPS} will last for {round(len(idx)/FPS,1)} seconds. The frames are saved to \n{folder}\n')
     ffmpeg_command = f'ffmpeg -y -framerate {FPS} -i {folder}/frame-%d.png -s:v {resolution[0]}x{resolution[1]} -c:v libx264 -profile:v high -crf 20 -pix_fmt yuv420p {filename}'
+    print('Running the command:')
+    print(f'cd {os.getcwd()}; {ffmpeg_command}')
+    try:
+        os.system('module load ffmpeg/4.2.4')
+    except:
+        pass
     try:
         os.system(ffmpeg_command)
     except:

@@ -339,11 +339,56 @@ if __name__ == '__main__':
     #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ZB-clean-{conf}/ZB-0.5-inviscid', hpc, parameters)
 
     ################# SGS KE with Zanna-Bolton ##################
+    # for conf in ['R4']:
+    #     for ZB_SCALING in [0.5]:#[1.0, 2.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
+    #             ZB_SCALING=ZB_SCALING, USE_ANN=0, SMAG_CONSERV_LAGRANGIAN=True).add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ZB-clean-{conf}/ZB-0.5-SGS-KE', hpc, parameters)
+
+    # ################# SGS KE ##################
+    # for conf in ['R2', 'R3', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:#[1.0, 2.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING, USE_ANN=2, ZB_LIMITER=3,
+    #             ANN_FILE_TXY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txy_epoch_1000.nc',
+    #             ANN_FILE_TXX_TYY=f'/home/pp2681/MOM6-examples/src/MOM6/experiments/ANN-Results/trained_models/ANN_CM26_grid_harmonic_ver3/Txx_Tyy_epoch_1000.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-FCT-3', hpc, parameters)
+
+    ############ Limiters in ZB20 ################
     for conf in ['R4']:
+        ntasks = dict(R2=4, R3=10, R4=12, R5=48, R6=48, R7=48, R8=48)[conf]
+        hpc = HPC.add(mem=10, ntasks=ntasks)
         for ZB_SCALING in [0.5]:#[1.0, 2.0]:
             parameters = PARAMETERS.add(USE_ZB2020='True',
                 SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
-                ZB_SCALING=ZB_SCALING, USE_ANN=0, SMAG_CONSERV_LAGRANGIAN=True).add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ZB-clean-{conf}/ZB-0.5-SGS-KE', hpc, parameters)
+                ZB_SCALING=ZB_SCALING).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-inviscid', hpc, parameters)
+
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                ZB_SCALING=ZB_SCALING).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-Smag', hpc, parameters)
+
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                ZB_SCALING=ZB_SCALING, ZB_LIMITER=3).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-3', hpc, parameters)
+
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4', hpc, parameters)
+
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=0.5).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_2', hpc, parameters)
+
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=1./3.).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_3', hpc, parameters)
+
+            parameters = PARAMETERS.add(USE_ZB2020='True',
+                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=0.25).add(**configuration(conf))
+            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_4', hpc, parameters)
