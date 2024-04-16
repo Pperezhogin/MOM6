@@ -254,6 +254,23 @@ class DatasetCM26():
 
         return ds_coarse
 
+    def filtering(self, factor=10, operator=Filtering(FGR=2)):
+        '''
+        Filtering of the dataset with a given factor and filter operator.
+        The actual filter width is computed as a product of FGR and factor inside operator
+        function
+
+        Algorithm:
+        * Filter velocities by applying operator
+        * Return new dataset with filtered velocities
+        '''
+        ##################### Filtering velocities ########################
+        ds_filter = self
+        ds_filter.factor = factor
+        ds_filter.data['u'], ds_filter.data['v'] = operator(self.data.u, self.data.v, self, ds_filter)
+        
+        return ds_filter
+
     def split(self, time = None, zl=None):
         data = self.data
         if 'time' in self.data.dims:
@@ -271,14 +288,9 @@ class DatasetCM26():
     def compute_subgrid_forcing(self, factor=4, operator=CoarsenWeighted(), percentile=0):
         '''
         This function computes the subgrid forcing, that is
-        SGSx = filter(advection) - advection(filtered_state),
+        SGSx = filter(advection) - advection(coarse_state),
         for a given coarsegraining factor and coarsegraining operator.
         And returns the xr.Dataset() with lazy computations
-
-        Optionally, numerical approximation errors of numerical
-        schemes can be included into the subgrid forcing. This 
-        would allow to effectively improve the order of approximation
-        but will make subgrid model sensitive to the numerical scheme
         '''
 
         # Advection in high resolution model
@@ -294,6 +306,39 @@ class DatasetCM26():
         advx_coarsen, advy_coarsen = operator(hires_advection[0], hires_advection[1], self, ds_coarse)
         ds_coarse.data['SGSx'] = advx_coarsen - coarse_advection[0]
         ds_coarse.data['SGSy'] = advy_coarsen - coarse_advection[1]
+
+        return ds_coarse
+
+    def compute_subfilter_forcing(self, factor=4, operator_filter=Filtering(FGR=2), 
+                                  operator_coarsen=CoarsenKochkov(), percentile=0):
+        '''
+        As compared to the "compute_subgrid_forcing" function, 
+        here we evaluate contribution of subfilter stresses 
+        on the grid of high resolution model. Then, coarsegraining 
+        operator is used mostly for subsampling of data. An advantage of
+        this method is that it is agnostic to the numerical discretization
+        scheme of the advection operator.
+        '''
+
+        # Advection in high resolution model
+        hires_advection = self.state.advection()
+
+        # Filtered and filtered-coarsegrained states
+        ds_filter = self.filtering(factor=factor, operator=operator_filter)
+        ds_coarse = ds_filter.coarsen(factor=factor, operator=operator_coarsen, percentile=percentile)
+
+        # Compute advection on a filtered state
+        filter_advection = ds_filter.state.advection()
+
+        # Filtering of the high-resolution advection
+        advx_filtered, advy_filtered = operator_filter(hires_advection[0], hires_advection[1], self, ds_filter)
+
+        # Subfilter forcing on a fine grid
+        SGSx = advx_filtered - filter_advection[0]
+        SGSy = advy_filtered - filter_advection[1]
+
+        # Coarsegraining the subfilter forcing
+        ds_coarse.data['SGSx'], ds_coarse.data['SGSy'] = operator_coarsen(SGSx, SGSy, self, ds_coarse)
 
         return ds_coarse
 
