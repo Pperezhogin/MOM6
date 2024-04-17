@@ -48,7 +48,29 @@ def discard_land(x, percentile=1):
         return (x==1).astype('float32')
     else:
         return (x>percentile).astype('float32')
-    
+
+def create_grid(param):
+    '''
+    Depending on the dataset (2D or 3D), 
+    return different grid object
+    '''
+    if 'zl' not in param.dims:
+        grid = Grid(param, coords={
+            'X': {'center': 'xh', 'right': 'xq'},
+            'Y': {'center': 'yh', 'right': 'yq'}
+        },
+        boundary={"X": 'periodic', 'Y': 'fill'},
+        fill_value = {'Y':0})
+    else:
+        grid = Grid(param, coords={
+            'X': {'center': 'xh', 'right': 'xq'},
+            'Y': {'center': 'yh', 'right': 'yq'},
+            'Z': {'center': 'zl', 'outer': 'zi'}
+        },
+        boundary={"X": 'periodic', 'Y': 'fill', 'Z': 'fill'},
+        fill_value = {'Y': 0, 'Z': 0})
+    return grid
+
 class DatasetCM26():
     def from_cloud(self, source='cmip6', compute_param=True):
         '''
@@ -69,21 +91,23 @@ class DatasetCM26():
             ds = xr.open_dataset("gs://cmip6/GFDL_CM2_6/control/surface", engine='zarr', chunks={}, use_cftime=True).rename(**rename_surf)
             param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr')
         elif source == 'cmip6-3d':
-            ds = xr.open_dataset("gs://cmip6/GFDL_CM2_6/control/ocean_3d", engine='zarr', chunks={}, use_cftime=True).rename({'st_ocean': 'zl'})
-            param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr')
+            ds = xr.open_dataset("gs://cmip6/GFDL_CM2_6/control/ocean_3d", engine='zarr', chunks={}, use_cftime=True).rename(
+                {'st_ocean': 'zl'})
+            param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr').rename(
+                {'st_ocean': 'zl', 'st_edges_ocean': 'zi'})
         else:
             print('Error: wrong source parameter')
         
         ############ Rename coordinates ###########
         rename = {'xt_ocean': 'xh', 'yt_ocean': 'yh', 'xu_ocean': 'xq', 'yu_ocean': 'yq'}
         rename_param = {'dxt': 'dxT', 'dyt': 'dyT', 'dxu': 'dxBu', 'dyu': 'dyBu'}
-
+ 
         ds = ds.rename(**rename).chunk({'yh':-1, 'yq':-1})
         param_init = param_init.rename(**rename, **rename_param).chunk({'yh':-1, 'yq':-1})
 
         ############ Drop unnecessary coordinates ###########
         param = xr.Dataset()
-        for key in ['xh', 'yh', 'xq', 'yq']:
+        for key in ['xh', 'yh', 'xq', 'yq', 'zl', 'zi']:
             param[key] = param_init[key]
         for key in ['dxT', 'dyT']:
             param[key] = param_init[key].drop(['area_t', 'dxT', 'dyT', 'geolat_t', 'geolon_t', 'ht', 'kmt', 'wet'])
@@ -93,12 +117,7 @@ class DatasetCM26():
         ############ Init xgcm.Grid object for C-grid ###########
         # Note, we implement B.C. only in zonal diretion,
         # but simply set zero B.C. in meridional direction 
-        grid = Grid(param, coords={
-            'X': {'center': 'xh', 'right': 'xq'},
-            'Y': {'center': 'yh', 'right': 'yq'}
-            },
-           boundary={"X": 'periodic', 'Y': 'fill'},
-           fill_value = {'Y':0})
+        grid = create_grid(param)
         
         ############ Compute masks for C-grid ###########
         # Note, we assume that coastline goes accross U,V and corner points,
@@ -116,6 +135,9 @@ class DatasetCM26():
         param['wet_u'] = discard_land(grid.interp(param['wet'], 'X'))
         param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
         param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
+        # Mask on the vertical interface of grid cells
+        if 'zl' in param.dims:
+            param['wet_w'] = discard_land(grid.interp(param['wet'].chunk({'zl':-1}), 'Z'))
         
         ########### Compute grid steps for C-grid #########
         # Grid steps are computed such that total 
@@ -134,6 +156,8 @@ class DatasetCM26():
         data = xr.Dataset()
         data['u'] = grid.interp(ds.u.fillna(0.) * param.wet_c,'Y') * param.wet_u
         data['v'] = grid.interp(ds.v.fillna(0.) * param.wet_c,'X') * param.wet_v
+        data['temp'] = ds.temp.fillna(0.)
+        data['salt'] = ds.salt.fillna(0.)
         data['time'] = ds['time']
         
         if compute_param:
@@ -149,12 +173,7 @@ class DatasetCM26():
             self.data = data
             self.param = param
         
-        self.grid = Grid(self.param, coords={
-            'X': {'center': 'xh', 'right': 'xq'},
-            'Y': {'center': 'yh', 'right': 'yq'}
-            },
-           boundary={"X": 'periodic', 'Y': 'fill'},
-           fill_value = {'Y':0})
+        self.grid = create_grid(self.param)
 
         self.state = StateFunctions(self.data, self.param, self.grid)
         return
@@ -206,14 +225,13 @@ class DatasetCM26():
         param['dxCu'][{'xq':-1}] = param['dxCu'][{'xq':-2}] # Because interpolation on the right boundary is not defined
         param['dyCv'] = self.param.dyCv.coarsen({'yq':factor}).sum().interp(yq=yq,xh=xh)
         param['dyCv'][{'yq':-1}] = param['dyCv'][{'yq':-2}] # Because interpolation on the right boundary is not defined
+
+        if 'zl' in self.param:
+            param['zl'] = self.param['zl']
+            param['zi'] = self.param['zi']
         
         ############ Creating xgcm.Grid object ############
-        grid = Grid(param, coords={
-            'X': {'center': 'xh', 'right': 'xq'},
-            'Y': {'center': 'yh', 'right': 'yq'}
-            },
-            boundary={"X": 'periodic', 'Y': 'fill'},
-            fill_value = {'Y':0})
+        grid = create_grid(param)
         
         ######################### Creating wet masks ###########################
         param['wet'] = discard_land(self.param.wet.coarsen({'xh':factor,'yh':factor}).mean(), percentile=percentile)
@@ -224,6 +242,9 @@ class DatasetCM26():
         param['wet_u'] = discard_land(grid.interp(param['wet'], 'X'))
         param['wet_v'] = discard_land(grid.interp(param['wet'], 'Y'))
         param['wet_c'] = discard_land(grid.interp(param['wet'], ['X', 'Y']))
+        # Mask on the vertical interface of grid cells
+        if 'zl' in param.dims:
+            param['wet_w'] = discard_land(grid.interp(param['wet'].chunk({'zl':-1}), 'Z'))
 
         return param.compute().chunk()
 

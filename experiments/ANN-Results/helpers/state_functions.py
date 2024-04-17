@@ -3,6 +3,7 @@ import numpy as np
 import xarray as xr
 import torch
 import xrft
+import gsw
 from xgcm.padding import pad as xgcm_pad
 from functools import lru_cache
 
@@ -688,3 +689,103 @@ class StateFunctions():
         CAu, CAv = self.PV_cross_uv()
         KEx, KEy = self.gradKE()
         return (CAu - KEx, CAv - KEy)
+
+    @property
+    def rho(self):
+        '''
+        Compute POTENTIAL density in kg/m^3, which is sigma0+1000kg/m^3.
+        We compute sigma0 according to https://www.teos-10.org/pubs/gsw/html/gsw_sigma0.html
+        Note that instead of Absolute Salinity and Conservative Temperature we use
+        standard CM2.6 variables: Potential temperature, degrees C and Practical Salinity, psu
+        '''
+        return (1000.+gsw.sigma0(self.data.salt, self.data.temp))
+    
+    @property
+    def Nsquared(self):
+        '''
+        Here we compute the square of Brunt-Vaisala frequency (1/s^2) according to 
+        formula (https://mom-ocean.github.io/assets/pdfs/MOM5_manual.pdf), Eq. (23.274):
+        N^2 = - g/rho0 * d rho / dz,
+        and parameters are given by Elizabeth Yankovsky
+        where g = 9.8 m/s^2 is the gravitational acceleration
+        rho0 = 1025 kg / m^3 is the reference density
+        rho is the POTENTIAL density (see above)
+
+        The result is defined on the vertical interfaces between finite-volume cells
+        '''
+
+        rho = self.rho
+        grid = self.grid
+        param = self.param
+        # Minus is not needed here because 'Z' is directed downward
+        drho_dz = grid.diff(param.wet * rho.chunk({'zl': -1}),'Z') / grid.diff(param.zl,'Z') * param.wet_w
+        
+        g = 9.8
+        rho0 = 1025.
+
+        return g * drho_dz / rho0
+
+    @property
+    def baroclinic_speed(self):
+        '''
+        Baroclinic Gravity Wave Speed,
+        see https://mom-ocean.github.io/assets/pdfs/MOM5_manual.pdf, Eq. (23.276)
+        c = 1/pi * integral(N, dz)
+
+        The output is in m/s
+        '''
+        N = np.sqrt(np.maximum(self.Nsquared,0.))
+
+        grid = self.grid
+        param = self.param
+        
+        # Thickness of layers
+        h = grid.diff(param.zi, 'Z')
+        # dz = (h_k+h_k+1)/2. The intergration factor for the buoyancy frequency
+        dz = grid.interp(h, 'Z')
+
+        return 1./np.pi * (N * dz).sum('zi')
+
+    @property
+    def deformation_radius(self):
+        '''
+        According to https://mom-ocean.github.io/assets/pdfs/MOM5_manual.pdf, 
+        we consider two definitions of Rossby deformation radius:
+        Rd = cg / |f| for large latitudes
+        and 
+        Rd = sqrt(cg / (2 * beta)) for low latitudes, where
+        "cg" is the  Baroclinic Gravity Wave Speed
+        f = 2 * Omega * sin (lat) is the Coriolis parameter with Omega = 7.2921 x 10-5 rad/s being Earth rotation
+        beta = df/dy = 2 * Omega / R_e * cos (lat), R_e is the Earth radius 6.378e+6 m
+
+        Following MOM6 code https://github.com/Pperezhogin/MOM6/blob/dev/gfdl/src/parameterizations/lateral/MOM_lateral_mixing_coeffs.F90#L269-L270, 
+        and Hallberg 2013 https://www.sciencedirect.com/science/article/pii/S1463500313001601
+        we combine both definitions of the deformation radius into single expression:
+        Rd = cg / sqrt(f^2 + cg * 2 * beta)
+
+        The output of deformation radius (Rd) is in m
+        '''
+
+        Omega = 7.2821e-5
+        R_e = 6.378e+6
+        lat_rad = self.param.yh * np.pi / 180. # latitude in radians
+        f = 2 * Omega * np.sin(lat_rad)
+        beta = 2 * Omega * np.cos(lat_rad) / R_e
+
+        cg = self.baroclinic_speed
+
+        Rd = cg / np.sqrt(f**2 + cg * 2 * beta)
+
+        return Rd
+
+    @property
+    def Rd_dx(self):
+        '''
+        Deformation radius divided by the grid spacing.
+        We keep definition of grid spacing similar to MOM6 as (dx^2+dy^2)^1/2
+        https://github.com/Pperezhogin/MOM6/blob/dev/gfdl/src/parameterizations/lateral/MOM_lateral_mixing_coeffs.F90#L1546
+        '''
+
+        param = self.param
+        dx = np.sqrt(param.dxT**2 + param.dyT**2)
+        return self.deformation_radius / dx
