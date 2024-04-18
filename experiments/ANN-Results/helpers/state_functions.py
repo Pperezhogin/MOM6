@@ -12,6 +12,29 @@ from helpers.selectors import select_LatLon, x_coord, y_coord
 import warnings
 warnings.filterwarnings("ignore")
 
+def Coriolis(lat, compute_beta=False):
+    '''
+    Input (lat) here is in degrees, but later converted
+    to radians
+
+    f = 2 * Omega * sin (lat) is the Coriolis parameter 
+    with Omega = 7.2921 x 10-5 rad/s being Earth rotation
+    (https://en.wikipedia.org/wiki/Coriolis_frequency)
+
+    beta = df/dy = 2 * Omega / R_e * cos (lat), R_e is the Earth radius 6.371e+6 m 
+    (https://ceoas.oregonstate.edu/rossby_radius)
+    '''
+    Omega = 7.2921e-5
+    lat_rad = lat * np.pi / 180. # latitude in radians
+    f = 2 * Omega * np.sin(lat_rad)
+
+    if compute_beta:
+        R_e = 6.371e+6
+        beta = 2 * Omega * np.cos(lat_rad) / R_e
+        return f, beta
+    else:
+        return f
+
 class StateFunctions():
     def __init__(self, data, param, grid):
         self.data = data
@@ -709,7 +732,8 @@ class StateFunctions():
         and parameters are given by Elizabeth Yankovsky
         where g = 9.8 m/s^2 is the gravitational acceleration
         rho0 = 1025 kg / m^3 is the reference density
-        rho is the POTENTIAL density (see above)
+        rho is the POTENTIAL density (MOM5 manual and https://en.wikipedia.org/wiki/Brunt%E2%80%93V%C3%A4is%C3%A4l%C3%A4_frequency),
+        also Vallis Book Eq. (2.243)
 
         The result is defined on the vertical interfaces between finite-volume cells
         '''
@@ -723,7 +747,7 @@ class StateFunctions():
         g = 9.8
         rho0 = 1025.
 
-        return g * drho_dz / rho0
+        return np.maximum(g * drho_dz / rho0, 0.)
 
     @property
     def baroclinic_speed(self):
@@ -734,7 +758,7 @@ class StateFunctions():
 
         The output is in m/s
         '''
-        N = np.sqrt(np.maximum(self.Nsquared,0.))
+        N = np.sqrt(self.Nsquared)
 
         grid = self.grid
         param = self.param
@@ -755,8 +779,7 @@ class StateFunctions():
         and 
         Rd = sqrt(cg / (2 * beta)) for low latitudes, where
         "cg" is the  Baroclinic Gravity Wave Speed
-        f = 2 * Omega * sin (lat) is the Coriolis parameter with Omega = 7.2921 x 10-5 rad/s being Earth rotation
-        beta = df/dy = 2 * Omega / R_e * cos (lat), R_e is the Earth radius 6.378e+6 m
+        f is the Coriolis parameter
 
         Following MOM6 code https://github.com/Pperezhogin/MOM6/blob/dev/gfdl/src/parameterizations/lateral/MOM_lateral_mixing_coeffs.F90#L269-L270, 
         and Hallberg 2013 https://www.sciencedirect.com/science/article/pii/S1463500313001601
@@ -766,11 +789,7 @@ class StateFunctions():
         The output of deformation radius (Rd) is in m
         '''
 
-        Omega = 7.2821e-5
-        R_e = 6.378e+6
-        lat_rad = self.param.yh * np.pi / 180. # latitude in radians
-        f = 2 * Omega * np.sin(lat_rad)
-        beta = 2 * Omega * np.cos(lat_rad) / R_e
+        f, beta = Coriolis(self.param.yh, compute_beta=True)
 
         cg = self.baroclinic_speed
 
@@ -804,13 +823,66 @@ class StateFunctions():
 
         Shear_mag = self.param.wet * (sh_xx**2+self.grid.interp(sh_xy**2,['X','Y']))**0.5
 
-        Omega = 7.2821e-5
-        lat_rad = self.param.yh * np.pi / 180. # latitude in radians
-        f = 2 * Omega * np.sin(lat_rad)
-
+        f = Coriolis(self.param.yh)
         Ro = Shear_mag / (np.abs(f)+1e-25)
         return Ro
-    
+
+    # def EBT_mode(self, lon=0, lat=0, time=0, N2_small=1e-20):
+    #     '''
+    #     Calculates the Equivalent Barotropic Mode (EBT)
+    #     following Yankovsky 2023 https://essopenarchive.org/doi/full/10.22541/essoar.169945317.74775304
+    #     as follows:
+    #     d/dz(f^2/N^2 dphi/dz) + lambda^2 phi = 0
+    #     with boundary conditions dphi/dz=0 at surface
+    #     and phi=0 at the bottom
+    #     '''
+    #     # Check that there are point to compute the EBT structure
+    #     wet = self.param.wet.sel(xh=lon, yh=lat, method='nearest')
+    #     if wet[0] == 0.:
+    #         print('Error: There is no water here. Check different point.')
+    #         return
+        
+    #     # This function shows when the first zero in mask appears.
+    #     # Consequently, it is the number of wet grid points (in center of cells)
+    #     # which are wet and where the eigenproblem will be solved
+    #     Zl = np.argmin(wet)
+
+    #     f = Coriolis(self.param.yh)
+    #     f2 = float(f.sel(xh=lon, yh=lat, method='nearest')**2)
+
+    #     # N2 is defined on interfaces ("zi")
+    #     # We select lon,lat,time moment and bound N squared from below
+    #     N2 = self.Nsquared.sel(xh=lon, yh=lat, method='nearest').isel(time=time).values + N2_small
+        
+    #     # For Zl center cells, we consider N^2 only on the interfaces between
+    #     # plus two boundary interfaces values where are zero and will be ignored
+    #     N2 = N2[0:Zl+1]
+    #     N2inv = 1./N2
+    #     # These values will be ignored in FD formulas
+    #     N2inv[0] = 0; N2inv[-1] = 0
+
+    #     # Grid coordinates of interfaces:
+    #     zi = self.param.zi[0:Zl+1].values
+    #     # Grid coordinates of centers
+    #     zl = self.param.zl[0:Zl]
+        
+    #     diagonal = - f2 * (N2inv[0:Zl])
+
+
+
+
+    #     # We solve the eigenvalue problem in the center of the cells
+
+
+
+
+
+
+
+
+
+        
+
 
 
 
