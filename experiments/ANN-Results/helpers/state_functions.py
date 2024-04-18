@@ -335,7 +335,7 @@ class StateFunctions():
             div_corner = grid.interp(div, ['X', 'Y']) * param.wet_c
             Txx +=   div * sh_xx + div**2
             Tyy += - div * sh_xx + div**2
-            Txy += div_corner * sh_xy
+            Txy +=   div_corner * sh_xy
 
         kappa_t = - param.dxT * param.dyT * param.wet * ZB_scaling
         kappa_q = - param.dxBu * param.dyBu * param.wet_c * ZB_scaling
@@ -789,3 +789,28 @@ class StateFunctions():
         param = self.param
         dx = np.sqrt(param.dxT**2 + param.dyT**2)
         return self.deformation_radius / dx
+
+    @property
+    def rossby_number(self):
+        '''
+        Local Rossby number is defined similarly to Klower 2017, Juricke 2019:
+        as a local 2D or 3D field
+        Ro = sqrt(D^2+D_hat^2) / |f|
+
+        Possible usage is the resolution function:
+        Resolution_function = 1/(1+Ro)
+        '''
+        sh_xy, sh_xx, vort_xy, div = self.velocity_gradients()
+
+        Shear_mag = self.param.wet * (sh_xx**2+self.grid.interp(sh_xy**2,['X','Y']))**0.5
+
+        Omega = 7.2821e-5
+        lat_rad = self.param.yh * np.pi / 180. # latitude in radians
+        f = 2 * Omega * np.sin(lat_rad)
+
+        Ro = Shear_mag / (np.abs(f)+1e-25)
+        return Ro
+    
+
+
+
