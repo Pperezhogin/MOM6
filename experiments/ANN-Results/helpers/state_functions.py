@@ -733,7 +733,7 @@ class StateFunctions():
         where g = 9.8 m/s^2 is the gravitational acceleration
         rho0 = 1025 kg / m^3 is the reference density
         rho is the POTENTIAL density (MOM5 manual and https://en.wikipedia.org/wiki/Brunt%E2%80%93V%C3%A4is%C3%A4l%C3%A4_frequency),
-        also Vallis Book Eq. (2.243)
+        also Vallis Book Eq. (2.243), Shelton 1998 Appendix B.a.
 
         The result is defined on the vertical interfaces between finite-volume cells
         '''
@@ -742,7 +742,11 @@ class StateFunctions():
         grid = self.grid
         param = self.param
         # Minus is not needed here because 'Z' is directed downward
-        drho_dz = grid.diff(param.wet * rho.chunk({'zl': -1}),'Z') / grid.diff(param.zl,'Z') * param.wet_w
+        # Also note that drho/dz equals zero on the surface and on the bottom (same as wet_w),
+        # also it is defined on cell interfaces, which are in midpoints w.r.t. zl position
+        # Integration factor for center point (boundary values do not matter because of masking)
+        dzT = grid.diff(param.zl,'Z')
+        drho_dz = grid.diff(param.wet * rho.chunk({'zl': -1}),'Z') / dzT * param.wet_w
         
         g = 9.8
         rho0 = 1025.
@@ -763,12 +767,13 @@ class StateFunctions():
         grid = self.grid
         param = self.param
         
-        # Thickness of layers
-        h = grid.diff(param.zi, 'Z')
-        # dz = (h_k+h_k+1)/2. The intergration factor for the buoyancy frequency
-        dz = grid.interp(h, 'Z')
-
-        return 1./np.pi * (N * dz).sum('zi')
+        # Integration factors for each interface is
+        # the difference between center points
+        # Also, no integration at the surface and at the bottom
+        dzC = grid.diff(param.zl, 'Z')
+        dzC[0] = 0; dzC[-1] = 0
+        
+        return 1./np.pi * (N * dzC).sum('zi')
 
     @property
     def deformation_radius(self):
