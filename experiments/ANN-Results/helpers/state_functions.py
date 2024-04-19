@@ -35,10 +35,84 @@ def Coriolis(lat, compute_beta=False):
     else:
         return f
 
+def vertical_modes_one_column_WKB(N2, dzB, dzT, N2_small=1e-8, 
+                   dirichlet_surface=False, dirichlet_bottom=False,
+                   few_modes=1,
+                   SQG=False, scales=[1e+1,1e+2,1e+3], **kw):
+    '''
+    WKB approximations for the vertical modes of vertical_modes_one_column
+    with lowest order accuracy.
+
+    The central element of WKB approximation is to introduce the stretched 
+    vertical coordinate (z_s = int(N(z'),z'=-z..0) / int(N(z'),z'=-H..0)) in (0,1)
+    where 1 corresponds to bottom and 0 corresponds to surface
+    '''
+
+    if len(N2) != len(dzB):
+        print('Error: len(N2) != len(dzB)')
+    if len(N2) != len(dzT)-1:
+        print('Error: len(N2) != len(dzT)-1')
+
+    N2_bound = np.maximum(N2, N2_small)
+    N = np.sqrt(N2_bound)
+
+    # Find the coordinate of centerpoints
+    # To be improved later
+    zl = dzT * 0
+    zl[0] = dzB[0] - dzT[0]/2
+    zl[1:] = np.cumsum(dzB)
+
+    # We first compute normalization in the denominator
+    normalization = np.sum(N * dzB)
+
+    # Then instead of sum we do cumulative sum
+    # note that the number of elements does not change
+    z_s = np.cumsum(N * dzB) / normalization
+    
+    # Now we need to increase the number of points. We place the boundary condition:
+    # zero at first element
+    z_s = np.pad(z_s, (1,0))
+
+    if SQG:
+        modes = []
+        for scale in scales:
+            mode = np.exp(-z_s * np.sqrt(scale) * normalization)
+            modes.append(mode)
+    else:
+        if dirichlet_surface and dirichlet_bottom:
+            frequencies = (1+np.arange(few_modes)) * np.pi
+            modes = []
+            for freq in frequencies:
+                mode = np.sin(freq * z_s)
+                modes.append(mode)
+        
+        if not(dirichlet_surface) and not(dirichlet_bottom):
+            frequencies = (1+np.arange(few_modes)) * np.pi
+            modes = []
+            for freq in frequencies:
+                mode = np.cos(freq * z_s)
+                modes.append(mode)
+
+        if not(dirichlet_surface) and dirichlet_bottom:
+            frequencies = (1/2+np.arange(few_modes)) * np.pi
+            modes = []
+            for freq in frequencies:
+                mode = np.cos(freq * z_s)
+                modes.append(mode)
+
+        if dirichlet_surface and not(dirichlet_bottom):
+            frequencies = (1/2+np.arange(few_modes)) * np.pi
+            modes = []
+            for freq in frequencies:
+                mode = np.sin(freq * z_s)
+                modes.append(mode)
+
+    return np.stack(modes,-1), z_s
+
 def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8, 
                    dirichlet_surface=False, dirichlet_bottom=False,
                    debug=False, few_modes=1,
-                   SQG=False, scales=[1e0,1e1,1e+2], high_order_dirichlet=True):
+                   SQG=False, scales=[1e+1,1e+2,1e+3], high_order_dirichlet=True):
     '''
     First try it. Figure 2b from Wenda Zhang 2024 
     "The role of surface potential vorticity in the vertical structure of mesoscale eddies in wind-driven ocean circulations":
@@ -1070,6 +1144,10 @@ class StateFunctions():
 
         # Exclude bottom: only wet points
         dzT_np = np.array(dzT[0:Zl])
+
+        # For a while, I return here data which is needed 
+        # to call the numpy function
+        return N2_np, dzB_np, dzT_np, -param.zi[1:Zl], -param.zl[0:Zl]
 
         modes, cg = vertical_modes_one_column(N2_np, dzB_np, dzT_np, N2_small=N2_small, 
                                                 dirichlet_surface=dirichlet_surface, 
