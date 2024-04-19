@@ -35,6 +35,118 @@ def Coriolis(lat, compute_beta=False):
     else:
         return f
 
+def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8, 
+                   dirichlet_surface=False, dirichlet_bottom=False,
+                   debug=False, few_modes=1):
+    '''
+    Solves the eigenvalue problem:
+    d/dz (1/N^2 d phi/dz) = -lambda^2 phi
+    with Neuman (dphi/dz=0) or Dirichlet (phi=0) 
+    boundary conditions, see Smith 2007
+    "The geography of linear baroclinic instability in Earth oceans"
+    https://elischolar.library.yale.edu/cgi/viewcontent.cgi?article=1178&context=journal_of_marine_research
+
+    Inputs:
+    N2 [1/s^2] - 1D numpy array of Nsquared defined on interfaces of finite volumes,
+    where the upper interface is free surface and the lower interface is the bottom.
+    Note: first and last points (surface and bottom) are not
+    used for computations, and thus are NOT PROVIDED
+
+    dzT [m] - grid steps in cell centers
+    dzB [m] - grid steps in cell interfaces
+
+    len(N2) = len(dzB),
+    len(N2) = len(dzT) - 1
+
+    dirichlet_surface - use Dirichlet B.C. at the surface, otherwise Neumann is used
+    dirichlet_bottom  - use Dirichlet B.C. at the bottom,  otherwise Neumann is used
+
+    few_modes - the number of modes to return
+
+    N2_small = 1e-8 1/s^2 is a small threshould 
+    for Nsquared is given by Chelton 1998, see Appendix C.a:
+    
+    Output:
+    First (or few) modes phi
+    defined in centers of finite volumes, while
+    N2 is defined in interfaces BETWEEN cells,
+    so for one mode we have
+    len(N2) = len(phi) - 1
+    
+    Together with mode, we return velocity of internal gravity wave
+    cg = 1 / lambda or in terms of eigenvalues cg = sqrt(-1/eigenValue)
+
+    Algorithm:
+    * Find bottom by considering mask
+    * Compute grid steps in centers (dzT) and interfaces (dzB)
+    * Form 1D arrays to be used as diagonals of the discretization:
+        * d1 = 1 / dzT (outer derivative)
+        * d2 = 1 / N^2 / dzB (innder derivative and weighting with frequency)
+        Note: len(d1) = len(d2) + 1
+    * Form outder derivative weighting matrix:
+        D1 = np.diag(d1)
+    * Form matrix of second derivative (up to D1). Below zero Neumann B.C.:
+        D2 = [
+               -d2[0],  d2[0],       0
+                d2[0], -d2[0]-d2[1], d2[1]
+                0,      d2[1],      -d2[1]     
+                ]
+    * Total matrix of second derivatives (zero Neuman B.C.):
+        D = D1 @ D2
+    * In case of zero Dirichlet B.C. replace matrix D2 with:
+        D2 = [
+             -2*d2[0],  d2[0],       0
+                d2[0], -d2[0]-d2[1], d2[1]
+                0,      d2[1],    -2*d2[1]     
+                ]
+
+    Test assembling of matrix and its properties:
+    N2 = np.arange(3)+1
+    dzB = np.ones(3)
+    dzT = np.ones(4)
+    D, eigenValues, eigenVectors = vertical_modes_one_column(N2, dzB, dzT, dirichlet_surface=True, dirichlet_bottom=True, debug=True)
+    '''
+    if len(N2) != len(dzB):
+        print('Error: len(N2) != len(dzB)')
+    if len(N2) != len(dzT)-1:
+        print('Error: len(N2) != len(dzT)-1')
+    
+    N2_bound = np.maximum(N2, N2_small)
+
+    d1 = 1 / dzT
+    d2 = 1 / (N2_bound * dzB)
+
+    D1 = np.diag(d1)
+    D2 = - np.diag(np.pad(d2,(0,1))) - np.diag(np.pad(d2,(1,0)))
+    D2 += np.diag(d2,1) + np.diag(d2,-1)
+
+    if dirichlet_surface:
+        D2[0,0] *= 2
+    if dirichlet_bottom:
+        D2[-1,-1] *= 2
+
+    D = D1@D2
+
+    # Compute eigenvalues and eigenvectors, and sort in descending order
+    eigenValues, eigenVectors = np.linalg.eig(D)
+    idx = eigenValues.argsort()[::-1]   
+    eigenValues = eigenValues[idx]
+    eigenVectors = eigenVectors[:,idx]
+
+    if debug:
+        print('Eigenvalues in descending order:', eigenValues)
+        print('Error in Eigendecomposition norm(D - V*L*V^T)/norm(D):',
+              np.linalg.norm(eigenVectors @ np.diag(eigenValues) @ eigenVectors.T - D) / np.linalg.norm(D))
+        print('Error in eigenvectors orthogonality: norm(V*V^T-E)/norm(E), norm(V^T*V-E)/norm(E):',
+              np.linalg.norm(eigenVectors @ eigenVectors.T-np.eye(len(d1))), np.linalg.norm(eigenVectors.T @ eigenVectors-np.eye(len(d1))))
+        print('Every vector is properly shaped: norm(D*v_1 - eigval_1*v_1)/norm(v_1):',
+             np.linalg.norm(D @ eigenVectors[:,0] - eigenValues[0] * eigenVectors[:,0]) / np.linalg.norm(eigenVectors[:,0]))
+        return D, eigenValues, eigenVectors
+    
+    # Note: we transform eigenvalues to the internal gravity wave velocities
+    # cg = sqrt(-1/eigenValue)
+    return eigenVectors[:,0:few_modes], np.sqrt(-1/eigenValues[0:few_modes])
+
 class StateFunctions():
     def __init__(self, data, param, grid):
         self.data = data
@@ -745,8 +857,8 @@ class StateFunctions():
         # Also note that drho/dz equals zero on the surface and on the bottom (same as wet_w),
         # also it is defined on cell interfaces, which are in midpoints w.r.t. zl position
         # Integration factor for center point (boundary values do not matter because of masking)
-        dzT = grid.diff(param.zl,'Z')
-        drho_dz = grid.diff(param.wet * rho.chunk({'zl': -1}),'Z') / dzT * param.wet_w
+        dzB = grid.diff(param.zl,'Z')
+        drho_dz = grid.diff(param.wet * rho.chunk({'zl': -1}),'Z') / dzB * param.wet_w
         
         g = 9.8
         rho0 = 1025.
@@ -770,10 +882,10 @@ class StateFunctions():
         # Integration factors for each interface is
         # the difference between center points
         # Also, no integration at the surface and at the bottom
-        dzC = grid.diff(param.zl, 'Z')
-        dzC[0] = 0; dzC[-1] = 0
+        dzB = grid.diff(param.zl, 'Z')
+        dzB[0] = 0; dzB[-1] = 0
         
-        return 1./np.pi * (N * dzC).sum('zi')
+        return 1./np.pi * (N * dzB).sum('zi')
 
     @property
     def deformation_radius(self):
@@ -832,62 +944,53 @@ class StateFunctions():
         Ro = Shear_mag / (np.abs(f)+1e-25)
         return Ro
 
-    # def EBT_mode(self, lon=0, lat=0, time=0, N2_small=1e-20):
-    #     '''
-    #     Calculates the Equivalent Barotropic Mode (EBT)
-    #     following Yankovsky 2023 https://essopenarchive.org/doi/full/10.22541/essoar.169945317.74775304
-    #     as follows:
-    #     d/dz(f^2/N^2 dphi/dz) + lambda^2 phi = 0
-    #     with boundary conditions dphi/dz=0 at surface
-    #     and phi=0 at the bottom
-    #     '''
-    #     # Check that there are point to compute the EBT structure
-    #     wet = self.param.wet.sel(xh=lon, yh=lat, method='nearest')
-    #     if wet[0] == 0.:
-    #         print('Error: There is no water here. Check different point.')
-    #         return
+    def vertical_modes(self, lon=0, lat=0, time=0, N2_small=1e-8,
+        dirichlet_surface=False, dirichlet_bottom=False, few_modes=1):
+        '''
+        Wrapper for function vertical_modes working as follows:
+        * Select data for one water column
+        * Find bottom by looking mask
+        * Compute N squared
+        * Compute grid steps
+        * Prepare data in wet points
+        * Call vertical_modes_one_column
+        * Wrap output to the xarray: modes and corresponding 
+          internal gravity wave velocities
+        '''
+
+        grid = self.grid
+        param = self.param
         
-    #     # This function shows when the first zero in mask appears.
-    #     # Consequently, it is the number of wet grid points (in center of cells)
-    #     # which are wet and where the eigenproblem will be solved
-    #     Zl = np.argmin(wet)
+        # Check that there are points to compute the EBT structure
+        wet = param.wet.sel(xh=lon, yh=lat, method='nearest')
+        if wet[0] == 0.:
+            print('Error: There is no water here. Check different point.')
+            return
 
-    #     f = Coriolis(self.param.yh)
-    #     f2 = float(f.sel(xh=lon, yh=lat, method='nearest')**2)
+        # Finding bottom.
+        # This function shows when the first zero in mask appears.
+        # Consequently, it is the number of wet grid points (in center of cells)
+        # which are wet and where the eigenproblem will be solved
+        Zl = np.argmin(wet.values)
 
-    #     # N2 is defined on interfaces ("zi")
-    #     # We select lon,lat,time moment and bound N squared from below
-    #     N2 = self.Nsquared.sel(xh=lon, yh=lat, method='nearest').isel(time=time).values + N2_small
+        # Computing N suqared for the given watercolumn
+        N2 = self.Nsquared.sel(xh=lon, yh=lat, method='nearest').isel(time=time).values
+
+        # Creating grid steps
+        dzB = grid.diff(param.zl, 'Z')
+        dzT = grid.diff(param.zi, 'Z')
         
-    #     # For Zl center cells, we consider N^2 only on the interfaces between
-    #     # plus two boundary interfaces values where are zero and will be ignored
-    #     N2 = N2[0:Zl+1]
-    #     N2inv = 1./N2
-    #     # These values will be ignored in FD formulas
-    #     N2inv[0] = 0; N2inv[-1] = 0
+        # Only internal interfaces: exclude surface and bottom
+        N2_np = np.array(N2[1:Zl])
+        dzB_np = np.array(dzB[1:Zl])
 
-    #     # Grid coordinates of interfaces:
-    #     zi = self.param.zi[0:Zl+1].values
-    #     # Grid coordinates of centers
-    #     zl = self.param.zl[0:Zl]
-        
-    #     diagonal = - f2 * (N2inv[0:Zl])
+        # Exclude bottom: only wet points
+        dzT_np = np.array(dzT[0:Zl])
 
+        modes, cg = vertical_modes_one_column(N2_np, dzB_np, dzT_np, N2_small=N2_small, 
+                                                dirichlet_surface=dirichlet_surface, 
+                                                dirichlet_bottom=dirichlet_bottom,
+                                                debug=False, few_modes=few_modes)
 
-
-
-    #     # We solve the eigenvalue problem in the center of the cells
-
-
-
-
-
-
-
-
-
-        
-
-
-
-
+        modes = xr.DataArray(modes, dims=['zl', 'mode'], coords={'zl': param.zl[0:Zl]})
+        return modes, cg
