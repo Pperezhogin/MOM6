@@ -37,17 +37,40 @@ def Coriolis(lat, compute_beta=False):
 
 def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8, 
                    dirichlet_surface=False, dirichlet_bottom=False,
-                   debug=False, few_modes=1):
+                   debug=False, few_modes=1,
+                   SQG=False, scales=[1e0,1e1,1e+2], high_order_dirichlet=True):
     '''
     First try it. Figure 2b from Wenda Zhang 2024 
     "The role of surface potential vorticity in the vertical structure of mesoscale eddies in wind-driven ocean circulations":
 
-    N2 = np.exp(-5*np.linspace(0,1,99))
-    dzB = np.ones(99)
-    dzT = np.ones(100)
-    z = np.linspace(0,-1,100)
-    modes, cg = vertical_modes_one_column(N2, dzB, dzT, dirichlet_surface=True, dirichlet_bottom=False, few_modes=4)
-    plt.plot(modes,z)
+        Npoints = 100
+        zi = np.linspace(0,-1,Npoints)
+        zl = (zi[0:-1] + zi[1:])/2
+        dz = -np.diff(zi)[0]
+        zi = zi[1:-1]
+        
+        N2 = np.exp(5*zi)
+        dzB = dz * np.ones(Npoints-2)
+        dzT = dz * np.ones(Npoints-1)
+
+        plt.subplot(1,2,1)
+        plt.plot(N2,zi,lw=3)
+        plt.ylabel('Depth')
+        plt.title('Stratification profile, $N^2$')
+        plt.grid()
+        plt.xlim([-1.1,1.1])
+        plt.ylim([-1.1,0.1])
+
+        plt.subplot(1,2,2)
+        modes, cg = vertical_modes_one_column(N2, dzB, dzT, dirichlet_surface=True, dirichlet_bottom=False, few_modes=3)
+        plt.plot(modes,zl,lw=3)
+        plt.ylabel('Depth')
+        plt.title('W. Zhang 2024 (Interior modes)')
+        plt.grid()
+        plt.xlim([-1.1,1.1])
+        plt.ylim([-1.1,0.1])
+
+        plt.tight_layout()
 
     Solves the eigenvalue problem:
     d/dz (1/N^2 d phi/dz) = -lambda^2 phi
@@ -75,6 +98,11 @@ def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8,
 
     N2_small = 1e-8 1/s^2 is a small threshould 
     for Nsquared is given by Chelton 1998, see Appendix C.a:
+
+    Additional feature to solve for Surface-Trapped (SQG) mode,
+    see Wenda Zhang 2024:
+    B.C. will be applied automatically, and scale parameter
+    "scale">0 will be used
     
     Output:
     First (or few) modes phi
@@ -120,6 +148,10 @@ def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8,
         print('Error: len(N2) != len(dzB)')
     if len(N2) != len(dzT)-1:
         print('Error: len(N2) != len(dzT)-1')
+
+    if SQG:
+        dirichlet_surface = True
+        dirichlet_bottom = False
     
     N2_bound = np.maximum(N2, N2_small)
 
@@ -130,46 +162,77 @@ def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8,
     D2 = - np.diag(np.pad(d2,(0,1))) - np.diag(np.pad(d2,(1,0)))
     D2 += np.diag(d2,1) + np.diag(d2,-1)
 
+    # Higher order method accounts for the grid staggering.
+    # Here we introduce the ghost cell with B.C.:
+    # phi_{-1} + phi_{0} = 0
+    # This gives 3 instead of 2
+    if high_order_dirichlet:
+        TwoOrThree = 3
+    else:
+        TwoOrThree = 2
+
     if dirichlet_surface:
-        D2[0,0] *= 2
+        D2[0,0] *= TwoOrThree
     if dirichlet_bottom:
-        D2[-1,-1] *= 2
+        D2[-1,-1] *= TwoOrThree
 
     D = D1@D2
 
-    # Compute eigenvalues and eigenvectors, and sort in descending order
-    eigenValues, eigenVectors = np.linalg.eig(D)
-    idx = eigenValues.argsort()[::-1]   
-    eigenValues = eigenValues[idx]
-    eigenVectors = eigenVectors[:,idx]
+    if not(SQG):
+        # Compute eigenvalues and eigenvectors, and sort in descending order
+        eigenValues, eigenVectors = np.linalg.eig(D)
+        idx = eigenValues.argsort()[::-1]   
+        eigenValues = eigenValues[idx]
+        eigenVectors = eigenVectors[:,idx]
 
-    if debug:
-        print('Eigenvalues in descending order:', eigenValues)
-        print('Error in Eigendecomposition norm(D - V*L*V^T)/norm(D):',
-              np.linalg.norm(eigenVectors @ np.diag(eigenValues) @ eigenVectors.T - D) / np.linalg.norm(D))
-        print('Error in eigenvectors orthogonality: norm(V*V^T-E)/norm(E), norm(V^T*V-E)/norm(E):',
-              np.linalg.norm(eigenVectors @ eigenVectors.T-np.eye(len(d1))), np.linalg.norm(eigenVectors.T @ eigenVectors-np.eye(len(d1))))
-        print('Every vector is properly shaped: norm(D*v_1 - eigval_1*v_1)/norm(v_1):',
-             np.linalg.norm(D @ eigenVectors[:,0] - eigenValues[0] * eigenVectors[:,0]) / np.linalg.norm(eigenVectors[:,0]))
-        return D, eigenValues, eigenVectors
+        if debug:
+            print('Eigenvalues in descending order:', eigenValues)
+            print('Error in Eigendecomposition norm(D - V*L*V^T)/norm(D):',
+                np.linalg.norm(eigenVectors @ np.diag(eigenValues) @ eigenVectors.T - D) / np.linalg.norm(D))
+            print('Error in eigenvectors orthogonality: norm(V*V^T-E)/norm(E), norm(V^T*V-E)/norm(E):',
+                np.linalg.norm(eigenVectors @ eigenVectors.T-np.eye(len(d1))), np.linalg.norm(eigenVectors.T @ eigenVectors-np.eye(len(d1))))
+            print('Every vector is properly shaped: norm(D*v_1 - eigval_1*v_1)/norm(v_1):',
+                np.linalg.norm(D @ eigenVectors[:,0] - eigenValues[0] * eigenVectors[:,0]) / np.linalg.norm(eigenVectors[:,0]))
+            return D, eigenValues, eigenVectors
 
-    # filter out barotropic mode
-    if not dirichlet_bottom and not dirichlet_surface:
-        shift = 1
+        # filter out barotropic mode
+        if not dirichlet_bottom and not dirichlet_surface:
+            shift = 1
+        else:
+            shift = 0
+
+        # Select few first modes
+        modes = eigenVectors[:,shift:few_modes+shift]
+        # Internal gravity wave velocities
+        # cg = sqrt(-1/eigenValue)
+        cg = np.sqrt(-1/eigenValues[shift:few_modes+shift])
+
+        # Normalize modes such that surface value is positive
+        # and maximum value is 1
+        modes = modes / np.max(np.abs(modes),0) * np.sign(modes[0,:])
+
+        return modes, cg
     else:
-        shift = 0
-
-    # Select few first modes
-    modes = eigenVectors[:,shift:few_modes+shift]
-    # Internal gravity wave velocities
-    # cg = sqrt(-1/eigenValue)
-    cg = np.sqrt(-1/eigenValues[shift:few_modes+shift])
-
-    # Normalize modes such that surface value is positive
-    # and maximum value is 1
-    modes = modes / np.max(np.abs(modes),0) * np.sign(modes[0,:])
-
-    return modes, cg
+        modes = []
+        for scale in scales:
+            # Here we construct new matric for the operator
+            # d/dz (1/N^2 d phi/dz) - scale * phi
+            E = np.eye(len(d1))
+            # We should not disturb the Neuman boundary condition
+            E[-1,-1] = 0.
+            M = D - scale * E
+            
+            # Here we place the dirichlet B.C. with value phi=1:
+            rhs = np.zeros(len(d1))
+            if high_order_dirichlet:
+                # This correction comes from the equation
+                # phi[-1] + phi[0] = 2 * phi[-1/2]
+                rhs[0] = - 2 * d2[0] * d1[0]    
+            else:
+                rhs[0] = - d2[0] * d1[0]
+            mode = np.linalg.solve(M, rhs)
+            modes.append(mode)
+        return np.stack(modes,-1)
 
 class StateFunctions():
     def __init__(self, data, param, grid):
