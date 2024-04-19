@@ -39,6 +39,16 @@ def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8,
                    dirichlet_surface=False, dirichlet_bottom=False,
                    debug=False, few_modes=1):
     '''
+    First try it. Figure 2b from Wenda Zhang 2024 
+    "The role of surface potential vorticity in the vertical structure of mesoscale eddies in wind-driven ocean circulations":
+
+    N2 = np.exp(-5*np.linspace(0,1,99))
+    dzB = np.ones(99)
+    dzT = np.ones(100)
+    z = np.linspace(0,-1,100)
+    modes, cg = vertical_modes_one_column(N2, dzB, dzT, dirichlet_surface=True, dirichlet_bottom=False, few_modes=4)
+    plt.plot(modes,z)
+
     Solves the eigenvalue problem:
     d/dz (1/N^2 d phi/dz) = -lambda^2 phi
     with Neuman (dphi/dz=0) or Dirichlet (phi=0) 
@@ -142,10 +152,24 @@ def vertical_modes_one_column(N2, dzB, dzT, N2_small=1e-8,
         print('Every vector is properly shaped: norm(D*v_1 - eigval_1*v_1)/norm(v_1):',
              np.linalg.norm(D @ eigenVectors[:,0] - eigenValues[0] * eigenVectors[:,0]) / np.linalg.norm(eigenVectors[:,0]))
         return D, eigenValues, eigenVectors
-    
-    # Note: we transform eigenvalues to the internal gravity wave velocities
+
+    # filter out barotropic mode
+    if not dirichlet_bottom and not dirichlet_surface:
+        shift = 1
+    else:
+        shift = 0
+
+    # Select few first modes
+    modes = eigenVectors[:,shift:few_modes+shift]
+    # Internal gravity wave velocities
     # cg = sqrt(-1/eigenValue)
-    return eigenVectors[:,0:few_modes], np.sqrt(-1/eigenValues[0:few_modes])
+    cg = np.sqrt(-1/eigenValues[shift:few_modes+shift])
+
+    # Normalize modes such that surface value is positive
+    # and maximum value is 1
+    modes = modes / np.max(np.abs(modes),0) * np.sign(modes[0,:])
+
+    return modes, cg
 
 class StateFunctions():
     def __init__(self, data, param, grid):
@@ -967,13 +991,10 @@ class StateFunctions():
             print('Error: There is no water here. Check different point.')
             return
 
-        # Finding bottom.
-        # This function shows when the first zero in mask appears.
-        # Consequently, it is the number of wet grid points (in center of cells)
-        # which are wet and where the eigenproblem will be solved
-        Zl = np.argmin(wet.values)
+        # Count the number of wet finite volumes
+        Zl = np.sum(wet.values.astype('int'))
 
-        # Computing N suqared for the given watercolumn
+        # Computing N squared for a given watercolumn
         N2 = self.Nsquared.sel(xh=lon, yh=lat, method='nearest').isel(time=time).values
 
         # Creating grid steps
@@ -994,3 +1015,60 @@ class StateFunctions():
 
         modes = xr.DataArray(modes, dims=['zl', 'mode'], coords={'zl': param.zl[0:Zl]})
         return modes, cg
+
+    def vertical_modes_map(self, time=0, N2_small=1e-8,
+        dirichlet_surface=False, dirichlet_bottom=False, few_modes=1):
+        '''
+        This is extension of the function above which computes
+        baroclinic modes for the full 3D snapshot
+        '''
+
+        grid = self.grid
+        param = self.param
+
+        # Computing N squared
+        N2 = self.Nsquared.isel(time=time).compute().values
+
+        # Creating grid steps
+        dzB = grid.diff(param.zl, 'Z').values
+        dzT = grid.diff(param.zi, 'Z').values
+
+        nx, ny, nz = len(param.xh), len(param.yh), len(param.zl)
+
+        Modes = np.zeros([nz, ny, nx, few_modes])
+        Cg = np.zeros([ny, nx, few_modes])
+        
+        for j in range(ny):
+            print(j)
+            for i in range(nx):
+                # Check that there are points to compute the EBT structure
+                wet = param.wet.isel(xh=i, yh=j)
+
+                # Count the number of wet finite volumes
+                Zl = np.sum(wet.values.astype('int'))
+
+                # Skip one-layer and less water columns
+                if Zl <= 1:
+                    continue
+                
+                # Only internal interfaces: exclude surface and bottom
+                N2_np = N2[1:Zl,j,i]
+                dzB_np = dzB[1:Zl]
+
+                # Exclude bottom: only wet points
+                dzT_np = dzT[0:Zl]
+
+                modes, cg = vertical_modes_one_column(N2_np, dzB_np, dzT_np, N2_small=N2_small, 
+                                                        dirichlet_surface=dirichlet_surface, 
+                                                        dirichlet_bottom=dirichlet_bottom,
+                                                        debug=False, few_modes=few_modes)
+
+                Modes[:Zl,j,i,:] = modes
+                Cg[j,i,:] = cg
+
+        Modes = xr.DataArray(Modes, dims=['zl', 'yh', 'xh', 'mode'], 
+                coords={'xh': param.xh, 'yh': param.yh, 'zl': param.zl})
+        Cg = xr.DataArray(Cg, dims=['yh', 'xh', 'mode'], 
+                coords={'xh': param.xh, 'yh': param.yh})
+
+        return Modes, Cg

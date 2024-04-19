@@ -273,6 +273,9 @@ class DatasetCM26():
         if 'zl' in self.data.dims:
             ds_coarse.data['zl'] = self.data.zl
 
+        ds_coarse.data['temp'] = self.data['temp'].coarsen({'xh': factor, 'yh': factor}).mean() * param.wet
+        ds_coarse.data['salt'] = self.data['salt'].coarsen({'xh': factor, 'yh': factor}).mean() * param.wet
+
         return ds_coarse
 
     def filtering(self, factor=10, operator=Filtering(FGR=2)):
