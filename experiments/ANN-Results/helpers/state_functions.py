@@ -1287,13 +1287,13 @@ class StateFunctions():
         Te = Ld / deltaU
         return Te, Ld, deltaU
     
-    def Eady_time_baroclinic_velocities(self, depth_threshold=-1.):
+    def baroclinic_velocities(self):
         '''
-        Here we estimate Eady time scale simply as:
-        Te = Ld / delta(U),
-        where Ld is the Rossby deformation radius, and
+        Here we estimate denominator for 
+        Eady time scale (Te = Ld / delta(U)) simply as:
         delta(U) is the scale of baroclinic velocities
         given by square root of twice the baroclinic kinetic energy
+        where Ld is the Rossby deformation radius, and
         '''
         
         grid = self.grid
@@ -1313,10 +1313,62 @@ class StateFunctions():
 
         # Here we assume that mean(u^2)-mean(u)**2 = mean((u-mean(u))^2)
         deltaU = np.sqrt(u2_mean + v2_mean - u_mean**2 - v_mean**2)
-        
-        Ld = self.deformation_radius
-        Te = Ld / deltaU
-        return Te, Ld, deltaU
+
+        return deltaU
+    
+    def prepare_features(self):
+        '''
+        This function prepares input features for physics-aware
+        neural network. The following features are collected:
+        * Rd, Rossby deformation radius, 2D map
+        * Te, Eady time scale, 2D map
+        * z_s = int(N(z'),z'=-z..0) / int(N(z'),z'=-H..0),
+            3D map of non-dimensional vertical coordinate
+
+        Note: This function to be called for a single time moment
+        Note: This function repeats calculations of
+              def deformation_radius to safe computations
+        '''
+        grid = self.grid
+        param = self.param
+        data = self.data
+
+        # Compute N (buoyancy frequency)
+        # Note that Nsquared is already zero at bottom
+        N = np.sqrt(self.Nsquared)
+        # Integration factor
+        dzB = grid.diff(param.zl, 'Z')
+        dzB[0] = 0; dzB[-1] = 0
+
+        # Integral int(N(z'),z'=-z..0)
+        Ndz = (N * dzB).cumsum('zi')
+        # Full integral
+        NH = Ndz[-1] 
+        # Non-dimensional vertical coordinate
+        # Set coordinate to zero in points where stratification is
+        # inverse and hence the integral is zero
+        z_s = xr.where(NH > 0, Ndz / NH, 0.)
+        # The coordrinate is defined in center cells:
+        # with zero at first grid point
+        z_s = z_s.isel(zi=slice(0,-1)).rename({'zi': 'zl'})
+        z_s['zl'] = self.data.zl
+
+        # Baroclinic speed
+        # Note: The last element of cumsum is sum
+        cg = 1/np.pi * NH
+
+        # Deformation radius
+        f, beta = Coriolis(self.param.yh, compute_beta=True)
+        Rd = cg / np.sqrt(f**2 + cg * 2 * beta)
+
+        # Eady time scale
+        deltaU = self.baroclinic_velocities()
+        Te = Rd / deltaU
+
+        data['deformation_radius'] = Rd
+        data['eady_time'] = Te
+        data['rescaled_depth'] = z_s
+        return data
 
     def vertical_modes(self, lon=0, lat=0, time=0, N2_small=1e-8,
         dirichlet_surface=False, dirichlet_bottom=False, few_modes=1):

@@ -186,18 +186,13 @@ class DatasetCM26():
     def __len__(self):
         return len(self.data.time)
     
-    def split(self, time = None, zl=None):
+    def split(self, time = None):
         data = self.data
         if 'time' in self.data.dims:
             if time is None:
                 time = np.random.randint(0,len(self))
             data = data.isel(time=time)
         
-        if 'zl' in self.data.dims:
-            if zl is None:
-                zl = np.random.randint(0,len(self.data.zl))
-            data = data.isel(zl=zl)
-
         return DatasetCM26(data, self.param)
     
     def init_coarse_grid(self, factor=10, percentile=0):
