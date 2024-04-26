@@ -986,16 +986,22 @@ class StateFunctions():
         KEx, KEy = self.gradKE()
         return (CAu - KEx, CAv - KEy)
 
-    @property
-    def rho(self):
+    def rho(self, potential=True):
         '''
         Compute POTENTIAL density in kg/m^3, which is sigma0+1000kg/m^3.
         We compute sigma0 according to https://www.teos-10.org/pubs/gsw/html/gsw_sigma0.html
         Note that instead of Absolute Salinity and Conservative Temperature we use
         standard CM2.6 variables: Potential temperature, degrees C and Practical Salinity, psu
         '''
-        return (1000.+gsw.sigma0(self.data.salt, self.data.temp))
-    
+        if potential:
+            return (1000.+gsw.sigma0(self.data.salt, self.data.temp))
+        else:
+            # Here we return in-situ density assuming that 
+            # pressure in dbar equals z (this is a good approximation)
+            # and same as above neglecting difference between potential and conservative
+            # temperatures, and practical and absolute salinity
+            return gsw.rho(self.data.salt, self.data.temp, self.param.zl)
+        
     @property
     def Nsquared(self):
         '''
@@ -1011,7 +1017,7 @@ class StateFunctions():
         The result is defined on the vertical interfaces between finite-volume cells
         '''
 
-        rho = self.rho
+        rho = self.rho()
         grid = self.grid
         param = self.param
         # Minus is not needed here because 'Z' is directed downward
@@ -1104,6 +1110,199 @@ class StateFunctions():
         f = Coriolis(self.param.yh)
         Ro = Shear_mag / (np.abs(f)+1e-25)
         return Ro
+    
+    def vertical_shear(self):
+        '''
+        Compute vertical shear from cm2.6 data directly.
+        Return the output in W points. 
+        '''
+        grid = self.grid
+        param = self.param
+        data = self.data
+
+        u = grid.interp(data.u, 'X') * param.wet
+        v = grid.interp(data.v, 'Y') * param.wet
+
+        dzB = grid.diff(param.zl,'Z')
+        uz = (grid.diff(u.chunk({'zl':-1}),'Z') / dzB) * param.wet_w
+        vz = (grid.diff(v.chunk({'zl':-1}),'Z') / dzB) * param.wet_w
+
+        return uz, vz
+    
+    def vertical_shear_geostrophic(self, potential=False):
+        '''
+        Compute vertical shear for the geostrophically
+        balanced motion only assuming thermal wind balance.
+        The default algorithm uses in-situ density.
+        du/dz = - g/(rho0 * f) * drho/dy
+        dv/dz = + g/(rho0 * f) * drho/dx
+        '''
+        grid = self.grid
+        param = self.param
+
+        g = 9.8
+        rho0 = 1025.
+        f = Coriolis(param.yh)
+
+        rho = self.rho(potential=potential) # in-situ or potential density
+        uz  = - g /(rho0 * f) * grid.interp(grid.diff(rho.chunk({'zl':-1}),  'Y') / param.dyCv * param.wet_v, ['Y','Z']) * param.wet_w
+        vz  = + g /(rho0 * f) * grid.interp(grid.diff(rho.chunk({'zl':-1}),  'X') / param.dxCu * param.wet_u, ['X','Z']) * param.wet_w
+
+        return uz, vz
+    
+    def Eady_time(self, potential_density_to_compute_vertical_shear=False, 
+                    depth_threshold=0.):
+        '''
+        Following Smith 2007 "The geography of linear baroclinic instability in Earth’s oceans"
+        and Held and Larichev 1996, we introduce the Eady time Te as follows:
+        1/Te = f sqrt(average(1/Ri(z))), where 
+        Ri = N^2 / (U_z^2 + V_z^2)
+
+        The following numerical features are introduced to ease the computation:
+        * We use geostrophic vertical shear instead of vertical shear in model output, thus resulting to:
+        1/Te = sqrt(g/rho0 * average((rho_x^2 + rho_y^2) / rho_z))
+        * We exclude points with negative N^2 from depth-averaging
+        * It is best to use this function when coarsegraining is performed with percentile=1.
+        '''
+        g = 9.8
+        rho0 = 1025.
+        grid = self.grid
+        param = self.param
+
+        rhop = self.rho(potential=True)
+        if potential_density_to_compute_vertical_shear:
+            rho = rhop
+        else:
+            rho = self.rho(potential=False)
+
+        dzB = grid.diff(param.zl,'Z')
+
+        # We exlude placing B.C. up until the end
+        drho_dz = grid.diff(param.wet * rhop.chunk({'zl': -1}),'Z') / dzB
+        drho_dy = grid.interp(grid.diff(rho.chunk({'zl':-1}),  'Y') / param.dyCv * param.wet_v, ['Y','Z'])
+        drho_dx = grid.interp(grid.diff(rho.chunk({'zl':-1}),  'X') / param.dxCu * param.wet_u, ['X','Z'])
+
+        rho_nabla2 = drho_dx**2 + drho_dy**2
+
+        # Here we form mask of where to average
+        mask = np.logical_and(drho_dz>0, param.wet_w==1)
+        # Add depth threshold if specified
+        if depth_threshold > 0.:
+            mask = np.logical_and(mask, param.zi>depth_threshold)
+
+        integrated = rho_nabla2 / drho_dz
+        weights = xr.where(mask, dzB, 0)
+
+        invTe = np.sqrt(g/rho0 * (integrated * weights).sum('zi') / weights.sum('zi'))
+
+        # Eady time
+        Te = 1. / invTe
+
+        # Inverse Richardson
+        f = Coriolis(param.yh)
+        invRi = (invTe/f)**2
+
+        # Diagnostic output
+        invRi_local = integrated * g / (rho0 * f**2)
+
+        return Te, invRi, invRi_local
+
+    def Eady_time_direct(self, N2_small=1e-8):
+        '''
+        Following Smith 2007 "The geography of linear baroclinic instability in Earth’s oceans",
+        we introduce Richardson number as follows:
+        Ri = N^2 / (U_z^2 + V_z^2), and then compute the parameter for water column:
+        1/H int(1/Ri(z), z=-H..0)
+
+        N2_small=1e-8s-2 following CHelton 1998
+        '''
+        N2_small=1e-8
+
+        N2 = self.Nsquared
+
+        grid = self.grid
+        param = self.param
+        data = self.data
+
+        # Define vertical velocities on the interfaces
+        # On the surface and bottom derivatives are zero (same as Nsquared)
+        u = grid.interp(data.u, 'X') * param.wet
+        v = grid.interp(data.v, 'Y') * param.wet
+
+        dzB = grid.diff(param.zl,'Z')
+        u_z = grid.diff(u.chunk({'zl':-1}),'Z') / dzB
+        v_z = grid.diff(v.chunk({'zl':-1}),'Z') / dzB
+
+        # multiplying by mask eliminates surface and bottom contribution
+        invRi_local = ((u_z**2 + v_z**2) / (N2+N2_small)) * param.wet_w
+
+        # Doint integration
+        numerator = invRi_local * dzB
+        denominator = dzB * param.wet_w
+
+        invRi = numerator.sum('zi') / denominator.sum('zi')
+        f = Coriolis(param.yh)
+        invTe = np.abs(f) * np.sqrt(invRi)
+        Te = 1 / invTe
+    
+        return Te, invRi, invRi_local
+    
+    def Eady_time_simple(self, depth_threshold=-1.):
+        '''
+        Here we estimate Eady time scale simply as:
+        Te = Ld / delta(U),
+        where Ld is the Rossby deformation radius, and
+        delta(U) = int(|u_z|, dz) = sum(|np.diff(u)|)
+        '''
+        
+        grid = self.grid
+        param = self.param
+        data = self.data
+
+        u = grid.interp(data.u, 'X') * param.wet
+        v = grid.interp(data.v, 'Y') * param.wet
+
+        # Just finite differences, because we will eventually integrate
+        u_z = grid.diff(u.chunk({'zl':-1}),'Z')
+        v_z = grid.diff(v.chunk({'zl':-1}),'Z')
+
+        Uz = np.sqrt(u_z**2 + v_z**2)
+
+        deltaU = (Uz * param.wet_w * (param.zi>depth_threshold)).sum('zi')
+        Ld = self.deformation_radius
+        Te = Ld / deltaU
+        return Te, Ld, deltaU
+    
+    def Eady_time_baroclinic_velocities(self, depth_threshold=-1.):
+        '''
+        Here we estimate Eady time scale simply as:
+        Te = Ld / delta(U),
+        where Ld is the Rossby deformation radius, and
+        delta(U) is the scale of baroclinic velocities
+        given by square root of twice the baroclinic kinetic energy
+        '''
+        
+        grid = self.grid
+        param = self.param
+        data = self.data
+
+        u = grid.interp(data.u, 'X')
+        v = grid.interp(data.v, 'Y')
+
+        dzT = grid.diff(param.zi, 'Z') * param.wet
+        mean_z = lambda x: (x * dzT).sum('zl') / dzT.sum('zl')
+
+        u_mean = mean_z(u)
+        v_mean = mean_z(v)
+        u2_mean = mean_z((u)**2)
+        v2_mean = mean_z((v)**2)
+
+        # Here we assume that mean(u^2)-mean(u)**2 = mean((u-mean(u))^2)
+        deltaU = np.sqrt(u2_mean + v2_mean - u_mean**2 - v_mean**2)
+        
+        Ld = self.deformation_radius
+        Te = Ld / deltaU
+        return Te, Ld, deltaU
 
     def vertical_modes(self, lon=0, lat=0, time=0, N2_small=1e-8,
         dirichlet_surface=False, dirichlet_bottom=False, few_modes=1):

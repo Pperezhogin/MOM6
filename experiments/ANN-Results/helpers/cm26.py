@@ -108,7 +108,8 @@ class DatasetCM26():
         ############ Drop unnecessary coordinates ###########
         param = xr.Dataset()
         for key in ['xh', 'yh', 'xq', 'yq', 'zl', 'zi']:
-            param[key] = param_init[key]
+            if key in param_init.keys():
+                param[key] = param_init[key]
         for key in ['dxT', 'dyT']:
             param[key] = param_init[key].drop(['area_t', 'dxT', 'dyT', 'geolat_t', 'geolon_t', 'ht', 'kmt', 'wet'])
         for key in ['dxBu', 'dyBu']:
