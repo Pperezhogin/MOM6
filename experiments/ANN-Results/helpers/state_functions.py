@@ -1363,7 +1363,10 @@ class StateFunctions():
 
         # Eady time scale
         deltaU = self.baroclinic_velocities()
-        Te = Rd / deltaU
+        # If vertical shear is zero, the Eady time is infinity
+        # However, we set it to most probable value which is
+        # 10 days (10. * 86400s)
+        Te = xr.where(deltaU>0, Rd / deltaU, 10.*86400)
 
         data['deformation_radius'] = Rd
         data['eady_time'] = Te
