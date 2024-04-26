@@ -72,7 +72,10 @@ def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=T
     control = (mask_nan * selector(control)).compute()
     
     if vmax is None:
-        vmax = control.std() * 4
+        control_mean = control.mean()
+        control_std = control.std()
+        vmax = control_mean + control_std * 4
+        vmin = control_mean - control_std * 4
     
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
@@ -101,7 +104,10 @@ def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_
     control = selector(control).compute()
     
     if vmax is None:
-        vmax = control.std() * 4
+        control_mean = control.mean()
+        control_std = control.std()
+        vmax = control_mean + control_std * 4
+        vmin = control_mean - control_std * 4
     
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
@@ -116,7 +122,7 @@ def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_
     control.plot(ax=ax, vmax=vmax, vmin=vmin, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
     ax.set_title('Control field')
     ax = axes[1][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
-    (tested-control).plot(ax=ax, vmax=vmax, vmin=vmin, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
+    (tested-control).plot(ax=ax, vmax=vmax-control_mean, vmin=vmin-control_mean, transform=ccrs.PlateCarree(), cmap=cmap, add_colorbar=False)
     ax.set_title('Tested-control')
     plt.tight_layout()
     plt.colorbar(im, ax=axes, shrink=0.9, aspect=30, extend='both')

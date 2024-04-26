@@ -1,42 +1,10 @@
 import gcm_filters
-
-class Operator():
-    '''
-    Operator for filtering and coarsegraining velocities on 
-    staggered Arakawa-C grid
-    '''
-    def __init__(self):
-        pass
-    def __call__(self, u, v, ds_hires, ds_coarse):
-        '''
-        Assume:
-        * u, v are on Arakawa-C grid
-        * u, v are masked with wet mask
-        * output is masked
-        '''
-        raise NotImplementedError
+import xarray as xr
+import numpy as np
     
-    def __add__(first, second):
-        if not isinstance(second, Operator):
-            raise TypeError("Unsupported operand type. The right operand must be an instance of Operator.")
-        
-        class CombinedOperator(Operator):
-            def __init__(self):
-                super().__init__()
-                self.first = first
-                self.second = second
-            def __call__(self, u, v, ds_hires, ds_coarse):
-                '''
-                Here we sequentially apply the operators
-                '''
-                u_, v_ = self.first(u, v, ds_hires, ds_coarse)
-                return self.second(u_, v_, ds_hires, ds_coarse)
-        return CombinedOperator()
-    
-class Coarsen(Operator):
-    def __init__(self):
-        super().__init__()
-    def __call__(self, u, v, ds_hires, ds_coarse):
+class Coarsen:
+    def __call__(self, u=None, v=None, T=None, 
+                 ds_hires=None, ds_coarse=None, factor=None):
         '''
         Algorithm: 
         * Interpolate velocities to the center
@@ -48,22 +16,26 @@ class Coarsen(Operator):
         Note: compared to direct coarsegraining and interpolation, 
         this algorithm is almost the same for large coarsegraining factor
         '''
-        coarsen = lambda x: x.coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).mean()
+        coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).mean()
+        u_coarse = None; v_coarse = None; T_coarse = None
 
-        u_coarse = ds_coarse.grid.interp(
-                coarsen(ds_hires.grid.interp(u, 'X')*ds_hires.param.wet) \
-                * ds_coarse.param.wet,'X') * ds_coarse.param.wet_u
-        
-        v_coarse = ds_coarse.grid.interp(
-                coarsen(ds_hires.grid.interp(v, 'Y')*ds_hires.param.wet) \
-                * ds_coarse.param.wet,'Y') * ds_coarse.param.wet_v   
-        
-        return u_coarse, v_coarse
+        if u is not None:
+            u_coarse = ds_coarse.grid.interp(
+                    coarsen(ds_hires.grid.interp(u, 'X')*ds_hires.param.wet) \
+                    * ds_coarse.param.wet,'X') * ds_coarse.param.wet_u
+        if v is not None:
+            v_coarse = ds_coarse.grid.interp(
+                    coarsen(ds_hires.grid.interp(v, 'Y')*ds_hires.param.wet) \
+                    * ds_coarse.param.wet,'Y') * ds_coarse.param.wet_v   
+            
+        if T is not None:
+            T_coarse = coarsen(T) * ds_coarse.param.wet
+            
+        return u_coarse, v_coarse, T_coarse
     
-class CoarsenWeighted(Operator):
-    def __init__(self):
-        super().__init__()
-    def __call__(self, u, v, ds_hires, ds_coarse):
+class CoarsenWeighted:
+    def __call__(self, u=None, v=None, T=None, 
+                 ds_hires=None, ds_coarse=None, factor=None):
         '''
         Algorithm: 
         * Interpolate velocities to the center
@@ -73,32 +45,37 @@ class CoarsenWeighted(Operator):
         Note: we weight here all operations with local grid area
         '''
 
-        coarsen = lambda x: x.coarsen({'xh':ds_coarse.factor, 'yh':ds_coarse.factor}).sum()
+        coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).sum()
+        u_coarse = None; v_coarse = None; T_coarse = None
         
-        ############ U-velocity ############
-        areaU = ds_hires.param.dxCu * ds_hires.param.dyCu
-        u_weighted = ds_hires.grid.interp(u * areaU,'X') * ds_hires.param.wet
-        
-        areaU = ds_coarse.param.dxCu * ds_coarse.param.dyCu
-        u_coarse = ds_coarse.grid.interp(
-            coarsen(u_weighted) * ds_coarse.param.wet,'X') \
-            * ds_coarse.param.wet_u / areaU
+        if u is not None:
+            areaU = ds_hires.param.dxCu * ds_hires.param.dyCu
+            u_weighted = ds_hires.grid.interp(u * areaU,'X') * ds_hires.param.wet
+            
+            areaU = ds_coarse.param.dxCu * ds_coarse.param.dyCu
+            u_coarse = ds_coarse.grid.interp(
+                coarsen(u_weighted) * ds_coarse.param.wet,'X') \
+                * ds_coarse.param.wet_u / areaU
 
-        ############ V-velocity ############
-        areaV = ds_hires.param.dxCv * ds_hires.param.dyCv
-        v_weighted = ds_hires.grid.interp(v * areaV,'Y') * ds_hires.param.wet
-        
-        areaV = ds_coarse.param.dxCv * ds_coarse.param.dyCv
-        v_coarse = ds_coarse.grid.interp(
-            coarsen(v_weighted) * ds_coarse.param.wet,'Y') \
-            * ds_coarse.param.wet_v / areaV
-                    
-        return u_coarse, v_coarse
+        if v is not None:
+            areaV = ds_hires.param.dxCv * ds_hires.param.dyCv
+            v_weighted = ds_hires.grid.interp(v * areaV,'Y') * ds_hires.param.wet
+            
+            areaV = ds_coarse.param.dxCv * ds_coarse.param.dyCv
+            v_coarse = ds_coarse.grid.interp(
+                coarsen(v_weighted) * ds_coarse.param.wet,'Y') \
+                * ds_coarse.param.wet_v / areaV
+            
+        if T is not None:
+            areaT = ds_hires.param.dxT * ds_hires.param.dyT
+            areaTc = ds_coarse.param.dxT * ds_coarse.param.dyT
+            T_coarse = coarsen(T * areaT) * ds_coarse.param.wet / areaTc
+            
+        return u_coarse, v_coarse, T_coarse
     
-class CoarsenKochkov(Operator):
-    def __init__(self):
-        super().__init__()
-    def __call__(self, u, v, ds_hires, ds_coarse):
+class CoarsenKochkov:
+    def __call__(self, u=None, v=None, T=None, 
+                 ds_hires=None, ds_coarse=None, factor=None):
         '''
         Algorithm: 
         * Apply weighted coarsegraining along cell side
@@ -108,20 +85,71 @@ class CoarsenKochkov(Operator):
         and follows from finite-volume approach, Kochkov2021:
         https://www.pnas.org/doi/abs/10.1073/pnas.2101784118 (see their Supplementary)
         '''
-        factor = ds_coarse.factor
+        u_coarse = None; v_coarse = None; T_coarse = None
 
-        u_coarse = (u * ds_hires.param.dyCu).coarsen({'yh': factor}).sum()[{'xq': slice(factor-1,None,factor)}] \
-                * ds_coarse.param.wet_u / ds_coarse.param.dyCu
+        if u is not None:
+            u_coarse = (u * ds_hires.param.dyCu).coarsen({'yh': factor}).sum()[{'xq': slice(factor-1,None,factor)}] \
+                    * ds_coarse.param.wet_u / ds_coarse.param.dyCu
         
-        v_coarse = (v * ds_hires.param.dxCv).coarsen({'xh': factor}).sum()[{'yq': slice(factor-1,None,factor)}] \
-                    * ds_coarse.param.wet_v / ds_coarse.param.dxCv
+        if v is not None:
+            v_coarse = (v * ds_hires.param.dxCv).coarsen({'xh': factor}).sum()[{'yq': slice(factor-1,None,factor)}] \
+                        * ds_coarse.param.wet_v / ds_coarse.param.dxCv
+        
+        if T is not None:
+            coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).sum()
+            areaT = ds_hires.param.dxT * ds_hires.param.dyT
+            areaTc = ds_coarse.param.dxT * ds_coarse.param.dyT
+            T_coarse = coarsen(T * areaT) * ds_coarse.param.wet / areaTc
 
-        return u_coarse, v_coarse
+        return u_coarse, v_coarse, T_coarse
 
-class Subsampling(Operator):
-    def __init__(self):
-        super().__init__()
-    def __call__(self, u, v, ds_hires, ds_coarse):
+class CoarsenKochkovMinMax:
+    def __call__(self, u=None, v=None, T=None, 
+                 ds_hires=None, ds_coarse=None, factor=None):
+        '''
+        This operator differs from CoarsenKochkov by different treatment
+        of boundary conditions. Here B.C. are applied such that 
+        min/max values are not violated.
+        Algorithm:
+        u_mean = sum(w_i u_i) / sum(w_i),
+        where weights w_i contain nans. In that case they will
+        be ignored by the sum operator
+        '''
+        u_coarse = None; v_coarse = None; T_coarse = None
+
+        if u is not None:
+            coarsen = lambda x: x.coarsen({'yh':factor}).sum()[{'xq': slice(factor-1,None,factor)}]
+            weights = xr.where(ds_hires.param.wet_u==1,
+                               ds_hires.param.dyCu,
+                               np.nan)
+            
+            u_coarse = xr.where(ds_coarse.param.wet_u==1,
+                                coarsen(u * weights) / coarsen(weights),
+                                0)
+        
+        if v is not None:
+            coarsen = lambda x: x.coarsen({'xh': factor}).sum()[{'yq': slice(factor-1,None,factor)}]
+            weights = xr.where(ds_hires.param.wet_v==1,
+                               ds_hires.param.dxCv,
+                               np.nan)
+            v_coarse = xr.where(ds_coarse.param.wet_v==1,
+                                coarsen(v * weights) / coarsen(weights),
+                                0)
+        
+        if T is not None:
+            coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).sum()
+            weights = xr.where(ds_hires.param.wet==1,
+                               ds_hires.param.dxT * ds_hires.param.dyT,
+                               np.nan)
+            T_coarse = xr.where(ds_coarse.param.wet==1, 
+                                coarsen(T * weights) / coarsen(weights),
+                                0)
+
+        return u_coarse, v_coarse, T_coarse
+
+class Subsampling:
+    def __call__(self, u=None, v=None, T=None, 
+                 ds_hires=None, ds_coarse=None, factor=None):
         '''
         Algorithm: 
         * Apply interpolation along cell side
@@ -132,50 +160,62 @@ class Subsampling(Operator):
         https://journals.aps.org/prfluids/abstract/10.1103/PhysRevFluids.5.054606,
         see below Eq. 17
         '''
-        factor = ds_coarse.factor
+        u_coarse = None; v_coarse = None; T_coarse = None
 
-        u_coarse = u.interp(yh = ds_coarse.param.yh)[{'xq': slice(factor-1,None,factor)}] * ds_coarse.param.wet_u
+        if u is not None:
+            u_coarse = u.interp(yh = ds_coarse.param.yh)[{'xq': slice(factor-1,None,factor)}] * ds_coarse.param.wet_u
 
-        v_coarse = v.interp(xh = ds_coarse.param.xh)[{'yq': slice(factor-1,None,factor)}] * ds_coarse.param.wet_v
+        if v is not None:
+            v_coarse = v.interp(xh = ds_coarse.param.xh)[{'yq': slice(factor-1,None,factor)}] * ds_coarse.param.wet_v
+        
+        if T is not None:
+            T_coarse = T.interp(xh = ds_coarse.param.xh, yh = ds_coarse.param.yh)
+        
+        return u_coarse, v_coarse, T_coarse
 
-        return u_coarse, v_coarse
-
-class Filtering(Operator):
-    def __init__(self, FGR=2, shape=gcm_filters.FilterShape.GAUSSIAN):
+class Filtering:
+    def __init__(self, shape=gcm_filters.FilterShape.GAUSSIAN):
         super().__init__()
-        self.FGR = FGR
         self.shape = shape
-
-    def __call__(self, u, v, ds_hires, ds_coarse):
+    def __call__(self, u=None, v=None, T=None, 
+                 ds_hires=None, 
+                 FGR=2):
         '''
         Algorithm:
         * Initialize GCM-filters with a given FGR,
-        informing with local cell area and wet mask
+        informing with local cell wet mask
         * Apply filter without coarsegraining or subsampling
         '''
-        # Becayse FGR is given w.r.t. coarse grid step
-        FGR = self.FGR * ds_coarse.factor
+        u_filtered = None; v_filtered = None; T_filtered = None
+        
+        if u is not None:
+            filter_simple_fixed_factor = gcm_filters.Filter(
+                filter_scale=FGR,
+                dx_min=1,
+                filter_shape=self.shape,
+                grid_type=gcm_filters.GridType.REGULAR_WITH_LAND,
+                grid_vars={'wet_mask': ds_hires.param.wet_u}
+                )
+            u_filtered = filter_simple_fixed_factor.apply(u, dims=['yh', 'xq'])
 
-        ############ U-velocity ############
-        areaU = ds_hires.param.dxCu * ds_hires.param.dyCu
-        filter_simple_fixed_factor = gcm_filters.Filter(
-            filter_scale=FGR,
-            dx_min=1,
-            filter_shape=self.shape,
-            grid_type=gcm_filters.GridType.REGULAR_WITH_LAND_AREA_WEIGHTED,
-            grid_vars={'area': areaU, 'wet_mask': ds_hires.param.wet_u}
-            )
-        u_filtered = filter_simple_fixed_factor.apply(u, dims=['yh', 'xq'])
+        if v is not None:
+            filter_simple_fixed_factor = gcm_filters.Filter(
+                filter_scale=FGR,
+                dx_min=1,
+                filter_shape=self.shape,
+                grid_type=gcm_filters.GridType.REGULAR_WITH_LAND,
+                grid_vars={'wet_mask': ds_hires.param.wet_v}
+                )
+            v_filtered = filter_simple_fixed_factor.apply(v, dims=['yq', 'xh'])
 
-        ############ V-velocity ############
-        areaV = ds_hires.param.dxCv * ds_hires.param.dyCv
-        filter_simple_fixed_factor = gcm_filters.Filter(
-            filter_scale=FGR,
-            dx_min=1,
-            filter_shape=self.shape,
-            grid_type=gcm_filters.GridType.REGULAR_WITH_LAND_AREA_WEIGHTED,
-            grid_vars={'area': areaV, 'wet_mask': ds_hires.param.wet_v}
-            )
-        v_filtered = filter_simple_fixed_factor.apply(v, dims=['yq', 'xh'])
-
-        return u_filtered, v_filtered
+        if T is not None:
+            filter_simple_fixed_factor = gcm_filters.Filter(
+                filter_scale=FGR,
+                dx_min=1,
+                filter_shape=self.shape,
+                grid_type=gcm_filters.GridType.REGULAR_WITH_LAND,
+                grid_vars={'wet_mask': ds_hires.param.wet}
+                )
+            T_filtered = filter_simple_fixed_factor.apply(T, dims=['yh', 'xh'])
+            
+        return u_filtered, v_filtered, T_filtered

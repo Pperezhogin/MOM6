@@ -993,14 +993,28 @@ class StateFunctions():
         Note that instead of Absolute Salinity and Conservative Temperature we use
         standard CM2.6 variables: Potential temperature, degrees C and Practical Salinity, psu
         '''
+        if 'rho' in self.data.variables:
+            if potential:
+                return self.data.rho
+            else:
+                if not('temp' in self.data.variables):
+                    print('Warning: returning potential density instead of in situ')
+                    return self.data.rho
+
         if potential:
-            return (1000.+gsw.sigma0(self.data.salt, self.data.temp))
+            rho_array = (1000.+gsw.sigma0(self.data.salt, self.data.temp))
         else:
             # Here we return in-situ density assuming that 
             # pressure in dbar equals z (this is a good approximation)
             # and same as above neglecting difference between potential and conservative
             # temperatures, and practical and absolute salinity
-            return gsw.rho(self.data.salt, self.data.temp, self.param.zl)
+            rho_array = gsw.rho(self.data.salt, self.data.temp, self.param.zl)
+        
+        # Place b.c. with reference value of 1025. It is useful for coarsegraining
+        # And lateral operators
+        rho0 = 1025.
+        wet = self.param.wet
+        return wet * rho_array + (1-wet) * rho0
         
     @property
     def Nsquared(self):

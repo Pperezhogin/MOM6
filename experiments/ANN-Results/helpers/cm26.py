@@ -186,6 +186,20 @@ class DatasetCM26():
     def __len__(self):
         return len(self.data.time)
     
+    def split(self, time = None, zl=None):
+        data = self.data
+        if 'time' in self.data.dims:
+            if time is None:
+                time = np.random.randint(0,len(self))
+            data = data.isel(time=time)
+        
+        if 'zl' in self.data.dims:
+            if zl is None:
+                zl = np.random.randint(0,len(self.data.zl))
+            data = data.isel(zl=zl)
+
+        return DatasetCM26(data, self.param)
+    
     def init_coarse_grid(self, factor=10, percentile=0):
         '''
         Here "self" is the DatasetCM26 object
@@ -249,7 +263,8 @@ class DatasetCM26():
 
         return param.compute().chunk()
 
-    def coarsen(self, factor=10, operator=CoarsenWeighted(), percentile=0):
+    def coarsen(self, factor=10, FGR_absolute=None, FGR_multiplier=None,
+                coarsening=CoarsenWeighted(), filtering=Filtering(), percentile=0):
         '''
         Coarsening of the dataset with a given factor
 
@@ -257,60 +272,47 @@ class DatasetCM26():
         * Initialize coarse grid
         * Coarsegrain velocities by applying operator
         * Return new dataset with coarse velocities
+
+        Note: FGR is an absolute value w.r.t. fine grid
+              FGR_multiplier is w.r.t. coarse grid
         '''
-        # Initialize coarse grid
-        param = self.init_coarse_grid(factor=factor, percentile=percentile)
+        FGR = None
+        if FGR_multiplier is not None and FGR_absolute is not None:
+            raise Exception("Provide FGR or FGR_multiplier but not both")
+        if FGR_multiplier is not None:
+            FGR = FGR_multiplier * factor
+        if FGR_absolute is not None:
+            FGR = FGR_absolute
 
-        ##################### Coarsegraining velocities ########################
-        data = xr.Dataset()
-        # Create coarse version of the dataset
-        ds_coarse = DatasetCM26(data, param)
-        ds_coarse.factor = factor
+        # Filter if needed
+        if FGR is not None:
+            data = xr.Dataset()
+            data['u'], data['v'], data['rho'] = \
+                filtering(self.data.u, self.data.v, self.state.rho(), self,
+                            FGR) # Here FGR is w.r.t. fine grid
+            ds_filter = DatasetCM26(data, self.param)
+        else:
+            ds_filter = self
         
-        # Coarsegrain velocities
-        ds_coarse.data['u'], ds_coarse.data['v'] = operator(self.data.u, self.data.v, self, ds_coarse)
-        if 'time' in self.data.dims:
-            ds_coarse.data['time'] = self.data.time
-        if 'zl' in self.data.dims:
-            ds_coarse.data['zl'] = self.data.zl
+        # Coarsegrain if needed
+        if factor > 1:
+            param = self.init_coarse_grid(factor=factor, percentile=percentile)
+            data = xr.Dataset()
+            ds_coarse = DatasetCM26(data, param)
 
-        ds_coarse.data['temp'] = self.data['temp'].coarsen({'xh': factor, 'yh': factor}).mean() * param.wet
-        ds_coarse.data['salt'] = self.data['salt'].coarsen({'xh': factor, 'yh': factor}).mean() * param.wet
-
+            data['u'], data['v'], data['rho'] = \
+                coarsening(ds_filter.data.u, ds_filter.data.v, ds_filter.state.rho(), 
+                           ds_filter, ds_coarse, factor=factor)
+            # To properly initialize ds_coarse.state
+            del ds_coarse
+            ds_coarse = DatasetCM26(data, param)
+        else:
+            ds_coarse = ds_filter
+        
         return ds_coarse
 
-    def filtering(self, factor=10, operator=Filtering(FGR=2)):
-        '''
-        Filtering of the dataset with a given factor and filter operator.
-        The actual filter width is computed as a product of FGR and factor inside operator
-        function
-
-        Algorithm:
-        * Filter velocities by applying operator
-        * Return new dataset with filtered velocities
-        '''
-        ##################### Filtering velocities ########################
-        ds_filter = self
-        ds_filter.factor = factor
-        ds_filter.data['u'], ds_filter.data['v'] = operator(self.data.u, self.data.v, self, ds_filter)
-        
-        return ds_filter
-
-    def split(self, time = None, zl=None):
-        data = self.data
-        if 'time' in self.data.dims:
-            if time is None:
-                time = np.random.randint(0,len(self))
-            data = data.isel(time=time)
-        
-        if 'zl' in self.data.dims:
-            if zl is None:
-                zl = np.random.randint(0,len(self.data.zl))
-            data = data.isel(zl=zl)
-
-        return DatasetCM26(data, self.param)
-
-    def compute_subgrid_forcing(self, factor=4, operator=CoarsenWeighted(), percentile=0):
+    def compute_subgrid_forcing(self, factor=4, FGR_multiplier=None,
+                coarsening=CoarsenWeighted(), filtering=Filtering(), percentile=0):
         '''
         This function computes the subgrid forcing, that is
         SGSx = filter(advection) - advection(coarse_state),
@@ -322,20 +324,27 @@ class DatasetCM26():
         hires_advection = self.state.advection()
 
         # Coarsegrained state
-        ds_coarse = self.coarsen(factor, operator=operator, percentile=percentile)
+        ds_coarse = self.coarsen(factor=factor, FGR_multiplier=FGR_multiplier,
+                                 coarsening=coarsening, filtering=filtering,
+                                 percentile=percentile) 
 
         # Compute advection on a coarse grid
         coarse_advection = ds_coarse.state.advection()
 
         # Compute subgrid forcing
-        advx_coarsen, advy_coarsen = operator(hires_advection[0], hires_advection[1], self, ds_coarse)
+        if FGR_multiplier is not None:
+            hires_advection_filtered = filtering(hires_advection[0], hires_advection[1], None,
+                                                        self, FGR_multiplier * factor)
+        advx_coarsen, advy_coarsen, _ = coarsening(hires_advection_filtered[0], hires_advection_filtered[1], None,
+                                                self, ds_coarse, factor)
+
         ds_coarse.data['SGSx'] = advx_coarsen - coarse_advection[0]
         ds_coarse.data['SGSy'] = advy_coarsen - coarse_advection[1]
 
         return ds_coarse
 
-    def compute_subfilter_forcing(self, factor=4, operator_filter=Filtering(FGR=2), 
-                                  operator_coarsen=CoarsenKochkov(), percentile=0):
+    def compute_subfilter_forcing(self, factor=4, FGR_multiplier=2,
+                coarsening=CoarsenWeighted(), filtering=Filtering(), percentile=0):
         '''
         As compared to the "compute_subgrid_forcing" function, 
         here we evaluate contribution of subfilter stresses 
@@ -349,21 +358,24 @@ class DatasetCM26():
         hires_advection = self.state.advection()
 
         # Filtered and filtered-coarsegrained states
-        ds_filter = self.filtering(factor=factor, operator=operator_filter)
-        ds_coarse = ds_filter.coarsen(factor=factor, operator=operator_coarsen, percentile=percentile)
+        ds_filter = self.coarsen(factor=1, FGR_absolute=factor*FGR_multiplier,
+                                 filtering = filtering)
+        ds_coarse = ds_filter.coarsen(factor=factor, coarsening=coarsening, percentile=percentile)
 
         # Compute advection on a filtered state
         filter_advection = ds_filter.state.advection()
 
         # Filtering of the high-resolution advection
-        advx_filtered, advy_filtered = operator_filter(hires_advection[0], hires_advection[1], self, ds_filter)
+        advx_filtered, advy_filtered, _ = filtering(hires_advection[0], hires_advection[1], None,
+                                                    ds_filter, FGR_multiplier * factor)
 
         # Subfilter forcing on a fine grid
         SGSx = advx_filtered - filter_advection[0]
         SGSy = advy_filtered - filter_advection[1]
 
         # Coarsegraining the subfilter forcing
-        ds_coarse.data['SGSx'], ds_coarse.data['SGSy'] = operator_coarsen(SGSx, SGSy, self, ds_coarse)
+        ds_coarse.data['SGSx'], ds_coarse.data['SGSy'], _ = coarsening(SGSx, SGSy, None, 
+                                                                       self, ds_coarse, factor)
 
         return ds_coarse
 
