@@ -858,6 +858,17 @@ class StateFunctions():
         
         KEu = grid.interp(param.wet_u * areaCu * u**2, 'X')
         KEv = grid.interp(param.wet_v * areaCv * v**2, 'Y')
+
+        # Zero Neumann B.C. in a sense that there is no
+        # overshoot near the boundary as a result of interpolation
+        # Note: this is an adhoc approach which serves to resolve
+        # inconsistency in data when filtered velocity is not zero
+        # near the boundary as it happens in gcm_filters because 
+        # they have only Neumann b.c. for filtered field
+        wet_u = grid.interp(param.wet_u,'X')
+        wet_v = grid.interp(param.wet_v,'Y')
+        KEu = xr.where(wet_u>0, KEu / wet_u, 0.)
+        KEv = xr.where(wet_v>0, KEv / wet_v, 0.)
         
         return 0.5 * (KEu + KEv) / areaT * param.wet
 

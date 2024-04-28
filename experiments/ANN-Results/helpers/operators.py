@@ -118,23 +118,12 @@ class CoarsenKochkovMinMax:
         u_coarse = None; v_coarse = None; T_coarse = None
 
         if u is not None:
-            coarsen = lambda x: x.coarsen({'yh':factor}).sum()[{'xq': slice(factor-1,None,factor)}]
-            weights = xr.where(ds_hires.param.wet_u==1,
-                               ds_hires.param.dyCu,
-                               np.nan)
-            
-            u_coarse = xr.where(ds_coarse.param.wet_u==1,
-                                coarsen(u * weights) / coarsen(weights),
-                                0)
+            u_coarse = (u * ds_hires.param.dyCu).coarsen({'yh': factor}).sum()[{'xq': slice(factor-1,None,factor)}] \
+                    * ds_coarse.param.wet_u / ds_coarse.param.dyCu
         
         if v is not None:
-            coarsen = lambda x: x.coarsen({'xh': factor}).sum()[{'yq': slice(factor-1,None,factor)}]
-            weights = xr.where(ds_hires.param.wet_v==1,
-                               ds_hires.param.dxCv,
-                               np.nan)
-            v_coarse = xr.where(ds_coarse.param.wet_v==1,
-                                coarsen(v * weights) / coarsen(weights),
-                                0)
+            v_coarse = (v * ds_hires.param.dxCv).coarsen({'xh': factor}).sum()[{'yq': slice(factor-1,None,factor)}] \
+                        * ds_coarse.param.wet_v / ds_coarse.param.dxCv
         
         if T is not None:
             coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).sum()
