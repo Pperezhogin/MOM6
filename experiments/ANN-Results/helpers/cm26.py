@@ -200,17 +200,32 @@ class DatasetCM26():
         del self.data, self.param, self.grid, self.state
         return
     
-    def __len__(self):
-        return len(self.data.time)
+    def nanvar(self, x):
+        if 'xh' in x.dims and 'yh' in x.dims:
+            return x.where(self.param.wet)
+        if 'xh' in x.dims and 'yq' in x.dims:
+            return x.where(self.param.wet_v)
+        if 'xq' in x.dims and 'yh' in x.dims:
+            return x.where(self.param.wet_u)
+        if 'xq' in x.dims and 'yq' in x.dims:
+            return x.where(self.param.wet_c)
     
-    def split(self, time = None):
+    def select2d(self, time = None, zl=None):
         data = self.data
+        param = self.param
+
         if 'time' in self.data.dims:
             if time is None:
-                time = np.random.randint(0,len(self))
+                time = np.random.randint(0,len(self.data.time))
             data = data.isel(time=time)
         
-        return DatasetCM26(data, self.param)
+        if 'zl' in self.data.dims:
+            if zl is None:
+                zl = np.random.randint(0,len(self.data.zl))
+            data = data.isel(zl=zl)
+            param = param.isel(zl=zl)
+            
+        return DatasetCM26(data, param)
     
     def init_coarse_grid(self, factor=10, percentile=0):
         '''

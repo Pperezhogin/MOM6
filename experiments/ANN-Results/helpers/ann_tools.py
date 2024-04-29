@@ -13,36 +13,41 @@ def tensor_from_xarray(x, torch_type=torch.float32):
     elif isinstance(x, torch.Tensor):
         return x.type(torch_type)
 
-def torch_pad(x, left=False, right=False, top=False, bottom=False):
+def torch_pad(x, one_side_pad = 1,
+                      left=False, right=False, top=False, bottom=False):
     '''
     x is the torch tensor of size Ny x Nx
     Here we implement padding with circular B.C.
     for zonal (Nx) direction and zero B.C. for meridional (Ny)
 
-    By default, we pad do not do padding
+    By default, we do not do padding
     '''
     ny, nx = x.shape
+
+    # Nothing to pad
+    if one_side_pad == 0:
+        return x
     
     # Compute size of the resulting array
-    Nx = nx + int(left) + int(right)
-    Ny = ny + int(top) + int(bottom)
+    Nx = nx + (int(left) + int(right)) * one_side_pad
+    Ny = ny + (int(top) + int(bottom)) * one_side_pad
     y = torch.zeros((Ny,Nx), dtype=x.dtype)
 
     # Copy original array to the center
-    x_start = 1 if left else 0
-    y_start = 1 if bottom else 0
+    x_start = one_side_pad if left else 0
+    y_start = one_side_pad if bottom else 0
 
     y[y_start:y_start+ny,x_start:x_start+nx] = x
 
     if top:
-        y[-1,:] = 0.
+        y[-one_side_pad:,:] = 0.
     if bottom:
-        y[0,:] = 0.
+        y[:one_side_pad,:] = 0.
     
     if left:
-        y[y_start:y_start+ny,0] = x[:,-1]
+        y[y_start:y_start+ny,:one_side_pad] = x[:,-one_side_pad:]
     if right:
-        y[y_start:y_start+ny,-1] = x[:,0]
+        y[y_start:y_start+ny,-one_side_pad:] = x[:,:one_side_pad]
 
     return y
 
@@ -65,24 +70,24 @@ def image_to_3x3_stencil(x):
             k += 1
     return y
 
-def image_to_3x3_stencil_gpt(x, rotation=0, reflect_x=False, reflect_y=False):
+def image_to_nxn_stencil_gpt(x, stencil_size=3,
+                             rotation=0, reflect_x=False, reflect_y=False):
     '''
-    It is the same function, but 1000 times faster
-    suggested by gpt. The result is the same up to 
-    float32 precision (i.e., it is not exact)
+    Extension of function above with arbitrary stencil size
+    stencil_size x stencil_size
     
     The rotation parameter allows to rotate input stencil
     by 0, 90, 180, 270 degrees conunter-clockwise
     '''
-    
+    n = stencil_size
     if rotation == 0:
-        y = x.unfold(0,3,1).unfold(1,3,1)
+        y = x.unfold(0,n,1).unfold(1,n,1)
     elif rotation == 90:
-        y = x.unfold(1,3,1).flip(-1).unfold(0,3,1)
+        y = x.unfold(1,n,1).flip(-1).unfold(0,n,1)
     elif rotation == 180:
-        y = x.unfold(0,3,1).flip(-1).unfold(1,3,1).flip(-1)
+        y = x.unfold(0,n,1).flip(-1).unfold(1,n,1).flip(-1)
     elif rotation == 270:
-        y = x.unfold(1,3,1).unfold(0,3,1).flip(-1)
+        y = x.unfold(1,n,1).unfold(0,n,1).flip(-1)
     else:
         print('Error: use rotation one of 0, 90, 180, 270')
         
@@ -91,7 +96,7 @@ def image_to_3x3_stencil_gpt(x, rotation=0, reflect_x=False, reflect_y=False):
     if reflect_y:
         y = y.flip(-2) 
         
-    return y.reshape(-1,9)
+    return y.reshape(-1,n*n)
 
 def log_to_xarray(log_dict):
     anykey = list(log_dict.keys())[0]

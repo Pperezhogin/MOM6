@@ -7,7 +7,7 @@ import gsw
 from xgcm.padding import pad as xgcm_pad
 from functools import lru_cache
 
-from helpers.ann_tools import image_to_3x3_stencil_gpt, import_ANN, torch_pad, tensor_from_xarray
+from helpers.ann_tools import image_to_nxn_stencil_gpt, import_ANN, torch_pad, tensor_from_xarray
 from helpers.selectors import select_LatLon, x_coord, y_coord
 import warnings
 warnings.filterwarnings("ignore")
@@ -711,7 +711,8 @@ class StateFunctions():
                dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
                areaBu, areaT, areaCu, areaCv
 
-    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False, rotation=0, reflect_x=False, reflect_y=False):
+    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size=3,
+                  time_revers=False, rotation=0, reflect_x=False, reflect_y=False):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -720,10 +721,10 @@ class StateFunctions():
         if 'time' in self.data.dims:
             raise NotImplementedError("This operation is not implemented for many time slices. Use a single time.")
         if ann_Txy is None:
-            ann_Txy = import_ANN('trained_models/ANN_Txy_ZB.nc')
+            ann_Txy = import_ANN('../trained_models/ANN_Txy_ZB.nc')
             print('Warning: Prediction from default ANN')
         if ann_Txx_Tyy is None:
-            ann_Txx_Tyy = import_ANN('trained_models/ANN_Txx_Tyy_ZB.nc')
+            ann_Txx_Tyy = import_ANN('../trained_models/ANN_Txx_Tyy_ZB.nc')
             print('Warning: Prediction from default ANN')
 
         ########## Symmetries treatment ###########
@@ -757,7 +758,7 @@ class StateFunctions():
 
         def extract_3x3(x):
             y = torch_pad(x, left=True, right=True, top=True, bottom=True)
-            return image_to_3x3_stencil_gpt(y, 
+            return image_to_nxn_stencil_gpt(y, 
                 rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
         
         ############# Compute features in torch ###############
@@ -830,8 +831,10 @@ class StateFunctions():
                 'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
     
-    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, time_revers=False, rotation=0, reflect_x=False, reflect_y=False):            
-        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, time_revers, rotation, reflect_x, reflect_y)
+    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size = 3,
+            time_revers=False, rotation=0, reflect_x=False, reflect_y=False):            
+        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, stencil_size,
+                              time_revers, rotation, reflect_x, reflect_y)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0

@@ -76,6 +76,10 @@ def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=T
         control_std = control.std()
         vmax = control_mean + control_std * 4
         vmin = control_mean - control_std * 4
+    else:
+        control_mean = 0.
+        if vmin is None:
+            vmin = - vmax
     
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
@@ -108,6 +112,10 @@ def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_
         control_std = control.std()
         vmax = control_mean + control_std * 4
         vmin = control_mean - control_std * 4
+    else:
+        control_mean = 0.
+        if vmin is None:
+            vmin = - vmax
     
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
