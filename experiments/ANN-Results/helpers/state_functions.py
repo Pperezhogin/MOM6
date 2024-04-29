@@ -712,7 +712,8 @@ class StateFunctions():
                areaBu, areaT, areaCu, areaCv
 
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size=3,
-                  time_revers=False, rotation=0, reflect_x=False, reflect_y=False):
+                  time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
+                  dimensional_scaling=True):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -777,15 +778,19 @@ class StateFunctions():
                         ],-1)
 
         # Normalize input features
-        input_norm = norm(input_features)
-        input_features = (input_features / (input_norm+1e-30))
+        if dimensional_scaling:
+            input_norm = norm(input_features)
+            input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction with transforming prediction back to original frame
         Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign * reverse_sign)
 
         # Now denormalize the output
-        Txy = - Txy * input_norm * input_norm * (areaBu * wet_c).reshape(-1,1)
-        Txy = Txy.reshape(sh_xy.shape)
+        if dimensional_scaling:
+            Txy = Txy * input_norm * input_norm * areaBu.reshape(-1,1)
+        
+        # Apply BC. Minus sign is needed for consistency with ZB
+        Txy = - Txy.reshape(wet_c.shape) * wet_c
 
         ########## Second, prediction of Txx, Tyy ###############
         input_features = torch.concat(
@@ -796,14 +801,16 @@ class StateFunctions():
                         ],-1)
 
         # Normalize input features
-        input_norm = norm(input_features)
-        input_features = (input_features / (input_norm+1e-30))
+        if dimensional_scaling:
+            input_norm = norm(input_features)
+            input_features = (input_features / (input_norm+1e-30))
 
         # Make prediction
         Tdiag = ann_Txx_Tyy(input_features) * reverse_sign
 
         # Now denormalize the output
-        Tdiag = - Tdiag * input_norm * input_norm * (areaT * wet).reshape(-1,1)
+        if dimensional_scaling:
+            Tdiag = Tdiag * input_norm * input_norm * (areaT).reshape(-1,1)
         
         # This transforms the prediction 
         # back to original frame
@@ -816,8 +823,8 @@ class StateFunctions():
         else:
             print('Error: use rotation one of 0, 90, 180, 270')
         
-        Txx = Tdiag[:,Txx_idx].reshape(sh_xx.shape)
-        Tyy = Tdiag[:,Tyy_idx].reshape(sh_xx.shape)
+        Txx =  - Tdiag[:,Txx_idx].reshape(wet.shape) * wet
+        Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
         
         Txx_padded = torch_pad(Txx * dyT**2, right=True)
         Txy_padded = torch_pad(Txy * dxBu**2, bottom=True)
@@ -832,9 +839,11 @@ class StateFunctions():
                 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size = 3,
-            time_revers=False, rotation=0, reflect_x=False, reflect_y=False):            
+            time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
+            dimensional_scaling=True):            
         pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, stencil_size,
-                              time_revers, rotation, reflect_x, reflect_y)
+                              time_revers, rotation, reflect_x, reflect_y,
+                              dimensional_scaling)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0

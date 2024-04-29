@@ -108,11 +108,10 @@ def log_to_xarray(log_dict):
     return xr.Dataset(log_dict)
 
 class ANN(nn.Module):
-    def __init__(self, layer_sizes=[3, 17, 27, 5], output_norm=None):
+    def __init__(self, layer_sizes=[3, 17, 27, 5]):
         super().__init__()
         
         self.layer_sizes = layer_sizes
-        self.output_norm = output_norm  
 
         layers = []
         for i in range(len(layer_sizes)-1):
@@ -126,12 +125,6 @@ class ANN(nn.Module):
             if i < len(self.layers)-1:
                 x = functional.relu(x)
         return x
-    
-    def compute_loss(self, x, ytrue):
-        MSE = nn.MSELoss()(self.forward(x), ytrue)
-        if self.output_norm is not None:
-            MSE = MSE / self.output_norm**2
-        return {'loss': MSE}
     
     def count_parameters(self):
         return sum(p.numel() for p in self.parameters())
