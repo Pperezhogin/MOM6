@@ -752,13 +752,13 @@ class StateFunctions():
         ############# Helper functions ################
         def norm(x):
             '''
-            Norm is computed with double      ision to prevent overflow
+            Norm is computed with double precision to prevent overflow
             '''
             return torch.sqrt((x.type(torch.float64)**2).sum(dim=-1, keepdims=True)).type(torch.float32)
 
-        def extract_3x3(x):
-            y = torch_pad(x, left=True, right=True, top=True, bottom=True)
-            return image_to_nxn_stencil_gpt(y, 
+        def extract_nxn(x):
+            y = torch_pad(x, one_side_pad=stencil_size//2, left=True, right=True, top=True, bottom=True)
+            return image_to_nxn_stencil_gpt(y, stencil_size=stencil_size,
                 rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
         
         ############# Compute features in torch ###############
@@ -771,9 +771,9 @@ class StateFunctions():
         # Collect input features
         input_features = torch.concat(
                         [
-                        extract_3x3(sh_xy   * (rotation_sign * reflect_sign * reverse_sign)), 
-                        extract_3x3(sh_xx_q * (rotation_sign * reverse_sign)), 
-                        extract_3x3(vort_xy * (reflect_sign  * reverse_sign))
+                        extract_nxn(sh_xy   * (rotation_sign * reflect_sign * reverse_sign)), 
+                        extract_nxn(sh_xx_q * (rotation_sign * reverse_sign)), 
+                        extract_nxn(vort_xy * (reflect_sign  * reverse_sign))
                         ],-1)
 
         # Normalize input features
@@ -790,9 +790,9 @@ class StateFunctions():
         ########## Second, prediction of Txx, Tyy ###############
         input_features = torch.concat(
                         [
-                        extract_3x3(sh_xy_h   * (rotation_sign * reflect_sign * reverse_sign)), 
-                        extract_3x3(sh_xx     * (rotation_sign * reverse_sign)), 
-                        extract_3x3(vort_xy_h * (reflect_sign  * reverse_sign))
+                        extract_nxn(sh_xy_h   * (rotation_sign * reflect_sign * reverse_sign)), 
+                        extract_nxn(sh_xx     * (rotation_sign * reverse_sign)), 
+                        extract_nxn(vort_xy_h * (reflect_sign  * reverse_sign))
                         ],-1)
 
         # Normalize input features
