@@ -95,6 +95,23 @@ class DatasetCM26():
                 {'st_ocean': 'zl'})
             param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr').rename(
                 {'st_ocean': 'zl', 'st_edges_ocean': 'zi'})
+        elif '3d-' in source:
+            base_path = '/scratch/pp2681/mom6/CM26_datasets/ocean3d/rawdata'
+            param = xr.open_dataset(f'{base_path}/param.nc')
+            if source == '3d-train':
+                file_list = [f'{base_path}/train-{j}.nc' for j in range(96)]
+            elif source == '3d-test':
+                file_list = [f'{base_path}/test-{j}.nc' for j in range(24)]
+            elif source == '3d-validate':
+                file_list = [f'{base_path}/validate-{j}.nc' for j in range(12)]
+            else:
+                print('Error: wrong source parameter')
+            data = xr.open_mfdataset(file_list, chunks={'zl':1, 'time':1}, concat_dim='time', combine='nested')
+
+            if compute_param:
+                param = param.compute()
+                param = param.chunk()
+            return data, param    
         else:
             print('Error: wrong source parameter')
         

@@ -80,7 +80,7 @@ def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=T
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
     if cartopy:
-        fig, ax = plt.subplots(1,1, figsize=(6, 6), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
+        fig, ax = plt.subplots(1,1, figsize=(20, 15), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
         ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True
         kw = {'transform': ccrs.PlateCarree()}
     else:
