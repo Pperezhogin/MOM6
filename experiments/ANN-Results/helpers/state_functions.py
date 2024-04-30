@@ -713,7 +713,8 @@ class StateFunctions():
 
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size=3,
                   time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
-                  dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3):
+                  dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
+                  feature_functions=[]):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -767,6 +768,16 @@ class StateFunctions():
         wet, wet_u, wet_v, wet_c,                           \
         dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
         areaBu, areaT, areaCu, areaCv = self.compute_features()
+
+        ############# Arbitrary additional features ###########
+        features_corner = []
+        features_center = []
+        for feature_function in feature_functions:
+            # Here self is instance of StateFunctions() class
+            # Two outputs are xarrays defined in corner and center points
+            feature_corner, feature_center = feature_function(self)
+            features_corner.append(tensor_from_xarray(feature_corner).reshape(-1,1))
+            features_center.append(tensor_from_xarray(feature_center).reshape(-1,1))
         
         ############# Prediction of Txy ###############
         # Collect input features
@@ -784,6 +795,14 @@ class StateFunctions():
         else:
             input_features = input_features / strain_norm
 
+        # Arbitrary additional features
+        if len(features_corner) > 0:
+            input_features = torch.concat(
+                            [
+                            input_features, 
+                            *features_corner
+                            ],-1)
+        
         # Make prediction with transforming prediction back to original frame
         Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign * reverse_sign)
 
@@ -810,6 +829,14 @@ class StateFunctions():
             input_features = (input_features / (input_norm+1e-30))
         else:
             input_features = input_features / strain_norm
+
+        # Arbitrary additional features
+        if len(features_center) > 0:
+            input_features = torch.concat(
+                            [
+                            input_features, 
+                            *features_center
+                            ],-1)
 
         # Make prediction
         Tdiag = ann_Txx_Tyy(input_features) * reverse_sign
@@ -848,10 +875,12 @@ class StateFunctions():
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size = 3,
             time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
-            dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3):
+            dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
+            feature_functions=[]):
         pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, stencil_size,
                               time_revers, rotation, reflect_x, reflect_y,
-                              dimensional_scaling, strain_norm, flux_norm)
+                              dimensional_scaling, strain_norm, flux_norm,
+                              feature_functions)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0

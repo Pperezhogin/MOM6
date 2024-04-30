@@ -23,9 +23,11 @@ def get_SGS(batch):
 
 def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
         stencil_size=3, dimensional_scaling=True, 
+        feature_functions=[],
         rotation=0, reflect_x=False, reflect_y=False):
     prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy,
         stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
+        feature_functions=feature_functions,
         rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
 
     ANNx = prediction['ZB20u'] * SGS_norm
@@ -40,7 +42,8 @@ def train_ANN(factors=[12,15],
               symmetries=False,
               time_iters=10,
               depth_idx=np.arange(1),
-              print_iters=1):
+              print_iters=1,
+              feature_functions=[]):
     '''
     time_iters is the number of time snaphots
     randomly sampled for each factor and depth
@@ -60,7 +63,7 @@ def train_ANN(factors=[12,15],
 
     ########## Init ANN ##############
     # As default we have 3 input features on a stencil: D, D_hat and vorticity
-    num_input_features = stencil_size**2 * 3
+    num_input_features = stencil_size**2 * 3 + len(feature_functions)
     ann_Txy = ANN([num_input_features, *hidden_layers, 1])
     ann_Txx_Tyy = ANN([num_input_features, *hidden_layers, 2])
     
@@ -107,6 +110,7 @@ def train_ANN(factors=[12,15],
                 optimizer.zero_grad()
                 MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
                                 stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
+                                feature_functions=feature_functions,
                                 **augment())
                 MSE_train.backward()
                 optimizer.step()
@@ -118,7 +122,8 @@ def train_ANN(factors=[12,15],
                 SGSx, SGSy, SGS_norm = get_SGS(batch)
                 with torch.no_grad():
                     MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
-                                       stencil_size=stencil_size, dimensional_scaling=dimensional_scaling)
+                                       stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
+                                       feature_functions=feature_functions)
                 
                 del batch
             
