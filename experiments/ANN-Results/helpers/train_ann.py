@@ -21,8 +21,11 @@ def get_SGS(batch):
 
     return SGSx, SGSy, SGS_norm
 
-def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, rotation=0, reflect_x=False, reflect_y=False):
+def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
+        stencil_size=3, dimensional_scaling=True, 
+        rotation=0, reflect_x=False, reflect_y=False):
     prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy,
+        stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
         rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
 
     ANNx = prediction['ZB20u'] * SGS_norm
@@ -32,7 +35,8 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, rotation=0, reflect_x
 
 def train_ANN(factors=[12,15],
               stencil_size = 3,
-              hidden_layers=[20], 
+              hidden_layers=[20],
+              dimensional_scaling=True, 
               symmetries=False,
               time_iters=10,
               depth_idx=np.arange(1),
@@ -102,6 +106,7 @@ def train_ANN(factors=[12,15],
                 ######## Optionally, apply symmetries by data augmentation #########
                 optimizer.zero_grad()
                 MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
+                                stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
                                 **augment())
                 MSE_train.backward()
                 optimizer.step()
@@ -112,7 +117,8 @@ def train_ANN(factors=[12,15],
                 batch = dataset[f'validate-{factor}'].select2d(zl=depth)
                 SGSx, SGSy, SGS_norm = get_SGS(batch)
                 with torch.no_grad():
-                    MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy)
+                    MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
+                                       stencil_size=stencil_size, dimensional_scaling=dimensional_scaling)
                 
                 del batch
             

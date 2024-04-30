@@ -713,7 +713,7 @@ class StateFunctions():
 
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size=3,
                   time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
-                  dimensional_scaling=True):
+                  dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -781,6 +781,8 @@ class StateFunctions():
         if dimensional_scaling:
             input_norm = norm(input_features)
             input_features = (input_features / (input_norm+1e-30))
+        else:
+            input_features = input_features / strain_norm
 
         # Make prediction with transforming prediction back to original frame
         Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign * reverse_sign)
@@ -788,6 +790,8 @@ class StateFunctions():
         # Now denormalize the output
         if dimensional_scaling:
             Txy = Txy * input_norm * input_norm * areaBu.reshape(-1,1)
+        else:
+            Txy = Txy * flux_norm
         
         # Apply BC. Minus sign is needed for consistency with ZB
         Txy = - Txy.reshape(wet_c.shape) * wet_c
@@ -804,6 +808,8 @@ class StateFunctions():
         if dimensional_scaling:
             input_norm = norm(input_features)
             input_features = (input_features / (input_norm+1e-30))
+        else:
+            input_features = input_features / strain_norm
 
         # Make prediction
         Tdiag = ann_Txx_Tyy(input_features) * reverse_sign
@@ -811,6 +817,8 @@ class StateFunctions():
         # Now denormalize the output
         if dimensional_scaling:
             Tdiag = Tdiag * input_norm * input_norm * (areaT).reshape(-1,1)
+        else:
+            Tdiag = Tdiag * flux_norm
         
         # This transforms the prediction 
         # back to original frame
@@ -840,10 +848,10 @@ class StateFunctions():
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size = 3,
             time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
-            dimensional_scaling=True):            
+            dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3):
         pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, stencil_size,
                               time_revers, rotation, reflect_x, reflect_y,
-                              dimensional_scaling)
+                              dimensional_scaling, strain_norm, flux_norm)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0
