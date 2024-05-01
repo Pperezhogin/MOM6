@@ -696,25 +696,31 @@ class StateFunctions():
         areaCv = dxCv * dyCv
         
         ############# Computation of velocity gradients #############
-        sh_xy, sh_xx, vort_xy, _ = self.velocity_gradients(compute=True)
+        sh_xy, sh_xx, vort_xy, div = self.velocity_gradients(compute=True)
+        rel_vort = self.relative_vorticity()
 
         sh_xy_h = tensor_from_xarray(grid.interp(sh_xy, ['X','Y'])) * wet
         vort_xy_h = tensor_from_xarray(grid.interp(vort_xy, ['X','Y'])) * wet
         sh_xx_q = tensor_from_xarray(grid.interp(sh_xx, ['X','Y'])) * wet_c
+        div_q = tensor_from_xarray(grid.interp(div, ['X','Y'])) * wet_c
+        rel_vort_h = tensor_from_xarray(grid.interp(rel_vort, ['X','Y'])) * wet
 
         sh_xy = tensor_from_xarray(sh_xy)
         sh_xx = tensor_from_xarray(sh_xx)
         vort_xy = tensor_from_xarray(vort_xy)
+        div = tensor_from_xarray(div)
+        rel_vort = tensor_from_xarray(rel_vort)
 
         return sh_xy, sh_xx, vort_xy, sh_xy_h, vort_xy_h, sh_xx_q, \
+               div, rel_vort, div_q, rel_vort_h,                   \
                wet, wet_u, wet_v, wet_c,                           \
                dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
                areaBu, areaT, areaCu, areaCv
 
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size=3,
-                  time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
+                  rotation=0, reflect_x=False, reflect_y=False,
                   dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
-                  feature_functions=[]):
+                  feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy']):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -744,12 +750,14 @@ class StateFunctions():
             reflect_sign = - reflect_sign
         if reflect_y:
             reflect_sign = - reflect_sign
-        
-        # Time reversibility symmetry
-        if time_revers:
-            reverse_sign = -1
-        else:
-            reverse_sign = 1
+
+        # How symmetries apply to every component of velocity gradient tensor
+        sing_mapping = dict(sh_xy=rotation_sign * reflect_sign, 
+                            sh_xx=rotation_sign,
+                            vort_xy=reflect_sign,
+                            div=1, # divergence is a scalar and does not change under rotation and reflection
+                            rel_vort=reflect_sign
+                            )
 
         ############# Helper functions ################
         def norm(x):
@@ -765,9 +773,23 @@ class StateFunctions():
         
         ############# Compute features in torch ###############
         sh_xy, sh_xx, vort_xy, sh_xy_h, vort_xy_h, sh_xx_q, \
+        div, rel_vort, div_q, rel_vort_h,                   \
         wet, wet_u, wet_v, wet_c,                           \
         dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
         areaBu, areaT, areaCu, areaCv = self.compute_features()
+
+        # This mapping is needed because features may be staggered
+        Arakawa_C_corner  = dict(sh_xy='sh_xy', 
+                                 sh_xx='sh_xx_q', 
+                                 vort_xy='vort_xy', 
+                                 div='div_q', 
+                                 rel_vort='rel_vort')
+        
+        Arakawa_C_center  = dict(sh_xy='sh_xy_h', 
+                                 sh_xx='sh_xx', 
+                                 vort_xy='vort_xy_h', 
+                                 div='div', 
+                                 rel_vort='rel_vort_h')
 
         ############# Arbitrary additional features ###########
         features_corner = []
@@ -780,13 +802,11 @@ class StateFunctions():
             features_center.append(tensor_from_xarray(feature_center).reshape(-1,1))
         
         ############# Prediction of Txy ###############
-        # Collect input features
-        input_features = torch.concat(
-                        [
-                        extract_nxn(sh_xy   * (rotation_sign * reflect_sign * reverse_sign)), 
-                        extract_nxn(sh_xx_q * (rotation_sign * reverse_sign)), 
-                        extract_nxn(vort_xy * (reflect_sign  * reverse_sign))
-                        ],-1)
+        input_features = []
+        for grad_feature in gradient_features:
+            feature = eval(Arakawa_C_corner[grad_feature]) * sing_mapping[grad_feature]
+            input_features.append(extract_nxn(feature))
+        input_features = torch.concat(input_features, -1)
 
         # Normalize input features
         if dimensional_scaling:
@@ -804,7 +824,7 @@ class StateFunctions():
                             ],-1)
         
         # Make prediction with transforming prediction back to original frame
-        Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign * reverse_sign)
+        Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign)
 
         # Now denormalize the output
         if dimensional_scaling:
@@ -816,12 +836,11 @@ class StateFunctions():
         Txy = - Txy.reshape(wet_c.shape) * wet_c
 
         ########## Second, prediction of Txx, Tyy ###############
-        input_features = torch.concat(
-                        [
-                        extract_nxn(sh_xy_h   * (rotation_sign * reflect_sign * reverse_sign)), 
-                        extract_nxn(sh_xx     * (rotation_sign * reverse_sign)), 
-                        extract_nxn(vort_xy_h * (reflect_sign  * reverse_sign))
-                        ],-1)
+        input_features = []
+        for grad_feature in gradient_features:
+            feature = eval(Arakawa_C_center[grad_feature]) * sing_mapping[grad_feature]
+            input_features.append(extract_nxn(feature))
+        input_features = torch.concat(input_features, -1)
 
         # Normalize input features
         if dimensional_scaling:
@@ -839,7 +858,7 @@ class StateFunctions():
                             ],-1)
 
         # Make prediction
-        Tdiag = ann_Txx_Tyy(input_features) * reverse_sign
+        Tdiag = ann_Txx_Tyy(input_features)
 
         # Now denormalize the output
         if dimensional_scaling:
@@ -874,13 +893,13 @@ class StateFunctions():
                 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size = 3,
-            time_revers=False, rotation=0, reflect_x=False, reflect_y=False,
+            rotation=0, reflect_x=False, reflect_y=False,
             dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
-            feature_functions=[]):
+            feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy']):
         pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, stencil_size,
-                              time_revers, rotation, reflect_x, reflect_y,
+                              rotation, reflect_x, reflect_y,
                               dimensional_scaling, strain_norm, flux_norm,
-                              feature_functions)
+                              feature_functions, gradient_features)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0

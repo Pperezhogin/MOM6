@@ -96,7 +96,7 @@ def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=T
     return im
 
 # We compare masked fields because outside there may be 1e+20 values
-def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_NA):
+def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_NA, cmap=cmocean.cm.balance):
     if mask is not None:
         mask_nan = mask.data.copy()
         mask_nan[mask_nan==0.] = np.nan
@@ -119,7 +119,6 @@ def compare(tested, control, mask=None, vmax=None, vmin = None, selector=select_
     central_latitude = float(y_coord(control).mean())
     central_longitude = float(x_coord(control).mean())
     fig, axes = plt.subplots(2,2, figsize=(12, 10), subplot_kw={'projection': ccrs.Orthographic(central_latitude=central_latitude, central_longitude=central_longitude)})
-    cmap = cmocean.cm.balance
     cmap.set_bad('gray')
     
     ax = axes[0][0]; ax.coastlines(); gl = ax.gridlines(); gl.bottom_labels=True; gl.left_labels=True;
