@@ -409,7 +409,7 @@ class DatasetCM26():
 
         return ds_coarse
 
-    def predict_ANN(self, ann_Txy, ann_Txx_Tyy, **kw):
+    def predict_ANN(self, ann_Txy, ann_Txx_Tyy, ann_Tall, **kw):
         '''
         This function makes ANN inference on the whole dataset
         '''
@@ -421,7 +421,7 @@ class DatasetCM26():
         for time in range(len(self.data.time)):
             for zl in range(len(self.data.zl)):
                 batch = self.select2d(time=time,zl=zl)
-                prediction = batch.state.ANN(ann_Txy, ann_Txx_Tyy, **kw)
+                prediction = batch.state.ANN(ann_Txy, ann_Txx_Tyy, ann_Tall, **kw)
                 data['ZB20u'][{'time':time, 'zl':zl}] = prediction['ZB20u']
                 data['ZB20v'][{'time':time, 'zl':zl}] = prediction['ZB20v']
         

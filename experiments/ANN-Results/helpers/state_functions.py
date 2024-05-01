@@ -717,7 +717,7 @@ class StateFunctions():
                dyT, dxT, dxCu, dyCu, dyCv, dxCv, dxBu, dyBu,       \
                areaBu, areaT, areaCu, areaCv
 
-    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size=3,
+    def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size=3,
                   rotation=0, reflect_x=False, reflect_y=False,
                   dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
                   feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy']):
@@ -728,13 +728,11 @@ class StateFunctions():
         '''
         if 'time' in self.data.dims:
             raise NotImplementedError("This operation is not implemented for many time slices. Use a single time.")
-        if ann_Txy is None:
+        if ann_Txy is None and ann_Txx_Tyy is None and ann_Tall is None:
             ann_Txy = import_ANN('../trained_models/ANN_Txy_ZB.nc')
-            print('Warning: Prediction from default ANN')
-        if ann_Txx_Tyy is None:
             ann_Txx_Tyy = import_ANN('../trained_models/ANN_Txx_Tyy_ZB.nc')
             print('Warning: Prediction from default ANN')
-
+        
         ########## Symmetries treatment ###########
         # Rotation symmetry
         if rotation in [0, 180]:
@@ -752,7 +750,7 @@ class StateFunctions():
             reflect_sign = - reflect_sign
 
         # How symmetries apply to every component of velocity gradient tensor
-        sing_mapping = dict(sh_xy=rotation_sign * reflect_sign, 
+        sign_mapping = dict(sh_xy=rotation_sign * reflect_sign, 
                             sh_xx=rotation_sign,
                             vort_xy=reflect_sign,
                             div=1, # divergence is a scalar and does not change under rotation and reflection
@@ -801,84 +799,140 @@ class StateFunctions():
             features_corner.append(tensor_from_xarray(feature_corner).reshape(-1,1))
             features_center.append(tensor_from_xarray(feature_center).reshape(-1,1))
         
-        ############# Prediction of Txy ###############
-        input_features = []
-        for grad_feature in gradient_features:
-            feature = eval(Arakawa_C_corner[grad_feature]) * sing_mapping[grad_feature]
-            input_features.append(extract_nxn(feature))
-        input_features = torch.concat(input_features, -1)
+        if ann_Txy is not None:
+            ############# Prediction of Txy ###############
+            input_features = []
+            for grad_feature in gradient_features:
+                feature = eval(Arakawa_C_corner[grad_feature]) * sign_mapping[grad_feature]
+                input_features.append(extract_nxn(feature))
+            input_features = torch.concat(input_features, -1)
 
-        # Normalize input features
-        if dimensional_scaling:
-            input_norm = norm(input_features)
-            input_features = (input_features / (input_norm+1e-30))
-        else:
-            input_features = input_features / strain_norm
+            # Normalize input features
+            if dimensional_scaling:
+                input_norm = norm(input_features)
+                input_features = (input_features / (input_norm+1e-30))
+            else:
+                input_features = input_features / strain_norm
 
-        # Arbitrary additional features
-        if len(features_corner) > 0:
-            input_features = torch.concat(
-                            [
-                            input_features, 
-                            *features_corner
-                            ],-1)
-        
-        # Make prediction with transforming prediction back to original frame
-        Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign)
+            # Arbitrary additional features
+            if len(features_corner) > 0:
+                input_features = torch.concat(
+                                [
+                                input_features, 
+                                *features_corner
+                                ],-1)
+            
+            # Make prediction with transforming prediction back to original frame
+            Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign)
 
-        # Now denormalize the output
-        if dimensional_scaling:
-            Txy = Txy * input_norm * input_norm * areaBu.reshape(-1,1)
-        else:
-            Txy = Txy * flux_norm
-        
-        # Apply BC. Minus sign is needed for consistency with ZB
-        Txy = - Txy.reshape(wet_c.shape) * wet_c
+            # Now denormalize the output
+            if dimensional_scaling:
+                Txy = Txy * input_norm * input_norm * areaBu.reshape(-1,1)
+            else:
+                Txy = Txy * flux_norm
+            
+            # Apply BC. Minus sign is needed for consistency with ZB
+            Txy = - Txy.reshape(wet_c.shape) * wet_c
 
-        ########## Second, prediction of Txx, Tyy ###############
-        input_features = []
-        for grad_feature in gradient_features:
-            feature = eval(Arakawa_C_center[grad_feature]) * sing_mapping[grad_feature]
-            input_features.append(extract_nxn(feature))
-        input_features = torch.concat(input_features, -1)
+        if ann_Txx_Tyy is not None:
+            ########## Second, prediction of Txx, Tyy ###############
+            input_features = []
+            for grad_feature in gradient_features:
+                feature = eval(Arakawa_C_center[grad_feature]) * sign_mapping[grad_feature]
+                input_features.append(extract_nxn(feature))
+            input_features = torch.concat(input_features, -1)
 
-        # Normalize input features
-        if dimensional_scaling:
-            input_norm = norm(input_features)
-            input_features = (input_features / (input_norm+1e-30))
-        else:
-            input_features = input_features / strain_norm
+            # Normalize input features
+            if dimensional_scaling:
+                input_norm = norm(input_features)
+                input_features = (input_features / (input_norm+1e-30))
+            else:
+                input_features = input_features / strain_norm
 
-        # Arbitrary additional features
-        if len(features_center) > 0:
-            input_features = torch.concat(
-                            [
-                            input_features, 
-                            *features_center
-                            ],-1)
+            # Arbitrary additional features
+            if len(features_center) > 0:
+                input_features = torch.concat(
+                                [
+                                input_features, 
+                                *features_center
+                                ],-1)
 
-        # Make prediction
-        Tdiag = ann_Txx_Tyy(input_features)
+            # Make prediction
+            Tdiag = ann_Txx_Tyy(input_features)
 
-        # Now denormalize the output
-        if dimensional_scaling:
-            Tdiag = Tdiag * input_norm * input_norm * (areaT).reshape(-1,1)
-        else:
-            Tdiag = Tdiag * flux_norm
-        
-        # This transforms the prediction 
-        # back to original frame
-        if rotation in [0, 180]:
-            Txx_idx = 0
-            Tyy_idx = 1
-        elif rotation in [90, 270]:
-            Txx_idx = 1
-            Tyy_idx = 0
-        else:
-            print('Error: use rotation one of 0, 90, 180, 270')
-        
-        Txx =  - Tdiag[:,Txx_idx].reshape(wet.shape) * wet
-        Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
+            # Now denormalize the output
+            if dimensional_scaling:
+                Tdiag = Tdiag * input_norm * input_norm * (areaT).reshape(-1,1)
+            else:
+                Tdiag = Tdiag * flux_norm
+            
+            # This transforms the prediction 
+            # back to original frame
+            if rotation in [0, 180]:
+                Txx_idx = 0
+                Tyy_idx = 1
+            elif rotation in [90, 270]:
+                Txx_idx = 1
+                Tyy_idx = 0
+            else:
+                print('Error: use rotation one of 0, 90, 180, 270')
+            
+            Txx =  - Tdiag[:,Txx_idx].reshape(wet.shape) * wet
+            Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
+
+        if ann_Tall is not None:
+            ########## Prediction of Txx, Tyy and Txy at once in center ###############
+            input_features = []
+            for grad_feature in gradient_features:
+                feature = eval(Arakawa_C_center[grad_feature]) * sign_mapping[grad_feature]
+                input_features.append(extract_nxn(feature))
+            input_features = torch.concat(input_features, -1)
+
+            # Normalize input features
+            if dimensional_scaling:
+                input_norm = norm(input_features)
+                input_features = (input_features / (input_norm+1e-30))
+            else:
+                input_features = input_features / strain_norm
+
+            # Arbitrary additional features
+            if len(features_center) > 0:
+                input_features = torch.concat(
+                                [
+                                input_features, 
+                                *features_center
+                                ],-1)
+                
+            # Make prediction
+            Tall = ann_Tall(input_features)
+
+            # Now denormalize the output
+            if dimensional_scaling:
+                Tall = Tall * input_norm * input_norm * (areaT).reshape(-1,1)
+            else:
+                Tall = Tall * flux_norm
+            
+            # Transforming prediction back to original frame
+            Txy = Tall[:,:1] * (rotation_sign * reflect_sign)
+            # Apply BC. Minus sign is needed for consistency with ZB
+            Txy = - Txy.reshape(wet.shape) * wet
+            # Interpolating to corner for computing the flux divergence
+            Txy = torch_pad(Txy, right=True, top=True)
+            Txy = (Txy[:-1,:-1] + Txy[1:,:-1] + Txy[:-1,1:] + Txy[1:,1:]) * 0.25 * wet_c
+            
+            Tdiag = Tall[:,1:]
+            # This transforms the prediction 
+            # back to original frame
+            if rotation in [0, 180]:
+                Txx_idx = 0
+                Tyy_idx = 1
+            elif rotation in [90, 270]:
+                Txx_idx = 1
+                Tyy_idx = 0
+            else:
+                print('Error: use rotation one of 0, 90, 180, 270')
+            Txx =  - Tdiag[:,Txx_idx].reshape(wet.shape) * wet
+            Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
         
         Txx_padded = torch_pad(Txx * dyT**2, right=True)
         Txy_padded = torch_pad(Txy * dxBu**2, bottom=True)
@@ -892,11 +946,11 @@ class StateFunctions():
                 'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
     
-    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, stencil_size = 3,
+    def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size = 3,
             rotation=0, reflect_x=False, reflect_y=False,
             dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
             feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy']):
-        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, stencil_size,
+        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall, stencil_size,
                               rotation, reflect_x, reflect_y,
                               dimensional_scaling, strain_norm, flux_norm,
                               feature_functions, gradient_features)

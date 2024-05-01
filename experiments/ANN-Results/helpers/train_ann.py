@@ -21,13 +21,13 @@ def get_SGS(batch):
 
     return SGSx, SGSy, SGS_norm
 
-def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
+def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         stencil_size=3, dimensional_scaling=True, 
-        feature_functions=[],
+        feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
         rotation=0, reflect_x=False, reflect_y=False):
-    prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy,
+    prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
         stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-        feature_functions=feature_functions,
+        feature_functions=feature_functions, gradient_features=gradient_features,
         rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
 
     ANNx = prediction['ZB20u'] * SGS_norm
@@ -41,9 +41,12 @@ def train_ANN(factors=[12,15],
               dimensional_scaling=True, 
               symmetries=False,
               time_iters=10,
+              learning_rate = 1e-3,
               depth_idx=np.arange(1),
               print_iters=1,
-              feature_functions=[]):
+              feature_functions=[],
+              gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
+              collocated=False):
     '''
     time_iters is the number of time snaphots
     randomly sampled for each factor and depth
@@ -63,9 +66,13 @@ def train_ANN(factors=[12,15],
 
     ########## Init ANN ##############
     # As default we have 3 input features on a stencil: D, D_hat and vorticity
-    num_input_features = stencil_size**2 * 3 + len(feature_functions)
-    ann_Txy = ANN([num_input_features, *hidden_layers, 1])
-    ann_Txx_Tyy = ANN([num_input_features, *hidden_layers, 2])
+    num_input_features = stencil_size**2 * len(gradient_features) + len(feature_functions)
+    ann_Tall = None; ann_Txy = None; ann_Txx_Tyy = None
+    if collocated:
+        ann_Tall = ANN([num_input_features, *hidden_layers, 3])
+    else:
+        ann_Txy = ANN([num_input_features, *hidden_layers, 1])
+        ann_Txx_Tyy = ANN([num_input_features, *hidden_layers, 2])
     
     ########## Symmetries as data augmentation ######
     def augment():
@@ -86,8 +93,11 @@ def train_ANN(factors=[12,15],
         return kw
 
     ############ Init optimizer ##############
-    all_parameters = list(ann_Txy.parameters()) + list(ann_Txx_Tyy.parameters())
-    optimizer = optim.Adam(all_parameters, lr=1e-3)
+    if collocated:
+        all_parameters = ann_Tall.parameters()
+    else:
+        all_parameters = list(ann_Txy.parameters()) + list(ann_Txx_Tyy.parameters())
+    optimizer = optim.Adam(all_parameters, lr=learning_rate)
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, 
             milestones=[int(time_iters/2), int(time_iters*3/4), int(time_iters*7/8)], gamma=0.1)
 
@@ -108,9 +118,9 @@ def train_ANN(factors=[12,15],
 
                 ######## Optionally, apply symmetries by data augmentation #########
                 optimizer.zero_grad()
-                MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
+                MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                 stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-                                feature_functions=feature_functions,
+                                feature_functions=feature_functions, gradient_features=gradient_features,
                                 **augment())
                 MSE_train.backward()
                 optimizer.step()
@@ -121,9 +131,9 @@ def train_ANN(factors=[12,15],
                 batch = dataset[f'validate-{factor}'].select2d(zl=depth)
                 SGSx, SGSy, SGS_norm = get_SGS(batch)
                 with torch.no_grad():
-                    MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy,
+                    MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                        stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-                                       feature_functions=feature_functions)
+                                       feature_functions=feature_functions, gradient_features=gradient_features)
                 
                 del batch
             
@@ -138,4 +148,4 @@ def train_ANN(factors=[12,15],
             print(f'Iter/num_iters [{time_iter+1}/{time_iters}]. Iter time/Remaining time in seconds: [%.2f/%.1f]' % (t-t_e, (t-t_s)*(time_iters/(time_iter+1)-1)))
         scheduler.step()
     
-    return ann_Txy, ann_Txx_Tyy, logger
+    return ann_Txy, ann_Txx_Tyy, ann_Tall, logger
