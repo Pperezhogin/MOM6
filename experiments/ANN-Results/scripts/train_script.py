@@ -41,7 +41,6 @@ if __name__ == '__main__':
     args.factors = eval(args.factors)
     args.hidden_layers = eval(args.hidden_layers)
     args.dimensional_scaling = eval(args.dimensional_scaling)
-    args.symmetries = eval(args.symmetries)
     args.depth_idx = eval(args.depth_idx)
     args.feature_functions = eval(args.feature_functions)
     args.gradient_features = eval(args.gradient_features)

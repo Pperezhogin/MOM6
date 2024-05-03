@@ -39,7 +39,7 @@ def train_ANN(factors=[12,15],
               stencil_size = 3,
               hidden_layers=[20],
               dimensional_scaling=True, 
-              symmetries=False,
+              symmetries='False',
               time_iters=10,
               learning_rate = 1e-3,
               depth_idx=np.arange(1),
@@ -73,25 +73,31 @@ def train_ANN(factors=[12,15],
     else:
         ann_Txy = ANN([num_input_features, *hidden_layers, 1])
         ann_Txx_Tyy = ANN([num_input_features, *hidden_layers, 2])
-    
+
     ########## Symmetries as data augmentation ######
     def augment():
-        kw = {}
-        if symmetries:
-            # Admissible values
+        if symmetries == 'False':
+            # Values for rotation, reflect_x and reflect_y
+            return zip([0],[False],[False])
+        elif symmetries == 'True':
             rots  = [90, 0]
             refxs = [True, False]
             refys = [True, False]
-            # Sampling
-            kw['rotation'] = rots[np.random.binomial(1,0.5)]
-            kw['reflect_x'] = refxs[np.random.binomial(1,0.5)]
-            kw['reflect_y'] = refys[np.random.binomial(1,0.5)]
+            return zip([rots[np.random.binomial(1,0.5)]], 
+                        [refxs[np.random.binomial(1,0.5)]], 
+                        [refys[np.random.binomial(1,0.5)]])
+        elif symmetries == 'All':
+            rots  = [90, 0]
+            refxs = [True, False]
+            refys = [True, False]
+            return itertools.product(rots, refxs, refys)
+        elif symmetries == 'None':
+            rots  = [0, 0]
+            refxs = [False, False]
+            refys = [False, False]
+            return itertools.product(rots, refxs, refys)
         else:
-            kw['rotation'] = 0
-            kw['reflect_x'] = False
-            kw['reflect_y'] = False
-        return kw
-
+            print('Wrong symmetries parameter:', symmetries)
     ############ Init optimizer ##############
     if collocated:
         all_parameters = ann_Tall.parameters()
@@ -117,13 +123,14 @@ def train_ANN(factors=[12,15],
                 SGSx, SGSy, SGS_norm = get_SGS(batch)
 
                 ######## Optionally, apply symmetries by data augmentation #########
-                optimizer.zero_grad()
-                MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
-                                stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-                                feature_functions=feature_functions, gradient_features=gradient_features,
-                                **augment())
-                MSE_train.backward()
-                optimizer.step()
+                for rotation, reflect_x, reflect_y in augment():
+                    optimizer.zero_grad()
+                    MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
+                                    stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
+                                    feature_functions=feature_functions, gradient_features=gradient_features,
+                                    rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+                    MSE_train.backward()
+                    optimizer.step()
 
                 del batch
 

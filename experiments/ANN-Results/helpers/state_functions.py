@@ -543,6 +543,85 @@ class StateFunctions():
         else:
             return E
     
+    def transfer_tensor(self, Txy_in, Txx_in, Tyy_in,
+            region = 'NA', window='hann', 
+            nfactor=2, truncate=False, detrend='linear', 
+            window_correction=True, compensated=True):
+        '''
+        This function computes energy transfer spectrum
+        but using different algorithm: cospectrum of stress tensor
+        with the strain-rate tensor. This algorithm allows to 
+        exclude effect of energy coming from the lateral
+        boundary of the considered box
+        '''
+        
+        if region == 'NA':
+            kw = {'Lat': (25,45), 'Lon': (-60,-40)}
+        elif region == 'Pacific':
+            kw = {'Lat': (25,45), 'Lon': (-200,-180)}
+        elif region == 'Equator':
+            kw = {'Lat': (-30,30), 'Lon': (-190,-130)}
+        elif region == 'ACC':
+            kw = {'Lat': (-70,-30), 'Lon': (-40,0)}
+        else:
+            print('Error: wrong region')
+            
+        # Select desired Lon-Lat square
+        sh_xy, sh_xx, _, div = self.velocity_gradients()
+        sh_xy = select_LatLon(sh_xy,time=slice(None,None),**kw)
+        sh_xx = select_LatLon(sh_xx,time=slice(None,None),**kw)
+        div = select_LatLon(div,time=slice(None,None),**kw)
+        Txx = select_LatLon(Txx_in,time=slice(None,None),**kw)
+        Tyy = select_LatLon(Tyy_in,time=slice(None,None),**kw)
+        Txy = select_LatLon(Txy_in,time=slice(None,None),**kw)
+        
+        if Txx.shape != Txy.shape:
+            nx = min(len(x_coord(Txx)), len(x_coord(Txy)))
+            ny = min(len(y_coord(Txx)), len(y_coord(Txy)))
+            def sel(x):
+                return x[{x_coord(x).name: slice(0,nx), y_coord(x).name: slice(0,ny)}]
+            sh_xy = sel(sh_xy)
+            sh_xx = sel(sh_xx)
+            div = sel(div)
+            Txx = sel(Txx)
+            Tyy = sel(Tyy)
+            Txy = sel(Txy)
+
+        # Average grid spacing (result in metres)
+        dx = select_LatLon(self.param.dxT,**kw).mean().values
+        dy = select_LatLon(self.param.dyT,**kw).mean().values
+
+        # define uniform grid
+        for variable in [Txx,Tyy,sh_xx,div]:
+            variable['xh'] = dx * np.arange(len(Txx.xh))
+            variable['yh'] = dy * np.arange(len(Txx.yh))
+            
+        for variable in [Txy,sh_xy]:
+            variable['xq'] = dx * np.arange(len(Txy.xq))
+            variable['yq'] = dy * np.arange(len(Txy.yq))
+
+        # In a case of dimensions are transposed differently
+        Txx = Txx.transpose(*sh_xx.dims)
+        Tyy = Tyy.transpose(*sh_xx.dims)
+        Txy = Txy.transpose(*sh_xy.dims)
+
+        Tdd = 0.5 * (Txx-Tyy)
+        Ttr = 0.5 * (Txx+Tyy)
+
+        Edd = xrft.isotropic_cross_spectrum(-sh_xx, Tdd, dim=('xh','yh'), window=window, nfactor=nfactor, 
+            truncate=truncate, detrend=detrend, window_correction=window_correction)
+        Etr = xrft.isotropic_cross_spectrum(-div, Ttr, dim=('xh','yh'), window=window, nfactor=nfactor, 
+            truncate=truncate, detrend=detrend, window_correction=window_correction)
+        Exy = xrft.isotropic_cross_spectrum(-sh_xy, Txy, dim=('xq','yq'), window=window, nfactor=nfactor, 
+            truncate=truncate, detrend=detrend, window_correction=window_correction)
+        
+        E = np.real(Edd+Etr+Exy)
+        E['freq_r'] = E['freq_r']*2*np.pi # because library returns frequencies, but not wavenumbers
+        if compensated:
+            E = E * E['freq_r']
+
+        return E
+    
     def transfer_ANN(self, ann_Txy, ann_Txx_Tyy, kw_ann={}, kw_sp={}):
         ann = self.ANN(ann_Txy, ann_Txx_Tyy, **kw_ann)
         return self.transfer(ann['ZB20u'], ann['ZB20v'], **kw_sp)
