@@ -46,7 +46,8 @@ def train_ANN(factors=[12,15],
               print_iters=1,
               feature_functions=[],
               gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
-              collocated=False):
+              collocated=False,
+              permute_factors_and_depth=False):
     '''
     time_iters is the number of time snaphots
     randomly sampled for each factor and depth
@@ -62,7 +63,7 @@ def train_ANN(factors=[12,15],
     for key in ['MSE_train', 'MSE_validate']:
         logger[key] = xr.DataArray(np.zeros([time_iters, len(factors), len(depth_idx)]), 
                                    dims=['iter', 'factor', 'depth'], 
-                                   coords={'factor': factors})
+                                   coords={'factor': factors, 'depth': depth_idx})
 
     ########## Init ANN ##############
     # As default we have 3 input features on a stencil: D, D_hat and vorticity
@@ -98,6 +99,23 @@ def train_ANN(factors=[12,15],
             return itertools.product(rots, refxs, refys)
         else:
             print('Wrong symmetries parameter:', symmetries)
+
+    ########## Random sampling of depth and factors #######
+    def iterator(x,y):
+        # Product of two 1D iterators
+        x_prod = np.repeat(x,len(y))
+        y_prod = np.tile(y,len(x))
+        xy_prod = np.vstack([x_prod,y_prod]).T
+        if permute_factors_and_depth:
+            # Randomly permuting iterator along common dimension
+            return np.random.permutation(xy_prod)
+        else:
+            # This is equivalent to
+            # for xx in x:
+            #    for yy in y:
+            #       ....
+            return xy_prod
+    
     ############ Init optimizer ##############
     if collocated:
         all_parameters = ann_Tall.parameters()
@@ -111,45 +129,44 @@ def train_ANN(factors=[12,15],
     for time_iter in range(time_iters):
         t_e = time()
 
-        for ifactor, factor in enumerate(factors):
-            for depth in depth_idx:
-                # Note here we randomly sample time moment 
-                # for every combination of factor and depth
-                # So, consequetive snapshots are not correlated (on average)
-                # Batch is a dataset consisting of one 2D slice of data
-                batch = dataset[f'train-{factor}'].select2d(zl=depth)
-            
-                ############## Training step ###############
-                SGSx, SGSy, SGS_norm = get_SGS(batch)
+        for factor, depth in iterator(factors, depth_idx):
+            # Note here we randomly sample time moment 
+            # for every combination of factor and depth
+            # So, consequetive snapshots are not correlated (on average)
+            # Batch is a dataset consisting of one 2D slice of data
+            batch = dataset[f'train-{factor}'].select2d(zl=depth)
+        
+            ############## Training step ###############
+            SGSx, SGSy, SGS_norm = get_SGS(batch)
 
-                ######## Optionally, apply symmetries by data augmentation #########
-                for rotation, reflect_x, reflect_y in augment():
-                    optimizer.zero_grad()
-                    MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
+            ######## Optionally, apply symmetries by data augmentation #########
+            for rotation, reflect_x, reflect_y in augment():
+                optimizer.zero_grad()
+                MSE_train = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
+                                stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
+                                feature_functions=feature_functions, gradient_features=gradient_features,
+                                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+                MSE_train.backward()
+                optimizer.step()
+
+            del batch
+
+            ############ Validation step ##################
+            batch = dataset[f'validate-{factor}'].select2d(zl=depth)
+            SGSx, SGSy, SGS_norm = get_SGS(batch)
+            with torch.no_grad():
+                MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                     stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-                                    feature_functions=feature_functions, gradient_features=gradient_features,
-                                    rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
-                    MSE_train.backward()
-                    optimizer.step()
-
-                del batch
-
-                ############ Validation step ##################
-                batch = dataset[f'validate-{factor}'].select2d(zl=depth)
-                SGSx, SGSy, SGS_norm = get_SGS(batch)
-                with torch.no_grad():
-                    MSE_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
-                                       stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-                                       feature_functions=feature_functions, gradient_features=gradient_features)
-                
-                del batch
+                                    feature_functions=feature_functions, gradient_features=gradient_features)
             
-                ########### Logging ############
-                MSE_train = float(MSE_train.data); MSE_validate = float(MSE_validate.data)
-                for key in ['MSE_train', 'MSE_validate']:
-                    logger[key][time_iter, ifactor, depth] = eval(key)
-                if (time_iter+1) % print_iters == 0:
-                    print(f'Factor: {factor}, depth: {depth}, '+'MSE train/validate: [%.6f, %.6f]' % (MSE_train, MSE_validate))
+            del batch
+        
+            ########### Logging ############
+            MSE_train = float(MSE_train.data); MSE_validate = float(MSE_validate.data)
+            for key in ['MSE_train', 'MSE_validate']:
+                logger[key].loc[{'iter': time_iter, 'factor': factor, 'depth': depth}] = eval(key)
+            if (time_iter+1) % print_iters == 0:
+                print(f'Factor: {factor}, depth: {depth}, '+'MSE train/validate: [%.6f, %.6f]' % (MSE_train, MSE_validate))
         t = time()
         if (time_iter+1) % print_iters == 0:
             print(f'Iter/num_iters [{time_iter+1}/{time_iters}]. Iter time/Remaining time in seconds: [%.2f/%.1f]' % (t-t_e, (t-t_s)*(time_iters/(time_iter+1)-1)))
