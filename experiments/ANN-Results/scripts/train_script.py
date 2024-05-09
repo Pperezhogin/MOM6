@@ -17,7 +17,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--factors', type=str, default='[4,9,12,15]')
     parser.add_argument('--stencil_size', type=int, default=3)
-    parser.add_argument('--hidden_layers', type=str, default='[64,64]')
+    parser.add_argument('--hidden_layers', type=str, default='[32,32]')
     parser.add_argument('--dimensional_scaling', type=str, default='True')
     parser.add_argument('--symmetries', type=str, default='All')
     parser.add_argument('--time_iters', type=int, default=400)

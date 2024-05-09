@@ -984,6 +984,8 @@ class StateFunctions():
                 
             # Make prediction
             Tall = ann_Tall(input_features)
+            feature_statistics = {'features': input_features.detach()[wet.reshape(-1)==1], 
+                                  'targets': Tall.detach()[wet.reshape(-1)==1]}
 
             # Now denormalize the output
             if dimensional_scaling:
@@ -1023,7 +1025,8 @@ class StateFunctions():
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
                 'ZB20u': ZB20u, 'ZB20v': ZB20v, 
-                'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy}
+                'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy, 
+                'feature_statistics': feature_statistics}
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size = 3,
             rotation=0, reflect_x=False, reflect_y=False,
@@ -1042,7 +1045,8 @@ class StateFunctions():
 
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
                 'ZB20u': ZB20u, 'ZB20v': ZB20v,
-                'sh_xx': pred['sh_xx'], 'sh_xy': pred['sh_xy'], 'vort_xy': pred['vort_xy']}
+                'sh_xx': pred['sh_xx'], 'sh_xy': pred['sh_xy'], 'vort_xy': pred['vort_xy'],
+                'feature_statistics': pred['feature_statistics']}
     
     def KE_Arakawa(self):
         '''
