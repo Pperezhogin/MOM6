@@ -319,7 +319,7 @@ class StateFunctions():
         del self.param
         del self.grid
         
-    def sample_grid_harmonic(self, grid_harmonic='chess_vorticity'):
+    def sample_grid_harmonic(self, grid_harmonic='plane_wave'):
         '''
         Available grid harmonics to sample:
         'chess_vorticity'
@@ -328,8 +328,8 @@ class StateFunctions():
         
         Return new object StateFunctions with data containing waves
         '''
-        data = self.data[['u','v']].copy()
-        ny, nx = data.u.shape
+        data = xr.Dataset()
+        ny, nx = self.data.u.shape
 
         if grid_harmonic in ['chess_vorticity', 'chess_divergence']:
             u = np.zeros((ny,nx))
@@ -746,7 +746,7 @@ class StateFunctions():
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
     
-    @lru_cache(maxsize=1)
+    @lru_cache(maxsize=2)
     def compute_features(self):
         '''
         Do all computations with xarrays so rest of the inference involves torch only.
@@ -811,6 +811,8 @@ class StateFunctions():
             ann_Txy = import_ANN('../trained_models/ANN_Txy_ZB.nc')
             ann_Txx_Tyy = import_ANN('../trained_models/ANN_Txx_Tyy_ZB.nc')
             print('Warning: Prediction from default ANN')
+
+        feature_statistics = None # fast fix
         
         ########## Symmetries treatment ###########
         # Rotation symmetry

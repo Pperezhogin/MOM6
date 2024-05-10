@@ -23,11 +23,12 @@ if __name__ == '__main__':
     parser.add_argument('--time_iters', type=int, default=400)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--depth_idx', type=str, default='np.arange(10)')
-    parser.add_argument('--print_iters', type=int, default=10)
+    parser.add_argument('--print_iters', type=int, default=1)
     parser.add_argument('--feature_functions', type=str, default='[]')
     parser.add_argument('--gradient_features', type=str, default="['sh_xy', 'sh_xx', 'rel_vort']")
-    parser.add_argument('--collocated', type=str, default='True')
+    parser.add_argument('--collocated', type=str, default='False')
     parser.add_argument('--permute_factors_and_depth', type=str, default='True')
+    parser.add_argument('--short_waves_dissipation', type=str, default='True')
     
     parser.add_argument('--path_save', type=str, default='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/Gauss-FGR3/EXP0')
 
@@ -47,6 +48,7 @@ if __name__ == '__main__':
     args.gradient_features = eval(args.gradient_features)
     args.collocated = eval(args.collocated)
     args.permute_factors_and_depth = eval(args.permute_factors_and_depth)
+    args.short_waves_dissipation = eval(args.short_waves_dissipation)
 
     ann_Txy, ann_Txx_Tyy, ann_Tall, logger = \
         train_ANN(args.factors,
@@ -61,7 +63,8 @@ if __name__ == '__main__':
                   args.feature_functions,
                   args.gradient_features,
                   args.collocated,
-                  args.permute_factors_and_depth
+                  args.permute_factors_and_depth,
+                  args.short_waves_dissipation
                   )
     
     if args.collocated:
