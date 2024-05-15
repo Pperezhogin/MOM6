@@ -363,9 +363,9 @@ class DatasetCM26():
 
         # Compute subgrid forcing
         if FGR_multiplier is not None:
-            hires_advection_filtered = filtering(hires_advection[0], hires_advection[1], None,
+            hires_advection = filtering(hires_advection[0], hires_advection[1], None,
                                                         self, FGR_multiplier * factor)
-        advx_coarsen, advy_coarsen, _ = coarsening(hires_advection_filtered[0], hires_advection_filtered[1], None,
+        advx_coarsen, advy_coarsen, _ = coarsening(hires_advection[0], hires_advection[1], None,
                                                 self, ds_coarse, factor)
 
         ds_coarse.data['SGSx'] = advx_coarsen - coarse_advection[0]

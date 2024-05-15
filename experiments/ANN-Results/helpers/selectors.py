@@ -62,6 +62,9 @@ def select_Equator(array, time=None):
 def select_ACC(array, time=None):
     return select_LatLon(array, Lat=(-70,-30), Lon=(-40,0), time=time)
 
+def select_rings(array, time=None):
+    return select_LatLon(array, Lat=(-60,-10), Lon=(-80,50), time=time)
+
 def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=True, cmap=cmocean.cm.balance):
     if mask is not None:
         mask_nan = selector(mask).data.copy()
