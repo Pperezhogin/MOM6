@@ -67,7 +67,10 @@ def train_ANN(factors=[12,15],
               gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
               collocated=False,
               permute_factors_and_depth=False,
-              short_waves_dissipation=False):
+              short_waves_dissipation=False,
+              load=False,
+              subfilter='subfilter',
+              FGR=3):
     '''
     time_iters is the number of time snaphots
     randomly sampled for each factor and depth
@@ -76,7 +79,7 @@ def train_ANN(factors=[12,15],
     participate in training process
     '''
     ########### Read dataset ############
-    dataset = read_datasets(['train', 'validate'], factors)
+    dataset = read_datasets(['train', 'validate'], factors, load=load, subfilter=subfilter, FGR=FGR)
 
     ########## Init logger ###########
     logger = xr.Dataset()
@@ -212,5 +215,9 @@ def train_ANN(factors=[12,15],
         if (time_iter+1) % print_iters == 0:
             print(f'Iter/num_iters [{time_iter+1}/{time_iters}]. Iter time/Remaining time in seconds: [%.2f/%.1f]' % (t-t_e, (t-t_s)*(time_iters/(time_iter+1)-1)))
         scheduler.step()
+
+    for factor in factors:
+        for train_str in ['train', 'validate']:
+            del dataset[f'{train_str}-{factor}']
     
     return ann_Txy, ann_Txx_Tyy, ann_Tall, logger

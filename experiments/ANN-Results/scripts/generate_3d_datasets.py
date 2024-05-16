@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
     for ds_str in ['train', 'validate', 'test']:
         ds = DatasetCM26(source=f'3d-{ds_str}')
-        if args.subfilter == 'subfitler':
+        if args.subfilter == 'subfilter':
             SGS_function = ds.compute_subfilter_forcing
         else:
             SGS_function = ds.compute_subgrid_forcing

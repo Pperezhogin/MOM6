@@ -6,11 +6,11 @@ from helpers.operators import Coarsen, CoarsenWeighted, CoarsenKochkov, Subsampl
 from functools import cache
 
 ######## Precomputed training datasets ############
-def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15]):
+def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15], subfilter='subfilter', FGR=3, load=False):
     dictionary = {}
     depth_selector = lambda x: x.isel(zl=np.arange(0,50,5))
     for factor in factors:
-        base_path = f'/scratch/pp2681/mom6/CM26_datasets/ocean3d/Gauss-FGR3/factor-{factor}'
+        base_path = f'/scratch/pp2681/mom6/CM26_datasets/ocean3d/{subfilter}/FGR{FGR}/factor-{factor}'
         param = depth_selector(xr.open_dataset(f'{base_path}/param.nc'))
 
         nfiles = {'train': 96, 'test': 24, 'validate': 12}
@@ -18,6 +18,8 @@ def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15]):
             file_list = [f'{base_path}/{key}-{j}.nc' for j in range(nfiles[key])]
             print('Reading from folder', base_path)
             data = xr.open_mfdataset(file_list, chunks={'zl':1, 'time':1}, concat_dim='time', combine='nested')
+            if load:
+                data = data.load()
             dictionary[f'{key}-{factor}'] = DatasetCM26(data, param)
     return dictionary
 
@@ -213,7 +215,7 @@ class DatasetCM26():
         if 'xq' in x.dims and 'yq' in x.dims:
             return x.where(self.param.wet_c)
     
-    def select2d(self, time = None, zl=None):
+    def select2d(self, time = None, zl=None, compute=lambda x: x):
         data = self.data
         param = self.param
 
@@ -228,7 +230,7 @@ class DatasetCM26():
             data = data.isel(zl=zl)
             param = param.isel(zl=zl)
             
-        return DatasetCM26(data, param)
+        return DatasetCM26(compute(data), param)
     
     def init_coarse_grid(self, factor=10, percentile=0):
         '''
