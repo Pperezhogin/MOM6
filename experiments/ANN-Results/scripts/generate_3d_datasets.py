@@ -16,18 +16,27 @@ if __name__ == '__main__':
     parser.add_argument('--FGR', type=int, default=3)
     parser.add_argument('--percentile', type=float, default=0.5)
     parser.add_argument('--coarsening_str', type=str, default='CoarsenKochkovMinMax()')
+    parser.add_argument('--subfilter', type=str, default='subfilter')
     args = parser.parse_args()
     print(args)
 
     base_path = '/scratch/pp2681/mom6/CM26_datasets/ocean3d'
-    folder = os.path.join(base_path, f'Gauss-FGR{args.FGR}/factor-{args.factor}')
+    folder = os.path.join(base_path, args.subfilter, f'FGR{args.FGR}/factor-{args.factor}')
     os.system(f'mkdir -p {folder}')
     with open(f'{folder}/filter.txt', "w") as outfile: 
         json.dump(vars(args), outfile)
 
+    if args.FGR<0:
+        args.FGR = None # Will ignore this parameter in subgrid forcing
+
     for ds_str in ['train', 'validate', 'test']:
         ds = DatasetCM26(source=f'3d-{ds_str}')
-        coarse_dataset = ds.compute_subfilter_forcing(factor=args.factor, FGR_multiplier=args.FGR, 
+        if args.subfilter == 'subfitler':
+            SGS_function = ds.compute_subfilter_forcing
+        else:
+            SGS_function = ds.compute_subgrid_forcing
+
+        coarse_dataset = SGS_function(factor=args.factor, FGR_multiplier=args.FGR, 
                         coarsening=eval(args.coarsening_str), percentile=args.percentile)
         
         if ds_str == 'train':

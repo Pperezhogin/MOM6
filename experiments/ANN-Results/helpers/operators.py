@@ -65,11 +65,15 @@ class CoarsenWeighted:
             v_coarse = ds_coarse.grid.interp(
                 coarsen(v_weighted) * ds_coarse.param.wet,'Y') \
                 * ds_coarse.param.wet_v / areaV
-            
+    
         if T is not None:
-            areaT = ds_hires.param.dxT * ds_hires.param.dyT
-            areaTc = ds_coarse.param.dxT * ds_coarse.param.dyT
-            T_coarse = coarsen(T * areaT) * ds_coarse.param.wet / areaTc
+            coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).sum()
+            weights = xr.where(ds_hires.param.wet==1,
+                               ds_hires.param.dxT * ds_hires.param.dyT,
+                               np.nan)
+            T_coarse = xr.where(ds_coarse.param.wet==1, 
+                                coarsen(T * weights) / coarsen(weights),
+                                0)
             
         return u_coarse, v_coarse, T_coarse
     
