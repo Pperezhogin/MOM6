@@ -111,14 +111,15 @@ class CollectionOfExperiments:
             KE_lower = KE.isel(zl=1)
 
             color = {exps[0]: 'gray', exps[-1]: 'k'}
-            p.extend(ax[0].loglog(k, KE_upper, lw=3, label=labels[j], color=color.get(exp,None)))
+            lw = {exps[-1]: 1}
+            p.extend(ax[0].loglog(k, KE_upper, lw=lw.get(exp,2), label=labels[j], color=color.get(exp,None)))
             ax[0].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[0].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[0].set_title('Upper layer')
             #ax[0].legend(prop={'size': 14})
             #ax[0].grid(which='both',linestyle=':')
 
-            p.extend(ax[1].loglog(k, KE_lower, lw=3, label=labels[j], color=color.get(exp,None)))
+            p.extend(ax[1].loglog(k, KE_lower, lw=lw.get(exp,2), label=labels[j], color=color.get(exp,None)))
             ax[1].set_xlabel(r'wavenumber, $k [m^{-1}]$')
             ax[1].set_ylabel(r'Energy spectrum, $E(k) [m^3/s^2]$')
             ax[1].set_title('Lower layer')
@@ -289,18 +290,26 @@ class CollectionOfExperiments:
     def plot_EKE(self, exps, labels=None, target='R64_R4', zl=0):
         if labels is None:
             labels=exps
-        plt.figure(figsize=(4*len(exps),3))
         nfig = len(exps)
+        ncols=3
+        ncol = min(ncols,nfig)
+        nrows = nfig / ncols
+        if nrows > 1:
+            nrows = int(np.ceil(nrows))
+        else:
+            nrows = 1
+        plt.figure(figsize=(5*ncol,4*nrows), dpi=200)
+        plt.subplots_adjust(hspace=0.3, wspace=0.3)
         for ifig, exp in enumerate(exps):
-            plt.subplot(1,nfig,ifig+1)
-            ssh = remesh(self[exp].EKE, self[target].EKE)
+            plt.subplot(nrows,ncol,ifig+1)
+            EKE = remesh(self[exp].EKE, self[target].EKE)
             if zl==0:
                 levels = np.linspace(0,2.5e-2,11)
             else:
                 levels = np.linspace(0,1.2e-2,13)
             label = 'EKE, $m^{2}s^{-2}$'
 
-            ssh.isel(zl=zl).plot.contourf(levels=levels, cmap=cmocean.cm.balance, linewidths=1, cbar_kwargs={'label': label})
+            EKE.isel(zl=zl).plot.contourf(levels=levels, cmap=cmocean.cm.balance, linewidths=1, cbar_kwargs={'label': label})
             plt.xticks((0, 5, 10, 15, 20))
             plt.yticks((30, 35, 40, 45, 50))
             plt.xlabel('Longitude')
@@ -308,7 +317,7 @@ class CollectionOfExperiments:
             plt.title(labels[ifig])
 
             if exp != exps[-1]:
-                RMSE = Lk_error(ssh,remesh(self[exps[-1]].EKE, self[target].EKE))[zl] 
+                RMSE = Lk_error(EKE,remesh(self[exps[-1]].EKE, self[target].EKE))[zl] 
                 plt.text(2,31,'RMSE='+str(round(RMSE,5))+'$m^{2}s^{-2}$', fontsize=14, color='w')
 
         plt.tight_layout()
@@ -323,7 +332,7 @@ class CollectionOfExperiments:
             nrows = int(np.ceil(nrows))
         else:
             nrows = 1
-        plt.figure(figsize=(5*ncol,4*nrows))
+        plt.figure(figsize=(5*ncol,4*nrows), dpi=200)
         plt.subplots_adjust(hspace=0.3, wspace=0.3)
         for ifig, exp in enumerate(exps):
             plt.subplot(nrows,ncol,ifig+1)
@@ -419,8 +428,10 @@ class CollectionOfExperiments:
             plt.axhline(y=MKE[-1], ls=':', color=color[0])
             if zl==0:
                 plt.yticks([0,5,10,15,20,25,30])
+                plt.ylim([0,30])
             elif zl==1:
                 plt.yticks([0,0.25,0.5,0.75,1.0,1.25,1.5,1.75,2.0])
+                plt.ylim([0,2])
             
         plt.subplot(2,2,3)
         MPE = []
@@ -438,6 +449,7 @@ class CollectionOfExperiments:
         plt.legend(loc='upper left', ncol=2)
         plt.ylim([0, (EPE[-1]+MPE[-1])*1.8])
         plt.yticks([0,25,50,75,100,125,150])
+        plt.ylim([0,150])
         plt.axhline(y=MPE[-1], ls=':', color=color[2])
         
         plt.subplot(2,2,4)
@@ -454,6 +466,7 @@ class CollectionOfExperiments:
         plt.legend(loc='upper left', ncol=2)
         plt.ylim([0, 1.5*(EKE[-1]+EPE[-1])*1.4])
         plt.yticks([0,5,10,15,20,25,30,35,40])
+        plt.ylim([0,40])
         plt.axhline(y=EKE[-1], ls=':', color=color[1])
 
     def plot_KE_PE_simpler(self, exps=['R4', 'R8', 'R64_R4'], labels=None, color=['k', 'tab:cyan', 'tab:blue', 'tab:red'], rotation=20):

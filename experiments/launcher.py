@@ -360,35 +360,145 @@ if __name__ == '__main__':
     #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN_CM26_grid_harmonic_ver3-{conf}/ZB-{ZB_SCALING}-FCT-3', hpc, parameters)
 
     ############ Limiters in ZB20 ################
+    # for conf in ['R4']:
+    #     ntasks = dict(R2=4, R3=10, R4=12, R5=48, R6=48, R7=48, R8=48)[conf]
+    #     hpc = HPC.add(mem=10, ntasks=ntasks)
+    #     for ZB_SCALING in [0.5]:#[1.0, 2.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
+    #             ZB_SCALING=ZB_SCALING).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-inviscid', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-Smag', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING, ZB_LIMITER=3).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-3', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING, ZB_LIMITER=4).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=0.5).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_2', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=1./3.).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_3', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',
+    #             ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=0.25).add(**configuration(conf))
+    #         run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_4', hpc, parameters)
+
+    # ################# New ANNs ##################
     for conf in ['R4']:
-        ntasks = dict(R2=4, R3=10, R4=12, R5=48, R6=48, R7=48, R8=48)[conf]
-        hpc = HPC.add(mem=10, ntasks=ntasks)
-        for ZB_SCALING in [0.5]:#[1.0, 2.0]:
+        for EXP in ['EXP2', 'EXP3']:
             parameters = PARAMETERS.add(USE_ZB2020='True',
                 SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
-                ZB_SCALING=ZB_SCALING).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-inviscid', hpc, parameters)
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-inviscid', hpc, parameters)
 
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
             parameters = PARAMETERS.add(USE_ZB2020='True',
-                ZB_SCALING=ZB_SCALING).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-Smag', hpc, parameters)
+                SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ZB_LIMITER=0,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0', hpc, parameters)
 
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
             parameters = PARAMETERS.add(USE_ZB2020='True',
-                ZB_SCALING=ZB_SCALING, ZB_LIMITER=3).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-3', hpc, parameters)
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ZB_LIMITER=3,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-3', hpc, parameters)
 
-            parameters = PARAMETERS.add(USE_ZB2020='True',
-                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4', hpc, parameters)
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
+            parameters = PARAMETERS.add(
+                SMAG_BI_CONST=0., BOUND_CORIOLIS_BIHARM=False, BOUND_AH=False, BETTER_BOUND_AH=False,
+                USE_ZB2020='True',
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ZB_LIMITER=3,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-3-low', hpc, parameters)
 
-            parameters = PARAMETERS.add(USE_ZB2020='True',
-                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=0.5).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_2', hpc, parameters)
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
+            parameters = PARAMETERS.add(
+                SMAG_BI_CONST=0.03,
+                USE_ZB2020='True',
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ZB_LIMITER=3,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-3-medium', hpc, parameters)
 
-            parameters = PARAMETERS.add(USE_ZB2020='True',
-                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=1./3.).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_3', hpc, parameters)
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
+            parameters = PARAMETERS.add(
+                SMAG_BI_CONST=0.01,
+                USE_ZB2020='True',
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ZB_LIMITER=3,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-3-small', hpc, parameters)
 
-            parameters = PARAMETERS.add(USE_ZB2020='True',
-                ZB_SCALING=ZB_SCALING, ZB_LIMITER=4, ZB_LIMITER_P=0.25).add(**configuration(conf))
-            run_experiment(f'/scratch/pp2681/mom6/Limiters/generalization/ZB20-{conf}/ZB-{ZB_SCALING}-FCT-4-p-1_4', hpc, parameters)
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
+            parameters = PARAMETERS.add(
+                SMAG_BI_CONST=0.06,
+                USE_ZB2020='True',
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.06', hpc, parameters)
+
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
+            parameters = PARAMETERS.add(
+                SMAG_BI_CONST=0.03,
+                USE_ZB2020='True',
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.03', hpc, parameters)
+
+    for conf in ['R4']:
+        for EXP in ['EXP2', 'EXP3']:
+            parameters = PARAMETERS.add(
+                SMAG_BI_CONST=0.01,
+                USE_ZB2020='True',
+                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+            hpc = HPC.add(mem=10, ntasks=ntasks)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.01', hpc, parameters)
