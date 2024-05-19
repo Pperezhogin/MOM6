@@ -1179,8 +1179,9 @@ subroutine Bound_backscatter_limiters(u, v, h, G, GV, CS)
         ! the whole diagonal stress but not only one component which would result in producing
         ! big deviatoric stress
         ! Note that corrected flux will be Txx_corrected = CS%Txx + Txx, and so on
-        Txx(i,j,k) = - CS%Txx(i,j,k) * (1. - FCT_Txx(i,j,k) * FCT_Tyy(i,j,k))
-        Tyy(i,j,k) = - CS%Tyy(i,j,k) * (1. - FCT_Txx(i,j,k) * FCT_Tyy(i,j,k))
+        FCT_Tdd(i,j,k) = FCT_Txx(i,j,k) * FCT_Tyy(i,j,k)
+        Txx(i,j,k) = - CS%Txx(i,j,k) * (1. - FCT_Tdd(i,j,k))
+        Tyy(i,j,k) = - CS%Tyy(i,j,k) * (1. - FCT_Tdd(i,j,k))
         Txy(I,J,k) = - CS%Txy(I,J,k) * (1. - FCT_Txy(i,j,k))
       enddo; enddo
     endif

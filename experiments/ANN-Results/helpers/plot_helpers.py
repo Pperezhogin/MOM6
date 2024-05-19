@@ -41,14 +41,18 @@ def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loo
     
 def create_animation_ffmpeg(fun, idx, filename='my-video.mp4', dpi=200, FPS=18, resolution=None):
     folder = '.ffmpeg/'+filename.split('.')[0]
-
+    from time import time
     def create_snapshots():
+        t0 = time()
         for frame, i in enumerate(idx):
             fun(i)
             plt.savefig(f'{folder}/frame-{frame}.png', dpi=dpi, bbox_inches='tight')
             plt.close()
-            print(f'Frame {i} is created', end='\r')
-
+            nframes = len(idx)
+            remaining_frames = nframes - frame
+            ETA = (time()-t0) / (frame+1) * remaining_frames
+            print(f'Frame {frame}/{nframes} is created, ETA: {ETA}', end='\r')
+            
     if os.path.exists(folder):
         if os.path.exists(folder+'/frame-0.png'):
             print(f'Frames already exists in folder {folder}')
