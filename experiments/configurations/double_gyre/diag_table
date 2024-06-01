@@ -16,12 +16,12 @@
 # Prognostic Ocean fields:
 #=========================
 
-"ocean_model","smag_const", "smag_const","series_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","KE_ZB", "KE_ZB","series_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","KE_smag", "KE_smag","series_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","GM_coef", "GM_coef","series_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","PE_GM", "PE_GM","series_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","attenuation", "attenuation","series_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","smag_const", "smag_const","series_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","KE_ZB", "KE_ZB","series_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","KE_smag", "KE_smag","series_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","GM_coef", "GM_coef","series_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","PE_GM", "PE_GM","series_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","attenuation", "attenuation","series_%4yr_%3dy","all",.false.,"none",2
 
 "ocean_model","u","u","prog_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","v","v","prog_%4yr_%3dy","all",.false.,"none",2
@@ -32,7 +32,7 @@
 #"ocean_model","Rml","Rml","prog_%4yr_%3dy","all",.false.,"none",2
 
 "ocean_model","RV","RV","prog_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","PV","PV","prog_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","PV","PV","prog_%4yr_%3dy","all",.false.,"none",2
 #"ocean_model","e_D","e_D","prog_%4yr_%3dy","all",.false.,"none",2
 
 "ocean_model","u","u","ave_prog_%4yr_%3dy","all",.true.,"none",2
@@ -99,10 +99,10 @@
 
 "ocean_model","ZB2020u","ZB2020u","mom_%4yr_%3dy","all",.false.,"none",2
 "ocean_model","ZB2020v","ZB2020v","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","FCT_Tdd","FCT_Tdd","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","FCT_Txy","FCT_Txy","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","Esource_ZB","Esource_ZB","mom_%4yr_%3dy","all",.false.,"none",2
-"ocean_model","Esource_smag","Esource_smag","mom_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","FCT_Tdd","FCT_Tdd","mom_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","FCT_Txy","FCT_Txy","mom_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","Esource_ZB","Esource_ZB","mom_%4yr_%3dy","all",.false.,"none",2
+#"ocean_model","Esource_smag","Esource_smag","mom_%4yr_%3dy","all",.false.,"none",2
 #"ocean_model","visc_coef","visc_coef","mom_%4yr_%3dy","all",.false.,"none",2
 #"ocean_model","SGS_KE","SGS_KE","mom_%4yr_%3dy","all",.false.,"none",2
 
