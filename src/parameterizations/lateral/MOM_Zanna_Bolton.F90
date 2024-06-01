@@ -1701,6 +1701,10 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
   enddo ! end of k loop
 
+  call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%Txx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Tyy, G%Domain, clock=CS%id_clock_mpi)
+
   call cpu_clock_end(CS%id_clock_stress_ANN)
 
 end subroutine compute_stress_ANN_collocated

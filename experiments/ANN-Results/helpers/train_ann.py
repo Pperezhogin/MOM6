@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import xarray as xr
 from helpers.cm26 import read_datasets
-from helpers.ann_tools import ANN, export_ANN, tensor_from_xarray
+from helpers.ann_tools import ANN, export_ANN, tensor_from_xarray, torch_pad
 import torch
 import torch.optim as optim
 import json
@@ -25,7 +25,8 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         stencil_size=3, dimensional_scaling=True, 
         feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
         rotation=0, reflect_x=False, reflect_y=False,
-        short_waves_dissipation=False, batch_perturbed=None,
+        short_waves_dissipation=False, short_waves_zero=False,
+        batch_perturbed=None,
         response_norm=None, smagx_response=None, smagy_response=None):
     prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
         stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
@@ -52,7 +53,17 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
     else:
         MSE_plane_waves = torch.tensor(0)
 
-    return MSE_train, MSE_plane_waves
+    if short_waves_zero:
+        def fltr(x):
+            x = torch_pad(x,right=True, top=True, left=True, bottom=True)
+            return (4 * x[1:-1,1:-1] + 2 * (x[2:,1:-1] + x[:-2,1:-1] + x[1:-1,2:] + x[1:-1,:-2]) + (x[2:,2:] + x[2:,:-2] + x[:-2,2:] + x[:-2,:-2])) / 16.
+        annx_sharpen = ANNx - fltr(ANNx)
+        anny_sharpen = ANNy - fltr(ANNy)
+        MSE_short_zero = (annx_sharpen**2 + anny_sharpen**2).mean()
+    else:
+        MSE_short_zero = torch.tensor(0)
+        
+    return MSE_train, MSE_plane_waves, MSE_short_zero
 
 def train_ANN(factors=[12,15],
               stencil_size = 3,
@@ -68,6 +79,7 @@ def train_ANN(factors=[12,15],
               collocated=False,
               permute_factors_and_depth=False,
               short_waves_dissipation=False,
+              short_waves_zero=False,
               load=False,
               subfilter='subfilter',
               FGR=3):
@@ -83,7 +95,7 @@ def train_ANN(factors=[12,15],
 
     ########## Init logger ###########
     logger = xr.Dataset()
-    for key in ['MSE_train', 'MSE_plain_waves', 'MSE_validate']:
+    for key in ['MSE_train', 'MSE_plain_waves', 'MSE_short_zero', 'MSE_validate']:
         logger[key] = xr.DataArray(np.zeros([time_iters, len(factors), len(depth_idx)]), 
                                    dims=['iter', 'factor', 'depth'], 
                                    coords={'factor': factors, 'depth': depth_idx})
@@ -178,16 +190,19 @@ def train_ANN(factors=[12,15],
             ######## Optionally, apply symmetries by data augmentation #########
             for rotation, reflect_x, reflect_y in augment():
                 optimizer.zero_grad()
-                MSE_train, MSE_plain_waves = \
+                MSE_train, MSE_plain_waves, MSE_short_zero = \
                             MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                 stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
                                 feature_functions=feature_functions, gradient_features=gradient_features,
                                 rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y,
-                                short_waves_dissipation=short_waves_dissipation, batch_perturbed=batch_perturbed,
+                                short_waves_dissipation=short_waves_dissipation, short_waves_zero=short_waves_zero,
+                                batch_perturbed=batch_perturbed,
                                 response_norm=response_norm, smagx_response=smagx_response, smagy_response=smagy_response
                                 )
                 if short_waves_dissipation:
                     (MSE_train + MSE_plain_waves).backward()
+                elif short_waves_zero:
+                    (MSE_train + MSE_short_zero).backward()
                 else:    
                     MSE_train.backward()
                 optimizer.step()
@@ -199,18 +214,18 @@ def train_ANN(factors=[12,15],
             batch = dataset[f'validate-{factor}'].select2d(zl=depth)
             SGSx, SGSy, SGS_norm = get_SGS(batch)
             with torch.no_grad():
-                MSE_validate, _ = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
+                MSE_validate, _, _ = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                     stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
                                     feature_functions=feature_functions, gradient_features=gradient_features)
             
             del batch
         
             ########### Logging ############
-            MSE_train = float(MSE_train.data); MSE_validate = float(MSE_validate.data); MSE_plain_waves = float(MSE_plain_waves.data)
-            for key in ['MSE_train', 'MSE_plain_waves', 'MSE_validate']:
+            MSE_train = float(MSE_train.data); MSE_validate = float(MSE_validate.data); MSE_plain_waves = float(MSE_plain_waves.data); MSE_short_zero = float(MSE_short_zero)
+            for key in ['MSE_train', 'MSE_plain_waves', 'MSE_short_zero', 'MSE_validate']:
                 logger[key].loc[{'iter': time_iter, 'factor': factor, 'depth': depth}] = eval(key)
             if (time_iter+1) % print_iters == 0:
-                print(f'Factor: {factor}, depth: {depth}, '+'MSE train/validate/waves: [%.6f, %.6f, %.6f]' % (MSE_train, MSE_validate, MSE_plain_waves))
+                print(f'Factor: {factor}, depth: {depth}, '+'MSE train/validate/waves/short: [%.6f, %.6f, %.6f, %.6f]' % (MSE_train, MSE_validate, MSE_plain_waves, MSE_short_zero))
         t = time()
         if (time_iter+1) % print_iters == 0:
             print(f'Iter/num_iters [{time_iter+1}/{time_iters}]. Iter time/Remaining time in seconds: [%.2f/%.1f]' % (t-t_e, (t-t_s)*(time_iters/(time_iter+1)-1)))

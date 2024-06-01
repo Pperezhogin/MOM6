@@ -16,9 +16,10 @@ if __name__ == '__main__':
     ########## Manual input of parameters ###############
     parser = argparse.ArgumentParser()
     parser.add_argument('--stencil_size', type=int, default=3)
-    parser.add_argument('--hidden_layers', type=str, default='[32,32]')
-    parser.add_argument('--collocated', type=str, default='False')
+    parser.add_argument('--hidden_layers', type=str, default='[20]')
+    parser.add_argument('--collocated', type=str, default='True')
     parser.add_argument('--short_waves_dissipation', type=str, default='False')
+    parser.add_argument('--short_waves_zero', type=str, default='False')
     parser.add_argument('--dimensional_scaling', type=str, default='True')
     parser.add_argument('--feature_functions', type=str, default='[]')
     parser.add_argument('--gradient_features', type=str, default="['sh_xy', 'sh_xx', 'rel_vort']")
@@ -34,7 +35,7 @@ if __name__ == '__main__':
     parser.add_argument('--permute_factors_and_depth', type=str, default='True')
 
     parser.add_argument('--path_save', type=str, default='EXP0')
-    parser.add_argument('--load', type=str, default='True')
+    parser.add_argument('--load', type=str, default='False')
 
     args = parser.parse_args()
 
@@ -55,6 +56,7 @@ if __name__ == '__main__':
     args.collocated = eval(args.collocated)
     args.permute_factors_and_depth = eval(args.permute_factors_and_depth)
     args.short_waves_dissipation = eval(args.short_waves_dissipation)
+    args.short_waves_zero = eval(args.short_waves_zero)
     args.load = eval(args.load)
 
     ann_Txy, ann_Txx_Tyy, ann_Tall, logger = \
@@ -72,6 +74,7 @@ if __name__ == '__main__':
                   args.collocated,
                   args.permute_factors_and_depth,
                   args.short_waves_dissipation,
+                  args.short_waves_zero,
                   args.load,
                   args.subfilter,
                   args.FGR

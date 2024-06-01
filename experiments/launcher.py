@@ -504,49 +504,101 @@ if __name__ == '__main__':
     #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.01', hpc, parameters)
 
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for EXP in ['EXP2', 'EXP3']:
-            parameters = PARAMETERS.add(
-                SMAG_BI_CONST=0.00,
-                USE_ZB2020='True',
-                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
-                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
-                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.00', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for EXP in ['EXP2', 'EXP3']:
+    #         parameters = PARAMETERS.add(
+    #             SMAG_BI_CONST=0.00,
+    #             USE_ZB2020='True',
+    #             ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+    #             ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+    #             ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.00', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for EXP in ['EXP2', 'EXP3']:
+    #         parameters = PARAMETERS.add(
+    #             SMAG_BI_CONST=0.00,
+    #             USE_ZB2020='True',
+    #             ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+    #             ZB_LIMITER=0,
+    #             ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+    #             ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0-Cs-0.00', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(
+    #             SMAG_BI_CONST=0.01,
+    #             USE_ZB2020='True',
+    #             ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+    #             ZB_LIMITER=0,
+    #             ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+    #             ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0-Cs-0.01', hpc, parameters)
+
+    #         parameters = PARAMETERS.add(
+    #             SMAG_BI_CONST=0.03,
+    #             USE_ZB2020='True',
+    #             ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+    #             ZB_LIMITER=0,
+    #             ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+    #             ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0-Cs-0.03', hpc, parameters)
+
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for EXP in ['EXP2', 'EXP3']:
+    #         parameters = PARAMETERS.add(
+    #             SMAG_BI_CONST=0.00,
+    #             CORIOLIS_EN_DIS='True',
+    #             USE_ZB2020='True',
+    #             ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+    #             ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+    #             ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.00-en-diss', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for EXP in ['EXP2', 'EXP3']:
+    #         parameters = PARAMETERS.add(
+    #             SMAG_BI_CONST=0.01,
+    #             CORIOLIS_EN_DIS='True',
+    #             USE_ZB2020='True',
+    #             ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
+    #             ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
+    #             ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-Cs-0.01-en-diss', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #         parameters = PARAMETERS.add(
+    #             CORIOLIS_EN_DIS='True',
+    #             ).add(**configuration(conf))
+    #         ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
+    #         hpc = HPC.add(mem=10, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Feb2022/bare/{conf}-en-diss', hpc, parameters)
 
     for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for EXP in ['EXP2', 'EXP3']:
-            parameters = PARAMETERS.add(
-                SMAG_BI_CONST=0.00,
-                USE_ZB2020='True',
-                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
-                ZB_LIMITER=0,
-                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
-                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0-Cs-0.00', hpc, parameters)
-
-            parameters = PARAMETERS.add(
-                SMAG_BI_CONST=0.01,
-                USE_ZB2020='True',
-                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
-                ZB_LIMITER=0,
-                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
-                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0-Cs-0.01', hpc, parameters)
-
-            parameters = PARAMETERS.add(
-                SMAG_BI_CONST=0.03,
-                USE_ZB2020='True',
-                ZB_SCALING=1.0, USE_ANN=2, ANN_TRUE_VORTICITY=True,
-                ZB_LIMITER=0,
-                ANN_FILE_TXY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txy.nc',
-                ANN_FILE_TXX_TYY=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subgrid/FGR-1/{EXP}/model/Txx_Tyy.nc').add(**configuration(conf))
-            ntasks = dict(R2=4, R3=10, R4=24, R5=48, R6=48, R7=48, R8=48)[conf]
-            hpc = HPC.add(mem=10, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May16-{EXP}-{conf}/ZB-1.0-FCT-0-Cs-0.03', hpc, parameters)
+        for FGR in [1,2,3,4]:
+            for subfilter in ['subfilter']:
+                for EXP in ['EXP1', 'EXP2']:
+                    for SMAG in ['0.01', '0.03', '0.06']:
+                        for smooth_iters in [1,4]:
+                            parameters = PARAMETERS.add(
+                                SMAG_BI_CONST=SMAG,
+                                USE_ZB2020='True',
+                                ZB_SCALING=1.0, USE_ANN=3, 
+                                STRESS_SMOOTH_PASS=smooth_iters,
+                                ANN_TRUE_VORTICITY=True,
+                                ANN_FILE_TALL=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/{subfilter}/FGR{FGR}/{EXP}/model/Tall.nc').add(**configuration(conf))
+                            ntasks = dict(R2=1, R3=2, R4=4, R5=8, R6=8, R7=8, R8=8)[conf]
+                            hpc = HPC.add(mem=2, ntasks=ntasks, begin='0hour')
+                            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/May22-FGR{FGR}-{subfilter}-{EXP}-{conf}/ZB-1.0-Cs-{SMAG}-smooth-{smooth_iters}', hpc, parameters)
