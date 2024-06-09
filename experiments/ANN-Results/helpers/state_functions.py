@@ -319,12 +319,13 @@ class StateFunctions():
         del self.param
         del self.grid
         
-    def sample_grid_harmonic(self, grid_harmonic='plane_wave'):
+    def sample_grid_harmonic(self, grid_harmonic='plane_wave', amp=1.0):
         '''
         Available grid harmonics to sample:
         'chess_vorticity'
         'chess_divergence'
         'plane_wave'
+        'white_noise'
         
         Return new object StateFunctions with data containing waves
         '''
@@ -366,11 +367,14 @@ class StateFunctions():
 
             u = np.sin(freq_x * i + freq_y * j + phase_u)
             v = np.sin(freq_x * i + freq_y * j + phase_v)
+        elif grid_harmonic == 'white_noise':
+            u = np.random.randn(ny,nx)
+            v = np.random.randn(ny,nx)
         else:
             print('Error: wrong grid harmonic')
-                
-        data['u'] = xr.DataArray(u, dims=['yh', 'xq']) * self.param.wet_u
-        data['v'] = xr.DataArray(v, dims=['yq', 'xh']) * self.param.wet_v
+        
+        data['u'] = xr.DataArray(amp * u, dims=['yh', 'xq']) * self.param.wet_u
+        data['v'] = xr.DataArray(amp * v, dims=['yq', 'xh']) * self.param.wet_v
         
         return StateFunctions(data, self.param, self.grid)
     

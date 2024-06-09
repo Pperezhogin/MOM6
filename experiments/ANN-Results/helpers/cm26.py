@@ -419,11 +419,11 @@ class DatasetCM26():
         Return new object StateFunctions with data containing waves
         '''
 
-        perturbation = self.state.sample_grid_harmonic(grid_harmonic)
+        perturbation = self.state.sample_grid_harmonic(grid_harmonic, amp=amp)
         data = self.data.copy()
-        data['u'] = data['u'] + amp * perturbation.data['u']
-        data['v'] = data['v'] + amp * perturbation.data['v']
-        return DatasetCM26(data, self.param, self.grid)
+        data['u'] = data['u'] + perturbation.data['u']
+        data['v'] = data['v'] + perturbation.data['v']
+        return DatasetCM26(data, self.param, self.grid), perturbation
 
     def predict_ANN(self, ann_Txy, ann_Txx_Tyy, ann_Tall, **kw):
         '''

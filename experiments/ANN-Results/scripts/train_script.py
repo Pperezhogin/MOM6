@@ -20,6 +20,7 @@ if __name__ == '__main__':
     parser.add_argument('--collocated', type=str, default='True')
     parser.add_argument('--short_waves_dissipation', type=str, default='False')
     parser.add_argument('--short_waves_zero', type=str, default='False')
+    parser.add_argument('--trace_dissipation', type=str, default='False')
     parser.add_argument('--dimensional_scaling', type=str, default='True')
     parser.add_argument('--feature_functions', type=str, default='[]')
     parser.add_argument('--gradient_features', type=str, default="['sh_xy', 'sh_xx', 'rel_vort']")
@@ -57,6 +58,7 @@ if __name__ == '__main__':
     args.permute_factors_and_depth = eval(args.permute_factors_and_depth)
     args.short_waves_dissipation = eval(args.short_waves_dissipation)
     args.short_waves_zero = eval(args.short_waves_zero)
+    args.trace_dissipation = eval(args.trace_dissipation)
     args.load = eval(args.load)
 
     ann_Txy, ann_Txx_Tyy, ann_Tall, logger = \
@@ -75,6 +77,7 @@ if __name__ == '__main__':
                   args.permute_factors_and_depth,
                   args.short_waves_dissipation,
                   args.short_waves_zero,
+                  args.trace_dissipation,
                   args.load,
                   args.subfilter,
                   args.FGR
