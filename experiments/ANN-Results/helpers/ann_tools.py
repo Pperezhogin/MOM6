@@ -128,6 +128,9 @@ class ANN(nn.Module):
     
     def count_parameters(self):
         return sum(p.numel() for p in self.parameters())
+    
+    def compute_loss(self, x, ytrue):
+        return {'loss': nn.MSELoss()(self.forward(x), ytrue)}
 
 def export_ANN(ann, input_norms, output_norms, filename='ANN_test.nc'):
     ds = xr.Dataset()
