@@ -12,6 +12,88 @@ from helpers.selectors import select_LatLon, x_coord, y_coord
 import warnings
 warnings.filterwarnings("ignore")
 
+def interp_xy(x):
+        return (x[:-1,:-1] + x[1:,:-1] + x[:-1,1:] + x[1:,1:]) * 0.25
+
+def feature_grad_center(n=3):
+    '''
+    Computes derivatives of the form:
+    d sh_xx / du_{ij}, d sh_xy / du_{ij}, d vort_xy / du_{ij},
+    d sh_xx / dv_{ij}, d sh_xy / dv_{ij}, d vort_xy / dv_{ij},
+    On a stencil of size nxn in the center point with 
+    standard staggering. Here we neglect grid spacing. 
+    See notebook 21-Jacobian.ipynb for details.
+    '''
+    u = np.zeros((n+2,n+1))
+    v = np.zeros((n+1,n+2))
+    u[n//2+1,n//2] = 1
+    v[n//2,n//2+1] = 1
+
+    sh_xy_du   = interp_xy(np.diff(u,axis=0))
+    vort_xy_du = interp_xy(-np.diff(u,axis=0))
+    sh_xy_dv   = interp_xy(np.diff(v,axis=1))
+    vort_xy_dv = interp_xy(np.diff(v,axis=1))
+
+    rel_vort_du = vort_xy_du
+    rel_vort_dv = vort_xy_dv
+
+    u = np.zeros((n,n+1))
+    v = np.zeros((n+1,n))
+    u[n//2,n//2] = 1
+    v[n//2,n//2] = 1
+
+    sh_xx_du = + np.diff(u, axis=1)
+    sh_xx_dv = - np.diff(v, axis=0)
+
+    d = {}
+    for key in ['sh_xy_du', 'vort_xy_du', 
+                'sh_xy_dv', 'vort_xy_dv',
+                'rel_vort_du', 'rel_vort_dv',
+                'sh_xx_du', 'sh_xx_dv'
+                ]:
+        d[key] = torch.tensor(eval(key).astype('float32'))
+    return d
+
+def feature_grad_corner(n=3):
+    '''
+    Computes derivatives of the form:
+    d sh_xx / du_{ij}, d sh_xy / du_{ij}, d vort_xy / du_{ij},
+    d sh_xx / dv_{ij}, d sh_xy / dv_{ij}, d vort_xy / dv_{ij},
+    On a stencil of size nxn in the corner point with 
+    standard staggering. Here we neglect grid spacing. 
+    See notebook 21-Jacobian.ipynb for details.
+    '''
+    u = np.zeros((n+1,n))
+    v = np.zeros((n,n+1))
+    u[n//2,n//2] = 1
+    v[n//2,n//2] = 1
+
+    sh_xy_du   = + np.diff(u, axis=0)
+    vort_xy_du = - np.diff(u, axis=0)
+
+    sh_xy_dv   = + np.diff(v, axis=1)
+    vort_xy_dv = + np.diff(v, axis=1)
+
+    rel_vort_du = vort_xy_du
+    rel_vort_dv = vort_xy_dv
+
+    u = np.zeros((n+1,n+2))
+    v = np.zeros((n+2,n+1))
+    u[n//2,n//2+1] = 1
+    v[n//2+1,n//2] = 1
+
+    sh_xx_du = interp_xy( np.diff(u,axis=1))
+    sh_xx_dv = interp_xy(-np.diff(v,axis=0))
+
+    d = {}
+    for key in ['sh_xy_du', 'vort_xy_du', 
+                'sh_xy_dv', 'vort_xy_dv',
+                'rel_vort_du', 'rel_vort_dv',
+                'sh_xx_du', 'sh_xx_dv'
+                ]:
+        d[key] = torch.tensor(eval(key).astype('float32'))
+    return d
+
 def Coriolis(lat, compute_beta=False):
     '''
     Input (lat) here is in degrees, but later converted
@@ -799,7 +881,8 @@ class StateFunctions():
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size=3,
                   rotation=0, reflect_x=False, reflect_y=False,
                   dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
-                  feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy']):
+                  feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
+                  jacobian_trace=False):
         '''
         The only input is the dataset itself.
         The output is predicted momentum flux in physical
@@ -903,8 +986,54 @@ class StateFunctions():
                                 *features_corner
                                 ],-1)
             
+            if jacobian_trace:
+                input_features.requires_grad = True
+
             # Make prediction with transforming prediction back to original frame
             Txy = ann_Txy(input_features) * (rotation_sign * reflect_sign)
+
+            if jacobian_trace:
+                dTxy = torch.autograd.grad(outputs=Txy, inputs=input_features, 
+                                    grad_outputs=torch.ones_like(Txy),
+                                    retain_graph=True, create_graph=True)[0]
+                # Typical shapes:
+                # input_features.shape = [N,27]
+                # Txy.shape = [N,1]
+                # dTxy.shape = [N,27]
+                
+                # Gradient of input features w.r.t. u and v in one grid point
+                df_du = []
+                df_dv = []
+                for grad_feature in gradient_features:
+                    df_du.append(
+                        image_to_nxn_stencil_gpt(
+                            feature_grad_corner(stencil_size)[grad_feature+'_du'] * sign_mapping[grad_feature], 
+                                stencil_size=stencil_size,
+                                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+                    )
+                    df_dv.append(
+                        image_to_nxn_stencil_gpt(
+                            feature_grad_corner(stencil_size)[grad_feature+'_dv'] * sign_mapping[grad_feature], 
+                                stencil_size=stencil_size,
+                                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+                    )
+                df_du = torch.concat(df_du, -1)
+                df_dv = torch.concat(df_dv, -1)
+
+                if df_du.shape[1] != input_features.shape[1]:
+                    print('Not implemented error: please extend array with zeros')
+
+                # Typical shapes:
+                # shape.df_du = [1,27]
+                # shape.df_dv = [1,27]
+
+                # Here we compute the contribution of Txy momentum flux
+                # into perturbations in u_{ij} and v_{ij}
+                dTxy_du = - input_norm * dTxy @ df_du.T
+                dTxy_dv = - input_norm * dTxy @ df_dv.T
+
+                dTxy_du = dTxy_du.reshape(wet_c.shape) * wet_c
+                dTxy_dv = dTxy_dv.reshape(wet_c.shape) * wet_c
 
             # Now denormalize the output
             if dimensional_scaling:
@@ -938,17 +1067,15 @@ class StateFunctions():
                                 *features_center
                                 ],-1)
 
+            if jacobian_trace:
+                input_features.requires_grad = True
+
             # Make prediction
             Tdiag = ann_Txx_Tyy(input_features)
 
-            # Now denormalize the output
-            if dimensional_scaling:
-                Tdiag = Tdiag * input_norm * input_norm * (areaT).reshape(-1,1)
-            else:
-                Tdiag = Tdiag * flux_norm
-            
             # This transforms the prediction 
             # back to original frame
+            # Reflection does not change indices or sign
             if rotation in [0, 180]:
                 Txx_idx = 0
                 Tyy_idx = 1
@@ -957,9 +1084,65 @@ class StateFunctions():
                 Tyy_idx = 0
             else:
                 print('Error: use rotation one of 0, 90, 180, 270')
+
+            Txx = Tdiag[:,Txx_idx].reshape(-1,1)
+            Tyy = Tdiag[:,Tyy_idx].reshape(-1,1)
+
+            if jacobian_trace:
+                dTxx = torch.autograd.grad(outputs=Txx, inputs=input_features, 
+                                    grad_outputs=torch.ones_like(Txx),
+                                    retain_graph=True, create_graph=True)[0]
+                dTyy = torch.autograd.grad(outputs=Tyy, inputs=input_features, 
+                                    grad_outputs=torch.ones_like(Tyy),
+                                    retain_graph=True, create_graph=True)[0]
+                # Typical shapes:
+                # input_features.shape = [N,27]
+                # Txx.shape = [N,1]
+                # dTxx.shape = [N,27]
+                
+                # Gradient of input features w.r.t. u and v in one grid point
+                df_du = []
+                df_dv = []
+                for grad_feature in gradient_features:
+                    df_du.append(
+                        image_to_nxn_stencil_gpt(
+                            feature_grad_center(stencil_size)[grad_feature+'_du'] * sign_mapping[grad_feature], 
+                                stencil_size=stencil_size,
+                                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+                    )
+                    df_dv.append(
+                        image_to_nxn_stencil_gpt(
+                            feature_grad_center(stencil_size)[grad_feature+'_dv'] * sign_mapping[grad_feature], 
+                                stencil_size=stencil_size,
+                                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+                    )
+                df_du = torch.concat(df_du, -1)
+                df_dv = torch.concat(df_dv, -1)
+
+                if df_du.shape[1] != input_features.shape[1]:
+                    print('Not implemented error: please extend array with zeros')
+
+                # Typical shapes:
+                # shape.df_du = [1,27]
+                # shape.df_dv = [1,27]
+
+                # Here we compute the contribution of Txx and Tyy momentum flux
+                # into perturbations in u_{ij} and v_{ij}
+                dTxx_du = - input_norm * dTxx @ df_du.T
+                dTyy_dv = - input_norm * dTyy @ df_dv.T
+
+                dTxx_du = dTxx_du.reshape(wet.shape) * wet
+                dTyy_dv = dTyy_dv.reshape(wet.shape) * wet
             
-            Txx =  - Tdiag[:,Txx_idx].reshape(wet.shape) * wet
-            Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
+            # Now denormalize the output
+            if dimensional_scaling:
+                Txx = Txx * input_norm * input_norm * (areaT).reshape(-1,1)
+                Tyy = Tyy * input_norm * input_norm * (areaT).reshape(-1,1)
+            else:
+                Tdiag = Tdiag * flux_norm
+            
+            Txx =  - Txx.reshape(wet.shape) * wet
+            Tyy =  - Tyy.reshape(wet.shape) * wet
 
         if ann_Tall is not None:
             ########## Prediction of Txx, Tyy and Txy at once in center ###############
@@ -1024,20 +1207,30 @@ class StateFunctions():
         Txy_padded = torch_pad(Txy * dyBu**2,left=True)
         Tyy_padded = torch_pad(Tyy * dxT**2, top=True)
         ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (areaCv)
+
+        if not(jacobian_trace):
+            dTxx_du = None
+            dTyy_dv = None
+            dTxy_du = None
+            dTxy_dv = None
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
                 'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy, 
-                'feature_statistics': feature_statistics}
+                'feature_statistics': feature_statistics,
+                'dTxx_du': dTxx_du, 'dTyy_dv': dTyy_dv,
+                'dTxy_du': dTxy_du, 'dTxy_dv': dTxy_dv}
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size = 3,
             rotation=0, reflect_x=False, reflect_y=False,
             dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
-            feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy']):
+            feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
+            jacobian_trace=False):
         pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall, stencil_size,
                               rotation, reflect_x, reflect_y,
                               dimensional_scaling, strain_norm, flux_norm,
-                              feature_functions, gradient_features)
+                              feature_functions, gradient_features,
+                              jacobian_trace)
         
         Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0
@@ -1045,10 +1238,23 @@ class StateFunctions():
         ZB20u = pred['ZB20u'].detach().numpy() + self.param.dxCu * 0
         ZB20v = pred['ZB20v'].detach().numpy() + self.param.dxCv * 0
 
+        if pred['dTxy_du'] is not None:
+            dTxy_du = pred['dTxy_du'].detach().numpy() + self.param.dxBu * 0
+            dTxy_dv = pred['dTxy_dv'].detach().numpy() + self.param.dxBu * 0
+            dTxx_du = pred['dTxx_du'].detach().numpy() + self.param.dxT * 0
+            dTyy_dv = pred['dTyy_dv'].detach().numpy() + self.param.dxT * 0
+        else:
+            dTxy_du = None
+            dTxy_dv = None
+            dTxx_du = None
+            dTyy_dv = None
+
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 
                 'ZB20u': ZB20u, 'ZB20v': ZB20v,
                 'sh_xx': pred['sh_xx'], 'sh_xy': pred['sh_xy'], 'vort_xy': pred['vort_xy'],
-                'feature_statistics': pred['feature_statistics']}
+                'feature_statistics': pred['feature_statistics'],
+                'dTxx_du': dTxx_du, 'dTyy_dv': dTyy_dv,
+                'dTxy_du': dTxy_du, 'dTxy_dv': dTxy_dv}
     
     def KE_Arakawa(self):
         '''
