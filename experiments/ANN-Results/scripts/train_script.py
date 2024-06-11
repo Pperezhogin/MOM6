@@ -22,6 +22,7 @@ if __name__ == '__main__':
     parser.add_argument('--short_waves_zero', type=str, default='False')
     parser.add_argument('--jacobian_trace', type=str, default='False')
     parser.add_argument('--perturbed_inputs', type=str, default='False')
+    parser.add_argument('--jacobian_reduction', type=str, default='component')
     parser.add_argument('--Cs_biharm', type=float, default=0.06)
 
     parser.add_argument('--dimensional_scaling', type=str, default='True')
@@ -84,6 +85,7 @@ if __name__ == '__main__':
                   args.short_waves_zero,
                   args.jacobian_trace,
                   args.perturbed_inputs,
+                  args.jacobian_reduction,
                   args.Cs_biharm,
                   args.load,
                   args.subfilter,

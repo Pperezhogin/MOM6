@@ -29,7 +29,7 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         batch_perturbed=None,
         response_norm=None, smagx_response=None, smagy_response=None,
         jacobian_trace=False, Cs_biharm=0.06,
-        perturbed_inputs=False):
+        perturbed_inputs=False, jacobian_reduction='component'):
     prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
         stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
         feature_functions=feature_functions, gradient_features=gradient_features,
@@ -71,11 +71,20 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         # for Smagorinsky model which is analytical
         target_Jtr = - Cs_biharm * 8 * np.sqrt(prediction['sh_xx']**2 + prediction['sh_xy']**2).mean()
 
-        MSE_jacobian_trace = \
-            (1 - (prediction['dTxx_du'] / target_Jtr).mean())**2 + \
-            (1 - (prediction['dTyy_dv'] / target_Jtr).mean())**2 + \
-            (1 - (prediction['dTxy_du'] / target_Jtr).mean())**2 + \
-            (1 - (prediction['dTxy_dv'] / target_Jtr).mean())**2
+        if jacobian_reduction == 'component':
+            MSE_jacobian_trace = \
+                (1 - (prediction['dTxx_du'] / target_Jtr).mean())**2 + \
+                (1 - (prediction['dTyy_dv'] / target_Jtr).mean())**2 + \
+                (1 - (prediction['dTxy_du'] / target_Jtr).mean())**2 + \
+                (1 - (prediction['dTxy_dv'] / target_Jtr).mean())**2
+        elif jacobian_reduction == 'sum':
+            MSE_jacobian_trace = \
+                (1 - 0.25 * (prediction['dTxx_du'] / target_Jtr
+                           + prediction['dTyy_dv'] / target_Jtr
+                           + prediction['dTxy_du'] / target_Jtr
+                           + prediction['dTxy_dv'] / target_Jtr).mean())**2
+        else:
+            print('Error: wrong argument')
     else:
         MSE_jacobian_trace = torch.tensor(0)
 
@@ -110,6 +119,7 @@ def train_ANN(factors=[12,15],
               short_waves_zero=False,
               jacobian_trace=False,
               perturbed_inputs=False,
+              jacobian_reduction='component',
               Cs_biharm=0.06,
               load=False,
               subfilter='subfilter',
@@ -233,7 +243,7 @@ def train_ANN(factors=[12,15],
                                 batch_perturbed=batch_perturbed,
                                 response_norm=response_norm, smagx_response=smagx_response, smagy_response=smagy_response,
                                 jacobian_trace=jacobian_trace, Cs_biharm=Cs_biharm,
-                                perturbed_inputs=perturbed_inputs
+                                perturbed_inputs=perturbed_inputs, jacobian_reduction=jacobian_reduction
                                 )
                 if short_waves_dissipation:
                     (MSE_train + MSE_plain_waves).backward()
