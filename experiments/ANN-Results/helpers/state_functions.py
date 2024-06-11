@@ -448,6 +448,9 @@ class StateFunctions():
 
             u = np.sin(freq_x * i + freq_y * j + phase_u)
             v = np.sin(freq_x * i + freq_y * j + phase_v)
+        elif grid_harmonic == 'white_noise':
+            u = np.random.randn(ny,nx)
+            v = np.random.randn(ny,nx)
         else:
             print('Error: wrong grid harmonic')
                 
