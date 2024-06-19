@@ -11,9 +11,16 @@ import itertools
 import os
 from time import time
 
-def get_SGS(batch):
-    SGSx = tensor_from_xarray(batch.data.SGSx)
-    SGSy = tensor_from_xarray(batch.data.SGSy)
+def get_SGS(batch, predict_smagorinsky=False, Cs_biharm=0.06):
+    SGSx = batch.data.SGSx
+    SGSy = batch.data.SGSy
+    if predict_smagorinsky:
+        smag = batch.state.Smagorinsky_biharmonic(Cs_biharm)
+        SGSx = SGSx + smag['smagx']
+        SGSy = SGSy + smag['smagy']
+
+    SGSx = tensor_from_xarray(SGSx)
+    SGSy = tensor_from_xarray(SGSy)
 
     SGS_norm = 1. / torch.sqrt((SGSx**2 + SGSy**2).mean())
     SGSx = SGSx * SGS_norm
@@ -69,20 +76,31 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
     if jacobian_trace:
         # First we define mean jacobian trace (per unit grid element)
         # for Smagorinsky model which is analytical
-        target_Jtr = - Cs_biharm * 8 * np.sqrt(prediction['sh_xx']**2 + prediction['sh_xy']**2).mean()
+        target_Jtr = - Cs_biharm * 8 * np.sqrt(prediction['sh_xx']**2 + prediction['sh_xy']**2)
 
         if jacobian_reduction == 'component':
+            target_Jtr = target_Jtr.mean()
             MSE_jacobian_trace = \
                 (1 - (prediction['dTxx_du'] / target_Jtr).mean())**2 + \
                 (1 - (prediction['dTyy_dv'] / target_Jtr).mean())**2 + \
                 (1 - (prediction['dTxy_du'] / target_Jtr).mean())**2 + \
                 (1 - (prediction['dTxy_dv'] / target_Jtr).mean())**2
         elif jacobian_reduction == 'sum':
+            target_Jtr = target_Jtr.mean()
             MSE_jacobian_trace = \
                 (1 - 0.25 * (prediction['dTxx_du'] / target_Jtr
                            + prediction['dTyy_dv'] / target_Jtr
                            + prediction['dTxy_du'] / target_Jtr
                            + prediction['dTxy_dv'] / target_Jtr).mean())**2
+        elif jacobian_reduction == 'pointwise':
+            target_Jtr_norm = 1. / np.sqrt((target_Jtr**2).mean())
+            target_Jtr = target_Jtr * target_Jtr_norm
+
+            MSE_jacobian_trace = \
+                ((prediction['dTxx_du'] * target_Jtr_norm - target_Jtr)**2 +
+                 (prediction['dTyy_dv'] * target_Jtr_norm - target_Jtr)**2 + 
+                 (prediction['dTxy_du'] * target_Jtr_norm - target_Jtr)**2 + 
+                 (prediction['dTxy_dv'] * target_Jtr_norm - target_Jtr)**2).mean()
         else:
             print('Error: wrong argument')
     else:
@@ -119,7 +137,9 @@ def train_ANN(factors=[12,15],
               short_waves_zero=False,
               jacobian_trace=False,
               perturbed_inputs=False,
+              grid_harmonic='plane_wave',
               jacobian_reduction='component',
+              predict_smagorinsky=False,
               Cs_biharm=0.06,
               load=False,
               subfilter='subfilter',
@@ -213,7 +233,7 @@ def train_ANN(factors=[12,15],
             batch = dataset[f'train-{factor}'].select2d(zl=depth)
 
             if short_waves_dissipation:
-                batch_perturbed = batch.perturb_velocities()
+                batch_perturbed = batch.perturb_velocities(grid_harmonic)
                 smag = batch.state.Smagorinsky(Cs_biharm=Cs_biharm)
                 smag_perturbed = batch_perturbed.state.Smagorinsky(Cs_biharm=Cs_biharm)
 
@@ -229,7 +249,7 @@ def train_ANN(factors=[12,15],
                 batch_perturbed = None; response_norm=None; smagx_response=None; smagy_response=None
 
             ############## Training step ###############
-            SGSx, SGSy, SGS_norm = get_SGS(batch)
+            SGSx, SGSy, SGS_norm = get_SGS(batch, predict_smagorinsky=predict_smagorinsky, Cs_biharm=Cs_biharm)
 
             ######## Optionally, apply symmetries by data augmentation #########
             for rotation, reflect_x, reflect_y in augment():

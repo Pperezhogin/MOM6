@@ -76,18 +76,19 @@ class CollectionOfExperiments:
         additional_subfolder - if results are stored not in common_folder+exps[i],
         but in an additional subfolder 
         '''
-
-        if exps is None:
-            folders = sorted(os.listdir(common_folder))
+        folders = []
+        for root, dirs, files in os.walk(common_folder):
+            if os.path.isfile(os.path.join(root, additional_subfolder, 'ocean.stats.nc')):
+                folder = root[len(common_folder)+1:] # Path w.r.t. common_folder
+                folders.append(
+                    folder
+                    )
 
         if exps_names is None:
             exps_names = folders
 
-        if prefix:
-            exps = [prefix+'-'+exp for exp in folders]
-        else:
-            exps = folders
-
+        exps = [folder.replace("/", "-") for folder in folders] # modify folder to be used as a key for caching files
+            
         # Construct dictionary of experiments, where keys are given by exps
         experiments_dict = {}
         names_dict = {}

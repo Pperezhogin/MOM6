@@ -711,21 +711,25 @@ class StateFunctions():
         ann = self.ANN(ann_Txy, ann_Txx_Tyy, **kw_ann)
         return self.transfer(ann['ZB20u'], ann['ZB20v'], **kw_sp)
     
-    def velocity_gradients(self, compute=False):
+    def velocity_gradients(self, u=None, v=None, compute=False):
         param = self.param
         data = self.data
         grid = self.grid
+
+        if u is None and v is None:
+            u = data.u
+            v = data.v
 
         if compute:
             compute = lambda x: x.compute()
         else:
             compute = lambda x: x
         
-        dudx = grid.diff(data.u * param.wet_u / param.dyCu, 'X') * param.dyT / param.dxT
-        dvdy = grid.diff(data.v * param.wet_v / param.dxCv, 'Y') * param.dxT / param.dyT
+        dudx = grid.diff(u * param.wet_u / param.dyCu, 'X') * param.dyT / param.dxT
+        dvdy = grid.diff(v * param.wet_v / param.dxCv, 'Y') * param.dxT / param.dyT
 
-        dudy = compute(grid.diff(data.u * param.wet_u / param.dxCu, 'Y') * param.dxBu / param.dyBu * param.wet_c)
-        dvdx = compute(grid.diff(data.v * param.wet_v / param.dyCv, 'X') * param.dyBu / param.dxBu * param.wet_c)
+        dudy = compute(grid.diff(u * param.wet_u / param.dxCu, 'Y') * param.dxBu / param.dyBu * param.wet_c)
+        dvdx = compute(grid.diff(v * param.wet_v / param.dyCv, 'X') * param.dyBu / param.dxBu * param.wet_c)
         
         sh_xx = compute((dudx-dvdy) * param.wet)
         sh_xy = dvdx+dudy
@@ -772,7 +776,48 @@ class StateFunctions():
                    / (param.dxCv*param.dyCv)
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'vort_xy': vort_xy, 'smagx': smagx, 'smagy': smagy}
+    
+    def Smagorinsky_biharmonic(self, Cs_biharm=0.06):
+        sh_xy, sh_xx, _, _ = self.velocity_gradients()
+        grid = self.grid
+        param = self.param
         
+        # In center point
+        Shear_mag = param.wet * (sh_xx**2+grid.interp(sh_xy**2,['X','Y']))**0.5
+        
+        # Biharmonic viscosity coefficient
+        dx2h = param.dxT**2
+        dy2h = param.dyT**2
+        grid_sp2 = (2 * dx2h * dy2h) / (dx2h + dy2h)
+        Biharm_const = Cs_biharm * grid_sp2**2
+        viscosity = - Biharm_const * Shear_mag
+
+        def divergence(Txy, Txx, Tyy):
+            smagx = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
+               + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
+               / (param.dxCu*param.dyCu)
+
+            smagy = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
+               + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
+               / (param.dxCv*param.dyCv)
+            return smagx, smagy
+        
+        Txx = sh_xx
+        Tyy = - Txx
+        Txy = sh_xy
+
+        Del2u, Del2v = divergence(Txy, Txx, Tyy)
+
+        sh_xy, sh_xx, _, _ = self.velocity_gradients(Del2u, Del2v)
+
+        Txx = sh_xx * viscosity * param.wet
+        Tyy = - Txx
+        Txy = sh_xy * grid.interp(viscosity,['X','Y']) * param.wet_c
+
+        smagx, smagy = divergence(Txy, Txx, Tyy)
+        
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'smagx': smagx, 'smagy': smagy}
+
     def ZB20(self, ZB_scaling=1.0, VGM='False'):
         param = self.param
         grid = self.grid

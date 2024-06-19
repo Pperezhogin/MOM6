@@ -22,15 +22,17 @@ if __name__ == '__main__':
     parser.add_argument('--short_waves_zero', type=str, default='False')
     parser.add_argument('--jacobian_trace', type=str, default='False')
     parser.add_argument('--perturbed_inputs', type=str, default='False')
+    parser.add_argument('--grid_harmonic', type=str, default='plane_wave')
     parser.add_argument('--jacobian_reduction', type=str, default='component')
     parser.add_argument('--Cs_biharm', type=float, default=0.06)
+    parser.add_argument('--predict_smagorinsky', type=str, default='True')
 
     parser.add_argument('--dimensional_scaling', type=str, default='True')
     parser.add_argument('--feature_functions', type=str, default='[]')
     parser.add_argument('--gradient_features', type=str, default="['sh_xy', 'sh_xx', 'rel_vort']")
 
     parser.add_argument('--subfilter', type=str, default='subfilter')
-    parser.add_argument('--FGR', type=int, default=3)
+    parser.add_argument('--FGR', type=int, default=2)
     parser.add_argument('--factors', type=str, default='[4,9,12,15]')
     parser.add_argument('--depth_idx', type=str, default='np.arange(10)')
     parser.add_argument('--symmetries', type=str, default='All')
@@ -64,6 +66,7 @@ if __name__ == '__main__':
     args.short_waves_zero = eval(args.short_waves_zero)
     args.jacobian_trace = eval(args.jacobian_trace)
     args.perturbed_inputs = eval(args.perturbed_inputs)
+    args.predict_smagorinsky = eval(args.predict_smagorinsky)
 
     args.load = eval(args.load)
 
@@ -85,7 +88,9 @@ if __name__ == '__main__':
                   args.short_waves_zero,
                   args.jacobian_trace,
                   args.perturbed_inputs,
+                  args.grid_harmonic,
                   args.jacobian_reduction,
+                  args.predict_smagorinsky,
                   args.Cs_biharm,
                   args.load,
                   args.subfilter,
