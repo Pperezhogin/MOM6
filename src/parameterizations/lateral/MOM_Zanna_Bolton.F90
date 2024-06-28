@@ -531,8 +531,10 @@ end subroutine compute_c_diss
 !! Which consists of the deviatoric and trace components, respectively:
 !! T =   (-vort_xy * sh_xy, vort_xy * sh_xx;
 !!         vort_xy * sh_xx,  vort_xy * sh_xy) +
-!! 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2, 0;
-!!        0, vort_xy^2 + sh_xy^2 + sh_xx^2)
+!! 1/2 * (vort_xy^2 + sh_xy^2 + sh_xx^2 + div_xx^2, 0;
+!!        0, vort_xy^2 + sh_xy^2 + sh_xx^2 + div_xx^2)
+!!        div_xx * (sh_xx, sh_xy; 
+!!                  sh_xy, -sh_xx)
 !! This stress tensor is multiplied by precomputed kappa=-CS%amplitude * G%area:
 !! T -> T * kappa
 !! The sign of the stress tensor is such that (neglecting h):
@@ -800,8 +802,8 @@ subroutine filter_velocity_gradients(G, GV, CS)
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
         sh_xy, vort_xy ! Copy of CS%sh_xy and CS%vort_xy [T-1 ~> s-1]
 
-  integer :: xx_halo, xy_halo, vort_halo ! currently available halo for gradient components
-  integer :: xx_iter, xy_iter, vort_iter ! remaining number of iterations
+  integer :: xx_halo, div_halo, xy_halo, vort_halo ! currently available halo for gradient components
+  integer :: xx_iter, div_iter, xy_iter, vort_iter ! remaining number of iterations
   integer :: niter                       ! required number of iterations
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
@@ -834,8 +836,8 @@ subroutine filter_velocity_gradients(G, GV, CS)
   enddo
   call cpu_clock_end(CS%id_clock_filter)
 
-  xx_halo = 2; xy_halo = 1; vort_halo = 1;
-  xx_iter = niter; xy_iter = niter; vort_iter = niter;
+  xx_halo = 2; div_halo = 2; xy_halo = 1; vort_halo = 1;
+  xx_iter = niter; div_iter = niter; xy_iter = niter; vort_iter = niter;
 
   do while &
     (xx_iter >  0 .or. xy_iter >  0 .or. & ! filter iterations remain to be done
@@ -848,7 +850,7 @@ subroutine filter_velocity_gradients(G, GV, CS)
     endif
 
     call filter_hq(G, GV, CS, xx_halo, xx_iter, h=CS%sh_xx)
-    call filter_hq(G, GV, CS, xx_halo, xx_iter, h=CS%div_xx)
+    call filter_hq(G, GV, CS, div_halo, div_iter, h=CS%div_xx)
 
     if (xx_halo < 2) &
       call start_group_pass(CS%pass_xx, G%Domain, clock=CS%id_clock_mpi)

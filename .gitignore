@@ -12,3 +12,4 @@ config.status
 configure
 /Makefile
 Makefile.mkmf
+*.png
