@@ -27,6 +27,8 @@ type, public :: ZB2020_CS ; private
   ! Parameters
   real      :: amplitude      !< The nondimensional scaling factor in ZB model,
                               !! typically 0.1 - 10 [nondim].
+  logical   :: compute_div    !< If true, extends ZB20 model with divergence 
+                              !! making it effectively VGM mdoel in TWA framework
   integer   :: ZB_type        !< Select how to compute the trace part of ZB model:
                               !! 0 - both deviatoric and trace components are computed
                               !! 1 - only deviatoric component is computed
@@ -51,6 +53,8 @@ type, public :: ZB2020_CS ; private
 
   real, dimension(:,:,:), allocatable :: &
           sh_xx,   & !< Horizontal tension (du/dx - dv/dy) in h (CENTER)
+                     !! points including metric terms [T-1 ~> s-1]
+          div_xx,  & !< Horizontal divergence (du/dx + dv/dy) in h (CENTER)
                      !! points including metric terms [T-1 ~> s-1]
           sh_xy,   & !< Horizontal shearing strain (du/dy + dv/dx) in q (CORNER)
                      !! points including metric terms [T-1 ~> s-1]
@@ -151,6 +155,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "\t 1 - only deviatoric component is computed\n" //&
                  "\t 2 - only trace component is computed", default=0)
 
+  call get_param(param_file, mdl, "ZB_DIVERGENCE", CS%compute_div, &
+                 "If true, extends ZB20 model with divergence " //&
+                 "making it effectively VGM mdoel in TWA framework ", default=.false.)
+
   call get_param(param_file, mdl, "ZB_SCHEME", CS%ZB_cons, &
                  "Select a discretization scheme for ZB model:\n" //&
                  "\t 0 - non-conservative scheme\n" //&
@@ -225,6 +233,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   ! with full halo because they potentially may be filtered
   ! with marching halo algorithm
   allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  allocate(CS%div_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
@@ -285,6 +294,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                           G%Domain%nihalo, G%Domain%njhalo), 2)
 
     call create_group_pass(CS%pass_xx, CS%sh_xx, G%Domain, halo=CS%HPF_halo)
+    call create_group_pass(CS%pass_xx, CS%div_xx, G%Domain, halo=CS%HPF_halo)
     call create_group_pass(CS%pass_xy, CS%sh_xy, G%Domain, halo=CS%HPF_halo, &
       position=CORNER)
     call create_group_pass(CS%pass_xy, CS%vort_xy, G%Domain, halo=CS%HPF_halo, &
@@ -298,6 +308,7 @@ subroutine ZB2020_end(CS)
   type(ZB2020_CS), intent(inout) :: CS  !< ZB2020 control structure.
 
   deallocate(CS%sh_xx)
+  deallocate(CS%div_xx)
   deallocate(CS%sh_xy)
   deallocate(CS%vort_xy)
   deallocate(CS%hq)
@@ -327,7 +338,7 @@ end subroutine ZB2020_end
 !! and halo 1 for sh_xy and vort_xy
 !! We apply zero boundary conditions to velocity gradients
 !! which is required for filtering operations
-subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
+subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, div_xx, hq, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
@@ -345,6 +356,10 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
 
   real, dimension(SZI_(G),SZJ_(G)), &
     intent(in) :: sh_xx       !< horizontal tension (du/dx - dv/dy)
+                              !! including metric terms [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)), &
+    intent(in) :: div_xx      !< horizontal divergence (du/dx + dv/dy)
                               !! including metric terms [T-1 ~> s-1]
 
   integer, intent(in) :: k    !< The vertical index of the layer to be passed.
@@ -366,6 +381,7 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   ! may require BC
   do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
     CS%sh_xx(i,j,k) = sh_xx(i,j) * G%mask2dT(i,j)
+    CS%div_xx(i,j,k) = div_xx(i,j) * G%mask2dT(i,j)
   enddo ; enddo
 
   ! We multiply by mask to remove
@@ -534,7 +550,9 @@ subroutine compute_stress(G, GV, CS)
     sh_xy_h       ! Shearing strain interpolated to h point [T-1 ~> s-1]
 
   real :: &
-    sh_xx_q       ! Horizontal tension interpolated to q point [T-1 ~> s-1]
+    sh_xx_q, &    ! Horizontal tension interpolated to q point [T-1 ~> s-1]
+    div_xx_q      ! Horizontal divergence interpolated to q point [T-1 ~> s-1]
+    
 
   ! Local variables
   real :: sum_sq  ! 1/2*(vort_xy^2 + sh_xy^2 + sh_xx^2) in h point [T-2 ~> s-2]
@@ -575,6 +593,9 @@ subroutine compute_stress(G, GV, CS)
            + sh_xy_h * sh_xy_h)                 &
            + CS%sh_xx(i,j,k) * CS%sh_xx(i,j,k)  &
             )
+        if (CS%compute_div) then
+          sum_sq = sum_sq + 0.5 * (CS%div_xx(i,j,k) * CS%div_xx(i,j,k))
+        endif
       endif
 
       if (vort_sh_scheme_0) &
@@ -590,6 +611,10 @@ subroutine compute_stress(G, GV, CS)
           ) * G%IareaT(i,j)
       endif
 
+      if (CS%compute_div) then
+        vort_sh = vort_sh - CS%div_xx(i,j,k) * CS%sh_xx(i,j,k)
+      endif
+
       ! B.C. is already applied in kappa_h
       CS%Txx(i,j,k) = CS%kappa_h(i,j) * (- vort_sh + sum_sq)
       CS%Tyy(i,j,k) = CS%kappa_h(i,j) * (+ vort_sh + sum_sq)
@@ -601,9 +626,14 @@ subroutine compute_stress(G, GV, CS)
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
         sh_xx_q = 0.25 * ( (CS%sh_xx(i+1,j+1,k) + CS%sh_xx(i,j,k)) &
                          + (CS%sh_xx(i+1,j,k) + CS%sh_xx(i,j+1,k)))
+        div_xx_q = 0.25 * ( (CS%div_xx(i+1,j+1,k) + CS%div_xx(i,j,k)) &
+                         +  (CS%div_xx(i+1,j,k) + CS%div_xx(i,j+1,k)))
         ! B.C. is already applied in kappa_q
-        CS%Txy(I,J,k) = CS%kappa_q(I,J) * (CS%vort_xy(I,J,k) * sh_xx_q)
-
+        CS%Txy(I,J,k) = CS%vort_xy(I,J,k) * sh_xx_q
+        if (CS%compute_div) then
+          CS%Txy(I,J,k) = CS%Txy(I,J,k) + div_xx_q * CS%sh_xy(I,J,k)
+        endif
+        CS%Txy(I,J,k) = CS%Txy(I,J,k) * CS%kappa_q(I,J)
       enddo ; enddo
     endif
 
@@ -766,7 +796,7 @@ subroutine filter_velocity_gradients(G, GV, CS)
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
 
   real, dimension(SZI_(G), SZJ_(G), SZK_(GV)) :: &
-        sh_xx          ! Copy of CS%sh_xx [T-1 ~> s-1]
+        sh_xx, div_xx  ! Copy of CS%sh_xx and CS%div_xx [T-1 ~> s-1]
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
         sh_xy, vort_xy ! Copy of CS%sh_xy and CS%vort_xy [T-1 ~> s-1]
 
@@ -794,6 +824,7 @@ subroutine filter_velocity_gradients(G, GV, CS)
     ! Halo of size 2 is valid
     do j=js-2,je+2; do i=is-2,ie+2
       sh_xx(i,j,k) = CS%sh_xx(i,j,k)
+      div_xx(i,j,k) = CS%div_xx(i,j,k)
     enddo; enddo
     ! Only halo of size 1 is valid
     do J=Jsq-1,Jeq+1; do I=Isq-1,Ieq+1
@@ -817,6 +848,7 @@ subroutine filter_velocity_gradients(G, GV, CS)
     endif
 
     call filter_hq(G, GV, CS, xx_halo, xx_iter, h=CS%sh_xx)
+    call filter_hq(G, GV, CS, xx_halo, xx_iter, h=CS%div_xx)
 
     if (xx_halo < 2) &
       call start_group_pass(CS%pass_xx, G%Domain, clock=CS%id_clock_mpi)
@@ -841,6 +873,7 @@ subroutine filter_velocity_gradients(G, GV, CS)
   do k=1,nz
     do j=js-2,je+2; do i=is-2,ie+2
       CS%sh_xx(i,j,k) = sh_xx(i,j,k) - CS%sh_xx(i,j,k)
+      CS%div_xx(i,j,k) = div_xx(i,j,k) - CS%div_xx(i,j,k)
     enddo; enddo
     do J=Jsq-1,Jeq+1; do I=Isq-1,Ieq+1
       CS%sh_xy(I,J,k) = sh_xy(I,J,k) - CS%sh_xy(I,J,k)
