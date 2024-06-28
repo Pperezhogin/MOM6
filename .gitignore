@@ -13,3 +13,8 @@ configure
 /Makefile
 Makefile.mkmf
 *.png
+*.pdf
+*checkpoint.ipynb
+*.mp4
+*.gif
+*.out
