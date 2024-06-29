@@ -10,6 +10,7 @@ use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
+use MOM_error_handler,         only : MOM_error, FATAL
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type, &
                               start_group_pass, complete_group_pass
 use MOM_domains,       only : To_North, To_East
@@ -28,6 +29,13 @@ type, public :: PG23_CS ; private
   ! Parameters
   real :: test_width      !< Width of the test filter (hat) w.r.t. grid spacing
   real :: filters_ratio   !< The ratio of combined (hat(bar)) to base (bar) filters
+
+  real, dimension(:,:), allocatable :: &
+          dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
+          dy_dxT,    & !< Pre-calculated dy/dx at h points [nondim]
+          dx_dyBu,   & !< Pre-calculated dx/dy at q points [nondim]
+          dy_dxBu,   & !< Pre-calculated dy/dx at q points [nondim]
+          grid_sp_q4   !< Pre-calculated dx^4  at q point  [L4 ~> m4]
   
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
@@ -36,6 +44,8 @@ type, public :: PG23_CS ; private
 
   !>@{ CPU time clock IDs
   integer :: id_clock_module
+  integer :: id_clock_mpi
+  integer :: id_clock_filter
   !>@}
 end type PG23_CS
 
@@ -53,9 +63,16 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
   type(PG23_CS),           intent(inout) :: CS         !< PG23 control structure.
   logical,                 intent(out)   :: use_PG23   !< If true, turns on ZB scheme.
 
+  integer :: i, j
+  integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
+  real :: dx2q, dy2q ! Squared grid spacings [L2 ~> m2]
+
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_dynamic_closures" ! This module's name.
+
+  isd  = G%isd  ; ied  = G%ied  ; jsd  = G%jsd  ; jed  = G%jed
+  IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   call log_version(param_file, mdl, version, "")
 
@@ -75,6 +92,24 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   ! Clock IDs
   CS%id_clock_module = cpu_clock_id('(Ocean Perezhogin-Glazunov-2023)', grain=CLOCK_MODULE)
+  CS%id_clock_mpi = cpu_clock_id('(PG23 MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_filter = cpu_clock_id('(PG23 filter computations)', grain=CLOCK_ROUTINE, sync=.false.)
+
+  allocate(CS%dx_dyT(SZI_(G),SZJ_(G)), source=0.)
+  allocate(CS%dy_dxT(SZI_(G),SZJ_(G)), source=0.)
+  allocate(CS%dx_dyBu(SZIB_(G),SZJB_(G)), source=0.)
+  allocate(CS%dy_dxBu(SZIB_(G),SZJB_(G)), source=0.)
+  allocate(CS%grid_sp_q4(SZIB_(G),SZJB_(G)), source=0.)
+
+  do j=jsd,jed ; do i=isd,ied
+    CS%dx_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; CS%dy_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
+  enddo ; enddo
+
+  do J=JsdB,JedB ; do I=IsdB,IedB
+    CS%dx_dyBu(I,J) = G%dxBu(I,J)*G%IdyBu(I,J) ; CS%dy_dxBu(I,J) = G%dyBu(I,J)*G%IdxBu(I,J)
+    dx2q = G%dxBu(I,J)*G%dxBu(I,J) ; dy2q = G%dyBu(I,J)*G%dyBu(I,J)
+    CS%grid_sp_q4(I,J) = ((2.0*dx2q*dy2q) / (dx2q+dy2q))**2
+  enddo ; enddo
 
 end subroutine PG23_init
 
@@ -82,26 +117,543 @@ end subroutine PG23_init
 subroutine PG23_end(CS)
   type(PG23_CS), intent(inout) :: CS  !< PG23 control structure.
 
+  deallocate(CS%dx_dyT)
+  deallocate(CS%dy_dxT)
+  deallocate(CS%dx_dyBu)
+  deallocate(CS%dy_dxBu)
+  deallocate(CS%grid_sp_q4)
+
 end subroutine PG23_end
 
 !> This function estimates free parameters of PG23 closure 
 !! using germano identity
+!! In a simplest case of estimation of biharmonic Smagorinsky procedure:
+!! * Exchange u,v velocities with full halo of 4 points
+!! * Apply test filter to u, v
+!! * Compute vorticity vort_xy and stress tensor sh_xx, sh_xy on both filter levels
+!! * Apply test filter to u*vort_xy and v*vort_xy
+!! * Compute leonard vorticity flux
+!! * Compute modulus of strain rate |S| and grad(Lap(vort_xy)) on both filter levels
+!! * Compute biharmonic Smagorinsky model of flux on two filters levels
+!! * Apply test filter to the model on base level
+!! * Compute alpha = Model_combined - hat(Model_base)
+!! * Compute products, l*alpha and alpha*alpha
+!! * Apply statistical averaging for products to infer the biharmonic Smagorinsky coefficient
 subroutine PG23_germano_identity(u, v, h, G, GV, CS)
-type(ocean_grid_type),         intent(in)    :: G  !< The ocean's grid structure.
-type(verticalGrid_type),       intent(in)    :: GV !< The ocean's vertical grid structure.
-type(PG23_CS),                 intent(inout) :: CS  !< PG23 control structure.
+  type(ocean_grid_type),         intent(in)    :: G  !< The ocean's grid structure.
+  type(verticalGrid_type),       intent(in)    :: GV !< The ocean's vertical grid structure.
+  type(PG23_CS),                 intent(inout) :: CS  !< PG23 control structure.
 
-real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-      intent(in)    :: u  !< The zonal velocity [L T-1 ~> m s-1].
-real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-      intent(in)    :: v  !< The meridional velocity [L T-1 ~> m s-1].
-real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
-      intent(in)    :: h  !< Layer thicknesses [H ~> m or kg m-2].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+        intent(in)  :: u  !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+        intent(in)  :: v  !< The meridional velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
+        intent(in)     :: h  !< Layer thicknesses [H ~> m or kg m-2].
 
-call cpu_clock_begin(CS%id_clock_module)
+  real, dimension(SZIB_(G),SZJ_(G)) ::  uf, & ! The fitered zonal velocity [L T-1 ~> m s-1]
+                                        vort_y, & ! y derivative of Vertical vorticity
+                                        vort_yf, & ! y derivative of filtered Vertical vorticity
+                                        lap_vort_y, & ! y derivative of laplacian of Vertical vorticity
+                                        lap_vort_yf, & ! y derivative of laplacian of filtered Vertical vorticity
+                                        smag_y, & ! biharmonic Smagorinsky model on base level
+                                        smag_yf, &  ! biharmonic Smagorinsky model on combined level
+                                        m_y, & ! Smag. in dynamic model
+                                        leo_y ! Leonard vorticity flux
 
-call cpu_clock_end(CS%id_clock_module)
+  real, dimension(SZI_(G),SZJB_(G)) ::  vf, & ! The fitered meridional velocity [L T-1 ~> m s-1]
+                                        vort_x, & ! x derivative of Vertical vorticity
+                                        vort_xf, & ! x derivative of filtered Vertical vorticity
+                                        lap_vort_x, & ! x derivative of laplacian of Vertical vorticity
+                                        lap_vort_xf, & ! x derivative of laplacian of filtered Vertical vorticity
+                                        smag_x, & ! biharmonic Smagorinsky model on base level
+                                        smag_xf, &   ! biharmonic Smagorinsky model on combined level
+                                        m_x, & ! Smag. in dynamic model
+                                        leo_x ! Leonard vorticity flux
+
+  real, dimension(SZIB_(G),SZJB_(G)) :: sh_xy, & ! horizontal shearing strain (du/dy + dv/dx)
+                                        sh_xyf, & ! filtered horizontal shearing strain (du/dy + dv/dx)
+                                        vort_xy, & ! vertical vorticity (dv/dx - du/dy)
+                                        vort_xyf, & ! filtered vertical vorticity (dv/dx - du/dy)
+                                        shear_mag, & ! Magnitude of shear in q points [T-1 ~> s-1]
+                                        shear_magf, & ! Magnitude of the filtered shear in q points [T-1 ~> s-1]
+                                        lap_vort, & ! Laplacian of Vertical vorticity
+                                        lap_vortf  ! Laplacian of filtered Vertical vorticity
+
+  real, dimension(SZI_(G),SZJ_(G))   :: sh_xx, & ! horizontal tension (du/dx - dv/dy)
+                                        sh_xxf, &  ! filtered horizontal tension (du/dx - dv/dy)
+                                        lm, &      ! numerator of Germano identity
+                                        mm         ! denominator of Germano identity
+
+  integer :: k, nz
+
+  !type(group_pass_type) :: pass_uv  ! A handle used for group halo passes
+
+  call cpu_clock_begin(CS%id_clock_module)
+
+  ! Note: halo without this exchange is only 3 points, which is enough for
+  ! Domain-averaged biharmonic Smagorinsky model
+  !call create_group_pass(pass_uv, u, v, G%Domain)
+  !call do_group_pass(pass_uv, G%domain, clock=CS%id_clock_mpi)
+
+  nz = GV%ke
+
+  do k=1,nz
+    uf = u(:,:,k)
+    vf = v(:,:,k)
+    
+    ! Apply test filter to velocities (halo=3 is default in MOM6 for velocities)
+    call filter_wrapper(G, GV, CS, CS%test_width, halo=3, niter=1, u=uf, v=vf)
+
+    ! Compute velocity gradients for eddy viscosity model on base level
+    ! We impose actual halo for filtered and unfiltered velocities
+    call compute_velocity_gradients(u(:,:,k), v(:,:,k), &
+      sh_xx, sh_xy, vort_xy, shear_mag, G, GV, CS, halo=3)
+    ! On combined level
+    call compute_velocity_gradients(uf, vf, &
+      sh_xxf, sh_xyf, vort_xyf, shear_magf, G, GV, CS, halo=2)
+
+    ! Compute grad(Lap(vorticity)) for eddy viscosity model
+    ! In both cases available halo of vorticity is 1 point smaller than for velocity
+    call compute_vorticity_gradients(vort_xy, &
+      vort_x, vort_y, lap_vort, lap_vort_x, lap_vort_y, G, GV, CS, halo=2)
+    ! On combined level
+    call compute_vorticity_gradients(vort_xyf, &
+      vort_xf, vort_yf, lap_vortf, lap_vort_xf, lap_vort_yf, G, GV, CS, halo=1)
+
+    ! Computation of biharmonic Smagorinsky model of vorticity flux
+    ! Halo is 1 point smaller than for the vorticity
+    call  biharmonic_Smagorinsky(lap_vort_x, lap_vort_y, shear_mag, &
+      smag_x, smag_y, G, GV, CS, halo=1, scaling_coefficient=1.0)
+    ! Note: filters ratio is in 4th power because model is biharmonic
+    call  biharmonic_Smagorinsky(lap_vort_xf, lap_vort_yf, shear_magf, &
+      smag_xf, smag_yf, G, GV, CS, halo=0, scaling_coefficient=CS%filters_ratio**4)
+    
+    ! Filter Smagorinky model on base level
+    call filter_wrapper(G, GV, CS, CS%test_width, halo=1, niter=1, u=smag_y, v=smag_x)
+
+    ! Eddy viscosity in Germano identity with halo 0 (halo 1 is possible if needed)
+    m_x = smag_xf - smag_x
+    m_y = smag_yf - smag_y
+
+    ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
+    ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
+    ! Output Leonard flux has halo 0 (halo 2 is also possible if needed)
+    call compute_leonard_flux(leo_x, leo_y,                                  &
+                              u(:,:,k), v(:,:,k), vort_xy, uf, vf, vort_xyf, &
+                              G, GV, CS, CS%test_width, halo=1)
+
+    ! Output halo is 0; 
+    ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
+    call compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, G, GV, CS, halo=1)
+    
+  enddo ! end of k loop
+
+  call cpu_clock_end(CS%id_clock_module)
 
 end subroutine PG23_germano_identity
+
+!> This function computes scalar product of leonard flux
+!! and eddy viscosity model in center points
+subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
+                         G, GV, CS, halo)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
+  integer, intent(in) :: halo !< Currently available halo points for vorticity fluxes
+                              !! in symmetric memory model
+  
+  real, dimension(SZI_(G),SZJB_(G)), intent(in) :: leo_x, & !< Leonard vorticity x-flux
+                                                   m_x      !< Eddy visocitty in Germano identity x-flux  
+  real, dimension(SZIB_(G),SZJ_(G)), intent(in) :: leo_y, & !< Leonard vorticity y-flux
+                                                   m_y      !< Eddy visocitty in Germano identity y-flux  
+
+  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: lm, &  !< Germano identity: Leonard flux times eddy viscosity flux
+                                                     mm     !< Germano identity: eddy viscosity flux squared
+  
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  ! This operation does not lose halo
+  do j=js-halo,je+halo ; do i=is-halo, ie+halo
+    ! Here we use two-point interpolation, so coefficient is 0.5
+    lm(i,j) = 0.5 * ((leo_x(i,J) * m_x(i,J) + leo_x(i,J-1) * m_x(i,J-1)) + &
+                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j)))
+
+    mm(i,j) = 0.5 * ((m_x(i,J) * m_x(i,J) + m_x(i,J-1) * m_x(i,J-1)) + &
+                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j)))
+  enddo ; enddo
+  
+end subroutine compute_lm_mm
+
+!> This function computes the leonard flux
+!! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
+!! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
+subroutine compute_leonard_flux(leo_x, leo_y,                      &
+                                  u, v, vort_xy, uf, vf, vort_xyf, &
+                                  G, GV, CS, filter_width, halo)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
+  integer, intent(in) :: halo !< Currently available halo points for vorticity (vort_xy, not vort_xyf)
+                              !! (velocity assumed to have larger halo) in symmetric memory model
+  real, intent(in) :: filter_width !< Filter width (nondim) used to compute bar(u*vort_xy)
+                                      !! and used to compute bar(u), var(v) and bar(vort_xy) before filter call
+
+  real, dimension(SZIB_(G),SZJ_(G)), &
+           intent(in) :: u, & !< The zonal velocity [L T-1 ~> m s-1].
+                         uf   !< The filtered zonal velocity [L T-1 ~> m s-1].
+            
+  real, dimension(SZI_(G),SZJB_(G)), &
+           intent(in) :: v, & !< The meridional velocity [L T-1 ~> m s-1].
+                         vf   !< The filtered meridional velocity [L T-1 ~> m s-1].
+
+  real, dimension(SZIB_(G),SZJB_(G)), &
+      intent(in)    :: vort_xy, &     !< Vertical vorticity (dv/dx - du/dy) [T-1 ~> s-1]
+                       vort_xyf       !< Filtered vertical vorticity (dv/dx - du/dy) [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: leo_x ! Leonard vorticity x-flux
+  real, dimension(SZIB_(G),SZJ_(G)), intent(inout) :: leo_y ! Leonard vorticity y-flux
+    
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  ! u * vort_xy
+  do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
+    ! Here 0.125 is interpolation weight, i.e. 1/4 * 1/2 = 1/8 = 0.125
+    ! Similarly to computing vorticity gradients, halo is not reduced
+    leo_x(i,J) = 0.125 * ((u(I,j) + u(I-1,j+1)) + (u(I-1,j) + u(I,j+1))) * (vort_xy(I,J) + vort_xy(I-1,J)) * G%mask2dCv(i,J)
+  enddo ; enddo
+
+  ! v * vort_xy
+  do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
+    ! Here 0.125 is interpolation weight, i.e. 1/4 * 1/2 = 1/8 = 0.125
+    leo_y(I,j) = 0.125 * ((v(i,J) + v(i+1,J-1)) + (v(i,J-1) + v(i+1,J))) * (vort_xy(I,J) + vort_xy(I,J-1)) * G%mask2dCu(I,j)
+  enddo ; enddo
+
+  ! bar(u * vort_xy) and bar(v * vort_xy)
+  call filter_wrapper(G, GV, CS, filter_width, halo=halo, niter=1, u=leo_y, v=leo_x)
+  
+  ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
+  do J=Jsq-(halo-1),Jeq+(halo-1) ; do i=is-(halo-1),ie+(halo-1)
+    leo_x(i,J) = leo_x(i,J) - 0.125 * ((uf(I,j) + uf(I-1,j+1)) + (uf(I-1,j) + uf(I,j+1))) * (vort_xyf(I,J) + vort_xyf(I-1,J)) * G%mask2dCv(i,J)
+  enddo ; enddo
+
+  ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
+  do j=js-(halo-1),je+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
+    leo_y(I,j) = leo_y(I,j) - 0.125 * ((vf(i,J) + vf(i+1,J-1)) + (vf(i,J-1) + vf(i+1,J))) * (vort_xyf(I,J) + vort_xyf(I,J-1)) * G%mask2dCu(I,j)
+  enddo ; enddo
+  
+end subroutine compute_leonard_flux
+
+!> This function computes the biharmonic Smagorinsky model of 
+!! vorticity flux:
+!! bar(u'*vort_xy') = (dx)^4 * |S| * d/dx(Lap(vort_xy))
+!! bar(v'*vort_xy') = (dx)^4 * |S| * d/dy(Lap(vort_xy))
+subroutine biharmonic_Smagorinsky(lap_vort_x, lap_vort_y, shear_mag, &
+                                  smag_x, smag_y, G, GV, CS, halo, scaling_coefficient)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
+  integer, intent(in) :: halo !< Currently available halo points for lap_vort_x, lap_vort_y
+                              !! in symmetric memory model
+  real, intent(in) :: scaling_coefficient !< The Smagorinsky coefficient or filters ratio
+
+  real, dimension(SZI_(G),SZJB_(G)), &
+      intent(in) :: lap_vort_x  !< x derivative of Laplacian of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+  real, dimension(SZIB_(G),SZJ_(G)), &
+      intent(in) :: lap_vort_y  !< y derivative of Laplacian of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+      intent(in) :: shear_mag   !< Magnitude of shear in q points [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJB_(G)), &
+      intent(inout) :: smag_x !< biharmonic Smagorinsky model on base level, x-flux
+  real, dimension(SZIB_(G),SZJ_(G)), &
+      intent(inout) :: smag_y !< biharmonic Smagorinsky model on base level, y-flux
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+  real :: weight ! Scaling coefficient times interpolation coefficient (0.5)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  weight = scaling_coefficient * 0.5
+
+  ! Smagorinsky model without non-dimensional coefficient
+  do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
+    ! lap_vort_x is already multiplied by a mask
+    smag_x(i,J) = (weight * lap_vort_x(i,J)) * &
+       (CS%grid_sp_q4(I,J) * shear_mag(I,J) + CS%grid_sp_q4(I-1,J) * shear_mag(I-1,J))
+  enddo ; enddo
+
+  do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
+    smag_y(I,j) = (weight * lap_vort_y(I,j)) * &
+       (CS%grid_sp_q4(I,J) * shear_mag(I,J) + CS%grid_sp_q4(I,J-1) * shear_mag(I,J-1))
+  enddo ; enddo
+
+end subroutine biharmonic_Smagorinsky
+
+!> This function computes the gradients of the vorticity field:
+!! d (vort_xy) /dx, d (vort_xy) /dy
+!! Then we compute their divergence to get nabla^2 (vort_xy)
+!! Then we compute gradient of nabla^2 (vort_xy)
+subroutine compute_vorticity_gradients(vort_xy,                          &
+                                       vort_x, vort_y,                   &
+                                       lap_vort, lap_vort_x, lap_vort_y, &
+                                       G, GV, CS, halo)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
+  integer, intent(in) :: halo !< Currently available halo points for vorticity
+                              !! in symmetric memory model
+
+  real, dimension(SZIB_(G),SZJB_(G)), &
+      intent(in)    :: vort_xy     !< Vertical vorticity (dv/dx - du/dy) [T-1 ~> s-1]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+      intent(inout) :: lap_vort    !< Laplacian of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+      real, dimension(SZI_(G),SZJB_(G)), &
+      intent(inout) :: vort_x      !< x derivative of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+  real, dimension(SZIB_(G),SZJ_(G)), &
+      intent(inout) :: vort_y      !< y derivative of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+  real, dimension(SZI_(G),SZJB_(G)), &
+      intent(inout) :: lap_vort_x  !< x derivative of Laplacian of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+  real, dimension(SZIB_(G),SZJ_(G)), &
+      intent(inout) :: lap_vort_y  !< y derivative of Laplacian of Vertical vorticity (dv/dx - du/dy) [T-1 L-2 ~> s-1 m-2]
+    
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  ! Vorticity x-gradient
+  ! This operation does not loose halo on symmetric grid
+  do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
+    vort_x(i,J) = G%IdxCv(i,J) * (vort_xy(I,J) - vort_xy(I-1,J)) * G%mask2dCv(i,J)
+  enddo ; enddo
+
+  ! Vorticity y-gradient
+  do J=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
+    vort_y(I,j) = G%IdyCu(I,j) * (vort_xy(I,J) - vort_xy(I,J-1)) * G%mask2dCu(I,j)
+  enddo ; enddo
+
+  ! Divergence of vorticity gradients
+  ! According to finite volume formula
+  do J=Jsq-(halo-1),Jeq+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
+    lap_vort(I,J) = G%IareaBu(I,J) * G%mask2dBu(I,J) * (                         &
+                    (vort_x(i+1,J)*G%dyCv(i+1,J) - vort_x(i,J)*G%dyCv(i,J)) +  &
+                    (vort_y(I,j+1)*G%dxCu(I,j+1) - vort_y(I,j)*G%dxCu(I,j))    &
+                                                                              )
+  enddo ; enddo
+
+  ! Lap Vorticity x-gradient
+  do J=Jsq-(halo-1),Jeq+(halo-1) ; do i=is-(halo-1),ie+(halo-1)
+    lap_vort_x(i,J) = G%IdxCv(i,J) * (lap_vort(I,J) - lap_vort(I-1,J)) * G%mask2dCv(i,J)
+  enddo ; enddo
+
+  ! Lap Vorticity y-gradient
+  do j=js-(halo-1),je+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
+    lap_vort_y(I,j) = G%IdyCu(I,j) * (lap_vort(I,J) - lap_vort(I,J-1)) * G%mask2dCu(I,j)
+  enddo ; enddo
+
+end subroutine compute_vorticity_gradients
+
+!> This function computes the gradients of the velocity field:
+!! vort_xy = (dv/dx - du/dy)
+!! sh_xy = (du/dy + dv/dx)
+!! sh_xx = (du/dx - dv/dy)
+!! shear_mag = sqrt(sh_xy**2 + sh_xx**2)
+subroutine compute_velocity_gradients(u, v,                    &
+                            sh_xx, sh_xy, vort_xy, shear_mag,  &
+                            G, GV, CS, halo)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
+  real, dimension(SZIB_(G),SZJ_(G)), &
+           intent(in) :: u !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G)), &
+           intent(in) :: v !< The meridional velocity [L T-1 ~> m s-1].
+  integer, intent(in) :: halo !< Currently available halo points for u,v velocities
+                              !! in symmetric memory model
+
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(inout) :: sh_xy       !< horizontal shearing strain (du/dy + dv/dx)
+                                 !! including metric terms [T-1 ~> s-1]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(inout) :: vort_xy     !< Vertical vorticity (dv/dx - du/dy)
+                                 !! including metric terms [T-1 ~> s-1]
+  real, dimension(SZI_(G),SZJ_(G)), &
+    intent(inout) :: sh_xx       !< horizontal tension (du/dx - dv/dy)
+                                 !! including metric terms [T-1 ~> s-1]
+  real, dimension(SZIB_(G),SZJB_(G)), &
+    intent(inout) :: shear_mag   !< Magnitude of shear in q points [T-1 ~> s-1]
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j
+
+  real :: dudx, dvdy, dvdx, dudy ! Components of velocity gradient tensor [T-1 ~> s-1]
+  real :: sh_xx_sq, sh_xy_sq     ! Squares of velocity gradients [T-2 ~> s-2]
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  ! Calculate horizontal tension
+  ! Here we assume symmetric memory model, where 
+  ! gradients in center points can be computed with same halo as 
+  ! velocities
+  do j=js-halo,je+halo ; do i=is-halo,ie+halo
+    dudx = CS%dy_dxT(i,j)*(G%IdyCu(I,j) * u(I,j) - &
+                                G%IdyCu(I-1,j) * u(I-1,j))
+    dvdy = CS%dx_dyT(i,j)*(G%IdxCv(i,J) * v(i,J) - &
+                                G%IdxCv(i,J-1) * v(i,J-1))
+    sh_xx(i,j) = G%mask2dT(i,j) * (dudx - dvdy)
+  enddo ; enddo
+
+  ! Components for the shearing strain and vorticity
+  ! In symmetric memory model we can compute only current_halo-1 points
+  do J=Jsq-(halo-1),Jeq+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
+    dvdx = CS%dy_dxBu(I,J)*(v(i+1,J)*G%IdyCv(i+1,J) - v(i,J)*G%IdyCv(i,J))
+    dudy = CS%dx_dyBu(I,J)*(u(I,j+1)*G%IdxCu(I,j+1) - u(I,j)*G%IdxCu(I,j))
+    sh_xy(I,J) = G%mask2dBu(I,J) * (dvdx + dudy)
+
+    vort_xy(I,J) = G%mask2dBu(I,J) * G%IareaBu(I,J) * (    &
+            (v(i+1,J)*G%dyCv(i+1,J) - v(i,J)*G%dyCv(i,J))  &
+          - (u(I,j+1)*G%dxCu(I,j+1) - u(I,j)*G%dxCu(I,j))  &
+           )
+  enddo ; enddo
+
+  ! Shear magnitude in q point. Halo points correspond to
+  ! both halo of sh_xx and sh_xy
+  do J=Jsq-(halo-1),Jeq+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
+    sh_xy_sq = sh_xy(I,J)**2
+    sh_xx_sq = 0.25 * ( (sh_xx(i,j)**2 + sh_xx(i+1,j+1)**2) &
+                      + (sh_xx(i,j+1)**2 + sh_xx(i+1,j)**2) )
+    shear_mag(I,J) = sqrt(sh_xx_sq + sh_xy_sq) * G%mask2dBu(I,J)
+  enddo ; enddo
+  
+end subroutine compute_velocity_gradients
+
+!> Wrapper for filter_2D function. The border indices for q and h
+!! arrays are substituted. 
+!! The input array must have zero B.C. applied. B.C. is applied for output array with
+!! multiplying by mask.
+subroutine filter_wrapper(G, GV, CS, filter_width, halo, niter, q, h, u, v)
+  type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
+  type(PG23_CS),           intent(in) :: CS      !< PG23 control structure
+  real, dimension(SZI_(G),SZJ_(G)),   optional, &
+           intent(inout) :: h !< Input/output array in h points [arbitrary]
+  real, dimension(SZIB_(G),SZJB_(G)), optional, &
+           intent(inout) :: q !< Input/output array in q points [arbitrary]
+  real, dimension(SZIB_(G),SZJ_(G)),  optional, &
+           intent(inout) :: u !< Input/output array in u points [arbitrary]
+  real, dimension(SZI_(G),SZJB_(G)),  optional, &
+           intent(inout) :: v !< Input/output array in v points [arbitrary]
+  integer, intent(in)    :: halo                 !< Currently available halo points
+  integer, intent(in)    :: niter                !< The number of iterations to perform
+  real,    intent(in)    :: filter_width         !< Filter width of the filter w.r.t. grid spacing
+
+  if (niter == 0) return ! nothing to do
+
+  call cpu_clock_begin(CS%id_clock_filter)
+
+  if (present(h)) then
+    call filter_2D(h, G%mask2dT, filter_width,     &
+              G%isd, G%ied, G%jsd, G%jed,          &
+              G%isc, G%iec, G%jsc, G%jec,          &
+              halo, niter)
+  endif
+
+  if (present(q)) then
+    call filter_2D(q, G%mask2dBu, filter_width,    &
+              G%IsdB, G%IedB, G%JsdB, G%JedB,      &
+              G%IscB, G%IecB, G%JscB, G%JecB,      &
+              halo, niter)
+  endif
+
+  if (present(u)) then
+    call filter_2D(u, G%mask2dCu, filter_width,    &
+              G%IsdB, G%IedB, G%jsd, G%jed,        &
+              G%IscB, G%IecB, G%jsc, G%jec,        &
+              halo, niter)
+  endif
+
+  if (present(v)) then
+    call filter_2D(v, G%mask2dCv, filter_width,    &
+              G%isd, G%ied, G%JsdB, G%JedB,        &
+              G%isc, G%iec, G%JscB, G%JecB,        &
+              halo, niter)
+  endif
+
+  call cpu_clock_end(CS%id_clock_filter)
+end subroutine filter_wrapper
+
+!> Spatial lateral filter applied to 2D array. The lateral filter is given
+!! by the convolutional kernel:
+!!     [1 2 1]
+!! C = |2 4 2| * 1/16
+!!     [1 2 1]
+!! The fast algorithm decomposes the 2D filter into two 1D filters as follows:
+!!     [1]
+!! C = |2| * [1 2 1] * 1/16
+!!     [1]
+!! The input array must have zero B.C. applied. B.C. is applied for output array with
+!! multiplying by mask.
+subroutine filter_2D(x, mask, filter_width,                 &
+                     isd, ied, jsd, jed, is, ie, js, je,    &
+                     current_halo, niter)
+  integer, intent(in) :: isd !< Indices of array size
+  integer, intent(in) :: ied !< Indices of array size
+  integer, intent(in) :: jsd !< Indices of array size
+  integer, intent(in) :: jed !< Indices of array size
+  integer, intent(in) :: is  !< Indices of owned points
+  integer, intent(in) :: ie  !< Indices of owned points
+  integer, intent(in) :: js  !< Indices of owned points
+  integer, intent(in) :: je  !< Indices of owned points
+  real, dimension(isd:ied,jsd:jed), &
+           intent(inout) :: x !< Input/output array [arbitrary]
+  real, dimension(isd:ied,jsd:jed), &
+           intent(in)    :: mask !< Mask array of land points divided by 16 [nondim]
+  real,    intent(in)    :: filter_width         !< Filter width of the filter w.r.t. grid spacing
+  integer, intent(in)    :: current_halo         !< Currently available halo points
+  integer, intent(in)    :: niter                !< The number of iterations to perform
+
+  real :: weight_center, weight_side ! Filter weights [nondim]
+  integer :: i, j, k, iter, halo
+
+  real :: tmp(isd:ied, jsd:jed) ! Array with temporary results [arbitrary]
+
+  if (niter == 0) return ! nothing to do
+  if (niter > current_halo) then
+    call MOM_error(FATAL, &
+         "MOM_dynamic_closures: filter_2D requires too many iterations")
+  endif
+
+  weight_side = filter_width**2 / 24.
+  weight_center = 1. - 2. * weight_side 
+
+  halo = current_halo - 1 ! Save as many halo points as possible
+  do iter=1,niter
+      do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
+        tmp(i,j) = weight_center * x(i,j) + weight_side * (x(i,j-1) + x(i,j+1))
+      enddo; enddo
+
+      do j = js-halo, je+halo; do i = is-halo, ie+halo;
+        x(i,j) = (weight_center * tmp(i,j) + weight_side * (tmp(i-1,j) + tmp(i+1,j))) * mask(i,j)
+      enddo; enddo
+    halo = halo - 1
+  enddo
+
+  ! Update halo information
+  ! Do this operation in mind whenever you use this function
+  ! current_halo = current_halo - niter
+
+end subroutine filter_2D
 
 end module MOM_dynamic_closures
