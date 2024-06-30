@@ -25,6 +25,8 @@ use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs
 use MOM_Zanna_Bolton,          only : ZB2020_lateral_stress, ZB2020_init, ZB2020_end, &
                                       ZB2020_CS, ZB2020_copy_gradient_and_thickness
+use MOM_dynamic_closures,      only : PG23_germano_identity, PG23_init, PG23_end, &
+                                      PG23_CS
 
 implicit none ; private
 
@@ -113,6 +115,7 @@ type, public :: hor_visc_CS ; private
                              !! limit grid Reynolds number [L4 T-1 ~> m4 s-1]
 
   type(ZB2020_CS) :: ZB2020  !< Zanna-Bolton 2020 control structure.
+  type(PG23_CS) :: PG23      !< Perezhogin & Glazunov 2023 control structure
   logical :: use_ZB2020      !< If true, use Zanna-Bolton 2020 parameterization.
   logical :: use_PG23        !< If true, use Perezhogin & Glazunov 2023 parameterization
 
@@ -410,6 +413,10 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     vert_vort_mag_smooth, &  ! magnitude of gradient of smoothed vertical vorticity (h or q) [L-1 T-1 ~> m-1 s-1]
     hrat_min, &     ! h_min divided by the thickness at the stress point (h or q) [nondim]
     visc_bound_rem  ! fraction of overall viscous bounds that remain to be applied (h or q) [nondim]
+
+  if (CS%use_PG23) then
+    call PG23_germano_identity(u, v, h, G, GV, CS%PG23)
+  endif
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -1950,6 +1957,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
 
   ! init control structure
   call ZB2020_init(Time, G, GV, US, param_file, diag, CS%ZB2020, CS%use_ZB2020)
+  call PG23_init(Time, G, GV, US, param_file, diag, CS%PG23, CS%use_PG23)
 
   CS%initialized = .true.
 
@@ -2999,6 +3007,10 @@ subroutine hor_visc_end(CS)
 
   if (CS%use_ZB2020) then
     call ZB2020_end(CS%ZB2020)
+  endif
+
+  if (CS%use_PG23) then
+    call PG23_end(CS%PG23)
   endif
 
 end subroutine hor_visc_end
