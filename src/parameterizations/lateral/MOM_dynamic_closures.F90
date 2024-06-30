@@ -151,7 +151,7 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
         intent(in)     :: h  !< Layer thicknesses [H ~> m or kg m-2].
 
-  real, dimension(SZIB_(G),SZJ_(G)) ::  uf, & ! The fitered zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) ::  uf, & ! The fitered zonal velocity [L T-1 ~> m s-1]
                                         vort_y, & ! y derivative of Vertical vorticity
                                         vort_yf, & ! y derivative of filtered Vertical vorticity
                                         lap_vort_y, & ! y derivative of laplacian of Vertical vorticity
@@ -161,7 +161,7 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
                                         m_y, & ! Smag. in dynamic model
                                         leo_y ! Leonard vorticity flux
 
-  real, dimension(SZI_(G),SZJB_(G)) ::  vf, & ! The fitered meridional velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) ::  vf, & ! The fitered meridional velocity [L T-1 ~> m s-1]
                                         vort_x, & ! x derivative of Vertical vorticity
                                         vort_xf, & ! x derivative of filtered Vertical vorticity
                                         lap_vort_x, & ! x derivative of laplacian of Vertical vorticity
@@ -171,7 +171,7 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
                                         m_x, & ! Smag. in dynamic model
                                         leo_x ! Leonard vorticity flux
 
-  real, dimension(SZIB_(G),SZJB_(G)) :: sh_xy, & ! horizontal shearing strain (du/dy + dv/dx)
+  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: sh_xy, & ! horizontal shearing strain (du/dy + dv/dx)
                                         sh_xyf, & ! filtered horizontal shearing strain (du/dy + dv/dx)
                                         vort_xy, & ! vertical vorticity (dv/dx - du/dy)
                                         vort_xyf, & ! filtered vertical vorticity (dv/dx - du/dy)
@@ -180,7 +180,7 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
                                         lap_vort, & ! Laplacian of Vertical vorticity
                                         lap_vortf  ! Laplacian of filtered Vertical vorticity
 
-  real, dimension(SZI_(G),SZJ_(G))   :: sh_xx, & ! horizontal tension (du/dx - dv/dy)
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: sh_xx, & ! horizontal tension (du/dx - dv/dy)
                                         sh_xxf, &  ! filtered horizontal tension (du/dx - dv/dy)
                                         lm, &      ! numerator of Germano identity
                                         mm         ! denominator of Germano identity
@@ -199,53 +199,53 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
   nz = GV%ke
 
   do k=1,nz
-    uf = u(:,:,k)
-    vf = v(:,:,k)
+    uf(:,:,k) = u(:,:,k)
+    vf(:,:,k) = v(:,:,k)
     
     ! Apply test filter to velocities (halo=3 is default in MOM6 for velocities)
-    call filter_wrapper(G, GV, CS, CS%test_width, halo=3, niter=1, u=uf, v=vf)
+    call filter_wrapper(G, GV, CS, CS%test_width, halo=3, niter=1, u=uf(:,:,k), v=vf(:,:,k))
 
     ! Compute velocity gradients for eddy viscosity model on base level
     ! We impose actual halo for filtered and unfiltered velocities
     call compute_velocity_gradients(u(:,:,k), v(:,:,k), &
-      sh_xx, sh_xy, vort_xy, shear_mag, G, GV, CS, halo=3)
+      sh_xx(:,:,k), sh_xy(:,:,k), vort_xy(:,:,k), shear_mag(:,:,k), G, GV, CS, halo=3)
     ! On combined level
-    call compute_velocity_gradients(uf, vf, &
-      sh_xxf, sh_xyf, vort_xyf, shear_magf, G, GV, CS, halo=2)
+    call compute_velocity_gradients(uf(:,:,k), vf(:,:,k), &
+      sh_xxf(:,:,k), sh_xyf(:,:,k), vort_xyf(:,:,k), shear_magf(:,:,k), G, GV, CS, halo=2)
 
     ! Compute grad(Lap(vorticity)) for eddy viscosity model
     ! In both cases available halo of vorticity is 1 point smaller than for velocity
-    call compute_vorticity_gradients(vort_xy, &
-      vort_x, vort_y, lap_vort, lap_vort_x, lap_vort_y, G, GV, CS, halo=2)
+    call compute_vorticity_gradients(vort_xy(:,:,k), &
+      vort_x(:,:,k), vort_y(:,:,k), lap_vort(:,:,k), lap_vort_x(:,:,k), lap_vort_y(:,:,k), G, GV, CS, halo=2)
     ! On combined level
-    call compute_vorticity_gradients(vort_xyf, &
-      vort_xf, vort_yf, lap_vortf, lap_vort_xf, lap_vort_yf, G, GV, CS, halo=1)
+    call compute_vorticity_gradients(vort_xyf(:,:,k), &
+      vort_xf(:,:,k), vort_yf(:,:,k), lap_vortf(:,:,k), lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), G, GV, CS, halo=1)
 
     ! Computation of biharmonic Smagorinsky model of vorticity flux
     ! Halo is 1 point smaller than for the vorticity
-    call  biharmonic_Smagorinsky(lap_vort_x, lap_vort_y, shear_mag, &
-      smag_x, smag_y, G, GV, CS, halo=1, scaling_coefficient=1.0)
+    call  biharmonic_Smagorinsky(lap_vort_x(:,:,k), lap_vort_y(:,:,k), shear_mag(:,:,k), &
+      smag_x(:,:,k), smag_y(:,:,k), G, GV, CS, halo=1, scaling_coefficient=1.0)
     ! Note: filters ratio is in 4th power because model is biharmonic
-    call  biharmonic_Smagorinsky(lap_vort_xf, lap_vort_yf, shear_magf, &
-      smag_xf, smag_yf, G, GV, CS, halo=0, scaling_coefficient=CS%filters_ratio**4)
+    call  biharmonic_Smagorinsky(lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), shear_magf(:,:,k), &
+      smag_xf(:,:,k), smag_yf(:,:,k), G, GV, CS, halo=0, scaling_coefficient=CS%filters_ratio**4)
     
     ! Filter Smagorinky model on base level
-    call filter_wrapper(G, GV, CS, CS%test_width, halo=1, niter=1, u=smag_y, v=smag_x)
+    call filter_wrapper(G, GV, CS, CS%test_width, halo=1, niter=1, u=smag_y(:,:,k), v=smag_x(:,:,k))
 
     ! Eddy viscosity in Germano identity with halo 0 (halo 1 is possible if needed)
-    m_x = smag_xf - smag_x
-    m_y = smag_yf - smag_y
+    m_x(:,:,k) = smag_xf(:,:,k) - smag_x(:,:,k)
+    m_y(:,:,k) = smag_yf(:,:,k) - smag_y(:,:,k)
 
     ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
     ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
     ! Output Leonard flux has halo 0 (halo 2 is also possible if needed)
-    call compute_leonard_flux(leo_x, leo_y,                                  &
-                              u(:,:,k), v(:,:,k), vort_xy, uf, vf, vort_xyf, &
+    call compute_leonard_flux(leo_x(:,:,k), leo_y(:,:,k),                                                &
+                              u(:,:,k), v(:,:,k), vort_xy(:,:,k), uf(:,:,k), vf(:,:,k), vort_xyf(:,:,k), &
                               G, GV, CS, CS%test_width, halo=1)
 
     ! Output halo is 0; 
     ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
-    call compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, G, GV, CS, halo=1)
+    call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
     
   enddo ! end of k loop
 
