@@ -38,14 +38,20 @@ type, public :: PG23_CS ; private
           grid_sp_q4   !< Pre-calculated dx^4  at q point  [L4 ~> m4]
   
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
+  
   !>@{ Diagnostic handles
-  !integer :: id_smt = -1
+  integer :: id_u, id_v
+  integer :: id_uf, id_vort_y, id_vort_yf, id_lap_vort_y, id_lap_vort_yf, id_smag_y, id_smag_yf, id_m_y, id_leo_y
+  integer :: id_vf, id_vort_x, id_vort_xf, id_lap_vort_x, id_lap_vort_xf, id_smag_x, id_smag_xf, id_m_x, id_leo_x
+  integer :: id_sh_xy, id_sh_xyf, id_vort_xy, id_vort_xyf, id_shear_mag, id_shear_magf, id_lap_vort, id_lap_vortf
+  integer :: id_sh_xx, id_sh_xxf, id_lm, id_mm 
   !>@}
 
   !>@{ CPU time clock IDs
   integer :: id_clock_module
   integer :: id_clock_mpi
   integer :: id_clock_filter
+  integer :: id_clock_post
   !>@}
 end type PG23_CS
 
@@ -81,19 +87,90 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
                  "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
   if (.not. use_PG23) return
 
-  call get_param(param_file, mdl, "PG_TEST_WIDTH", CS%test_width, &
+  call get_param(param_file, mdl, "PG23_TEST_WIDTH", CS%test_width, &
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
 
-  call get_param(param_file, mdl, "PG_FILTERS_RATIO", CS%filters_ratio, &
+  call get_param(param_file, mdl, "PG23_FILTERS_RATIO", CS%filters_ratio, &
                  "The ratio of combined (hat(bar)) to base (bar) filters", units="nondim", default=SQRT(2.0))
 
   ! Register fields for output from this module.
-  !CS%diag => diag
+  CS%diag => diag
+
+  CS%id_u = register_diag_field('ocean_model', 'PG23_u', diag%axesCuL, Time, &
+      'u velocity', 'm s-1', conversion=US%L_T_to_m_s)
+  CS%id_v = register_diag_field('ocean_model', 'PG23_v', diag%axesCvL, Time, &
+      'v velocity', 'm s-1', conversion=US%L_T_to_m_s)
+
+  CS%id_uf = register_diag_field('ocean_model', 'PG23_uf', diag%axesCuL, Time, &
+      'u filtered velocity', 'm s-1', conversion=US%L_T_to_m_s)
+  CS%id_vf = register_diag_field('ocean_model', 'PG23_vf', diag%axesCvL, Time, &
+      'v filtered velocity', 'm s-1', conversion=US%L_T_to_m_s)
+
+  CS%id_vort_y = register_diag_field('ocean_model', 'PG23_vort_y', diag%axesCuL, Time, &
+      'd/dy(vorticity)')
+  CS%id_vort_yf = register_diag_field('ocean_model', 'PG23_vort_yf', diag%axesCuL, Time, &
+      'd/dy(filtered vorticity)')
+  CS%id_lap_vort_y = register_diag_field('ocean_model', 'PG23_lap_vort_y', diag%axesCuL, Time, &
+      'd/dy(lap(vorticity))')
+  CS%id_lap_vort_yf = register_diag_field('ocean_model', 'PG23_lap_vort_yf', diag%axesCuL, Time, &
+      'd/dy(lap(filtered vorticity))')
+  CS%id_smag_y = register_diag_field('ocean_model', 'PG23_smag_y', diag%axesCuL, Time, &
+      'Zonal Vorticity flux of biharmonic Smagorinsky model')
+  CS%id_smag_yf = register_diag_field('ocean_model', 'PG23_smag_yf', diag%axesCuL, Time, &
+      'Zonal Vorticity flux of biharmonic Smagorinsky model on filtered level')
+  CS%id_m_y = register_diag_field('ocean_model', 'PG23_m_y', diag%axesCuL, Time, &
+      'Zonal Vorticity flux of eddy viscosity')
+  CS%id_leo_y = register_diag_field('ocean_model', 'PG23_leo_y', diag%axesCuL, Time, &
+      'Zonal Vorticity flux in Germano identity')
+
+  CS%id_vort_x = register_diag_field('ocean_model', 'PG23_vort_x', diag%axesCvL, Time, &
+      'd/dx(vorticity)')
+  CS%id_vort_xf = register_diag_field('ocean_model', 'PG23_vort_xf', diag%axesCvL, Time, &
+      'd/dx(filtered vorticity)')
+  CS%id_lap_vort_x = register_diag_field('ocean_model', 'PG23_lap_vort_x', diag%axesCvL, Time, &
+      'd/dx(lap(vorticity))')
+  CS%id_lap_vort_xf = register_diag_field('ocean_model', 'PG23_lap_vort_xf', diag%axesCvL, Time, &
+      'd/dx(lap(filtered vorticity))')
+  CS%id_smag_x = register_diag_field('ocean_model', 'PG23_smag_x', diag%axesCvL, Time, &
+      'Meridional Vorticity flux of biharmonic Smagorinsky model')
+  CS%id_smag_xf = register_diag_field('ocean_model', 'PG23_smag_xf', diag%axesCvL, Time, &
+      'Meridional Vorticity flux of biharmonic Smagorinsky model on filtered level')
+  CS%id_m_x = register_diag_field('ocean_model', 'PG23_m_x', diag%axesCvL, Time, &
+      'Meridional Vorticity flux of eddy viscosity')
+  CS%id_leo_x = register_diag_field('ocean_model', 'PG23_leo_x', diag%axesCvL, Time, &
+      'Meridional Vorticity flux in Germano identity')
+
+  CS%id_sh_xy = register_diag_field('ocean_model', 'PG23_sh_xy', diag%axesBL, Time, &
+      'sh_xy')
+  CS%id_sh_xyf = register_diag_field('ocean_model', 'PG23_sh_xyf', diag%axesBL, Time, &
+      'filtered sh_xy')
+  CS%id_vort_xy = register_diag_field('ocean_model', 'PG23_vort_xy', diag%axesBL, Time, &
+      'vorticity')
+  CS%id_vort_xyf = register_diag_field('ocean_model', 'PG23_vort_xyf', diag%axesBL, Time, &
+      'filtered vorticity')
+  CS%id_shear_mag = register_diag_field('ocean_model', 'PG23_shear_mag', diag%axesBL, Time, &
+      'Shear magnitude')
+  CS%id_shear_magf = register_diag_field('ocean_model', 'PG23_shear_magf', diag%axesBL, Time, &
+      'Shear magnitude of filtered field')
+  CS%id_lap_vort = register_diag_field('ocean_model', 'PG23_lap_vort', diag%axesBL, Time, &
+      'Laplacian of vorticity')
+  CS%id_lap_vortf = register_diag_field('ocean_model', 'PG23_lap_vortf', diag%axesBL, Time, &
+      'Laplacian of filtered vorticity')
+
+  CS%id_sh_xx = register_diag_field('ocean_model', 'PG23_sh_xx', diag%axesTL, Time, &
+      'sh_xx')
+  CS%id_sh_xxf = register_diag_field('ocean_model', 'PG23_sh_xxf', diag%axesTL, Time, &
+      'filtered sh_xx')
+  CS%id_lm = register_diag_field('ocean_model', 'PG23_lm', diag%axesTL, Time, &
+      'Numerator of Germano identity')
+  CS%id_mm = register_diag_field('ocean_model', 'PG23_mm', diag%axesTL, Time, &
+      'Denominator of Germano identity')
 
   ! Clock IDs
   CS%id_clock_module = cpu_clock_id('(Ocean Perezhogin-Glazunov-2023)', grain=CLOCK_MODULE)
   CS%id_clock_mpi = cpu_clock_id('(PG23 MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(PG23 filter computations)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_post = cpu_clock_id('(PG23 post data)', grain=CLOCK_ROUTINE, sync=.false.)
 
   allocate(CS%dx_dyT(SZI_(G),SZJ_(G)), source=0.)
   allocate(CS%dy_dxT(SZI_(G),SZJ_(G)), source=0.)
@@ -248,6 +325,47 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
     call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
     
   enddo ! end of k loop
+
+  call cpu_clock_begin(CS%id_clock_post)
+
+  if (CS%id_u>0)             call post_data(CS%id_u, u, CS%diag)
+  if (CS%id_v>0)             call post_data(CS%id_v, v, CS%diag)
+  if (CS%id_uf>0)            call post_data(CS%id_uf, uf, CS%diag)
+  if (CS%id_vf>0)            call post_data(CS%id_vf, vf, CS%diag)
+
+  if (CS%id_vort_y>0)        call post_data(CS%id_vort_y, vort_y, CS%diag)
+  if (CS%id_vort_yf>0)       call post_data(CS%id_vort_yf, vort_yf, CS%diag)
+  if (CS%id_lap_vort_y>0)    call post_data(CS%id_lap_vort_y, lap_vort_y, CS%diag)
+  if (CS%id_lap_vort_yf>0)   call post_data(CS%id_lap_vort_yf, lap_vort_yf, CS%diag)
+  if (CS%id_smag_y>0)        call post_data(CS%id_smag_y, smag_y, CS%diag)
+  if (CS%id_smag_yf>0)       call post_data(CS%id_smag_yf, smag_yf, CS%diag)
+  if (CS%id_m_y>0)           call post_data(CS%id_m_y, m_y, CS%diag)
+  if (CS%id_leo_y>0)         call post_data(CS%id_leo_y, leo_y, CS%diag)
+
+  if (CS%id_vort_x>0)        call post_data(CS%id_vort_x, vort_x, CS%diag)
+  if (CS%id_vort_xf>0)       call post_data(CS%id_vort_xf, vort_xf, CS%diag)
+  if (CS%id_lap_vort_x>0)    call post_data(CS%id_lap_vort_x, lap_vort_x, CS%diag)
+  if (CS%id_lap_vort_xf>0)   call post_data(CS%id_lap_vort_xf, lap_vort_xf, CS%diag)
+  if (CS%id_smag_x>0)        call post_data(CS%id_smag_x, smag_x, CS%diag)
+  if (CS%id_smag_xf>0)       call post_data(CS%id_smag_xf, smag_xf, CS%diag)
+  if (CS%id_m_x>0)           call post_data(CS%id_m_x, m_x, CS%diag)
+  if (CS%id_leo_x>0)         call post_data(CS%id_leo_x, leo_x, CS%diag)
+
+  if (CS%id_sh_xy>0)         call post_data(CS%id_sh_xy, sh_xy, CS%diag)
+  if (CS%id_sh_xyf>0)        call post_data(CS%id_sh_xyf, sh_xyf, CS%diag)
+  if (CS%id_vort_xy>0)       call post_data(CS%id_vort_xy, vort_xy, CS%diag)
+  if (CS%id_vort_xyf>0)      call post_data(CS%id_vort_xyf, vort_xyf, CS%diag)
+  if (CS%id_shear_mag>0)     call post_data(CS%id_shear_mag, shear_mag, CS%diag)
+  if (CS%id_shear_magf>0)    call post_data(CS%id_shear_magf, shear_magf, CS%diag)
+  if (CS%id_lap_vort>0)      call post_data(CS%id_lap_vort, lap_vort, CS%diag)
+  if (CS%id_lap_vortf>0)     call post_data(CS%id_lap_vortf, lap_vortf, CS%diag)
+
+  if (CS%id_sh_xx>0)         call post_data(CS%id_sh_xx, sh_xx, CS%diag)
+  if (CS%id_sh_xxf>0)        call post_data(CS%id_sh_xxf, sh_xxf, CS%diag)
+  if (CS%id_lm>0)            call post_data(CS%id_lm, lm, CS%diag)
+  if (CS%id_mm>0)            call post_data(CS%id_mm, mm, CS%diag)
+
+  call cpu_clock_end(CS%id_clock_post)
 
   call cpu_clock_end(CS%id_clock_module)
 
