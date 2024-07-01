@@ -308,6 +308,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   real :: grad_vel_mag_bt_h ! Magnitude of the barotropic velocity gradient tensor squared at h-points [T-2 ~> s-2]
   real :: boundary_mask_h ! A mask that zeroes out cells with at least one land edge [nondim]
 
+  real, dimension(SZK_(GV)) :: smag_bi_const_DSM ! The smagorinsky biharmonic coefficient estimated from dynamic procedure
+                                              !! in every layer
+
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dvdx, dudy, & ! components in the shearing strain [T-1 ~> s-1]
     dvdx_smooth, dudy_smooth, & ! components in the shearing strain from smoothed velocity [T-1 ~> s-1]
@@ -415,7 +418,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     visc_bound_rem  ! fraction of overall viscous bounds that remain to be applied (h or q) [nondim]
 
   if (CS%use_PG23) then
-    call PG23_germano_identity(u, v, h, G, GV, CS%PG23)
+    call PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS%PG23)
+  else
+    smag_bi_const_DSM = 1.
   endif
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -1159,14 +1164,14 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         if (CS%Smagorinsky_Ah) then
           if (CS%bound_Coriolis) then
             do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-              AhSm = Shear_mag(i,j) * (CS%Biharm_const_xx(i,j) &
+              AhSm = Shear_mag(i,j) * (CS%Biharm_const_xx(i,j) * smag_bi_const_DSM(k) &
                   + CS%Biharm_const2_xx(i,j) * Shear_mag(i,j) &
               )
               Ah(i,j) = max(Ah(i,j), AhSm)
             enddo ; enddo
           else
             do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-              AhSm = CS%Biharm_const_xx(i,j) * Shear_mag(i,j)
+              AhSm = CS%Biharm_const_xx(i,j) * Shear_mag(i,j) * smag_bi_const_DSM(k)
               Ah(i,j) = max(Ah(i,j), AhSm)
             enddo ; enddo
           endif
@@ -1519,14 +1524,14 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         if (CS%Smagorinsky_Ah) then
           if (CS%bound_Coriolis) then
             do J=js-1,Jeq ; do I=is-1,Ieq
-              AhSm = Shear_mag(I,J) * (CS%Biharm_const_xy(I,J) &
+              AhSm = Shear_mag(I,J) * (CS%Biharm_const_xy(I,J) * smag_bi_const_DSM(k) &
                   + CS%Biharm_const2_xy(I,J) * Shear_mag(I,J) &
               )
               Ah(I,J) = max(Ah(I,J), AhSm)
             enddo ; enddo
           else
             do J=js-1,Jeq ; do I=is-1,Ieq
-              AhSm = CS%Biharm_const_xy(I,J) * Shear_mag(I,J)
+              AhSm = CS%Biharm_const_xy(I,J) * Shear_mag(I,J) * smag_bi_const_DSM(k)
               Ah(I,J) = max(Ah(I,J), AhSm)
             enddo ; enddo
           endif

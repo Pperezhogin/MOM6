@@ -12,7 +12,7 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
 use MOM_error_handler,         only : MOM_error, FATAL
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type, &
-                              start_group_pass, complete_group_pass
+                              start_group_pass, complete_group_pass, sum_across_PEs
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
@@ -29,6 +29,7 @@ type, public :: PG23_CS ; private
   ! Parameters
   real :: test_width      !< Width of the test filter (hat) w.r.t. grid spacing
   real :: filters_ratio   !< The ratio of combined (hat(bar)) to base (bar) filters
+  integer :: reduce       !< The reduction method in Germano identity
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -45,6 +46,7 @@ type, public :: PG23_CS ; private
   integer :: id_vf, id_vort_x, id_vort_xf, id_lap_vort_x, id_lap_vort_xf, id_smag_x, id_smag_xf, id_m_x, id_leo_x
   integer :: id_sh_xy, id_sh_xyf, id_vort_xy, id_vort_xyf, id_shear_mag, id_shear_magf, id_lap_vort, id_lap_vortf
   integer :: id_sh_xx, id_sh_xxf, id_lm, id_mm 
+  integer :: id_smag
   !>@}
 
   !>@{ CPU time clock IDs
@@ -52,6 +54,7 @@ type, public :: PG23_CS ; private
   integer :: id_clock_mpi
   integer :: id_clock_filter
   integer :: id_clock_post
+  integer :: id_clock_reduce
   !>@}
 end type PG23_CS
 
@@ -92,6 +95,9 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_FILTERS_RATIO", CS%filters_ratio, &
                  "The ratio of combined (hat(bar)) to base (bar) filters", units="nondim", default=SQRT(2.0))
+
+  call get_param(param_file, mdl, "PG23_REDUCE", CS%reduce, &
+                 "The reduction method in Germano identity. 0: sum, 1: sum of positive elements", default=0)
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -166,11 +172,15 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
   CS%id_mm = register_diag_field('ocean_model', 'PG23_mm', diag%axesTL, Time, &
       'Denominator of Germano identity')
 
+  CS%id_smag = register_diag_field('ocean_model', 'smag_const', diag%axesZL, Time, &
+      'Smagorinsky coefficient determined dynamically', 'nondim')
+
   ! Clock IDs
   CS%id_clock_module = cpu_clock_id('(Ocean Perezhogin-Glazunov-2023)', grain=CLOCK_MODULE)
   CS%id_clock_mpi = cpu_clock_id('(PG23 MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(PG23 filter computations)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(PG23 post data)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_reduce = cpu_clock_id('(PG23 global reduce)', grain=CLOCK_ROUTINE, sync=.false.)
 
   allocate(CS%dx_dyT(SZI_(G),SZJ_(G)), source=0.)
   allocate(CS%dy_dxT(SZI_(G),SZJ_(G)), source=0.)
@@ -216,7 +226,7 @@ end subroutine PG23_end
 !! * Compute alpha = Model_combined - hat(Model_base)
 !! * Compute products, l*alpha and alpha*alpha
 !! * Apply statistical averaging for products to infer the biharmonic Smagorinsky coefficient
-subroutine PG23_germano_identity(u, v, h, G, GV, CS)
+subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
   type(ocean_grid_type),         intent(in)    :: G  !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV !< The ocean's vertical grid structure.
   type(PG23_CS),                 intent(inout) :: CS  !< PG23 control structure.
@@ -227,6 +237,8 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
         intent(in)  :: v  !< The meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
         intent(in)     :: h  !< Layer thicknesses [H ~> m or kg m-2].
+  real, dimension(SZK_(GV)), &
+        intent(inout)  :: smag_bi_const_DSM !< the dynamically-estimated biharmonic Smagorinsky coefficient
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) ::  uf, & ! The fitered zonal velocity [L T-1 ~> m s-1]
                                         vort_y, & ! y derivative of Vertical vorticity
@@ -263,6 +275,7 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
                                         mm         ! denominator of Germano identity
 
   integer :: k, nz
+  real, dimension(SZK_(GV)) :: lm_sum, mm_sum
 
   !type(group_pass_type) :: pass_uv  ! A handle used for group halo passes
 
@@ -276,6 +289,7 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
   nz = GV%ke
 
   do k=1,nz
+    ! Now these arrays have halo 4
     uf(:,:,k) = u(:,:,k)
     vf(:,:,k) = v(:,:,k)
     
@@ -322,9 +336,20 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
 
     ! Output halo is 0; 
     ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
-    call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+    call compute_lm_mm(lm_sum(k), mm_sum(k), leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
     
   enddo ! end of k loop
+
+  call cpu_clock_begin(CS%id_clock_reduce)
+  
+  call sum_across_PEs(lm_sum(:), nz)
+  call sum_across_PEs(mm_sum(:), nz)
+
+  call cpu_clock_end(CS%id_clock_reduce)
+
+  do k=1,nz
+    smag_bi_const_DSM(k) = max(lm_sum(k) / (mm_sum(k) + 1e-40), 0.)
+  enddo
 
   call cpu_clock_begin(CS%id_clock_post)
 
@@ -365,6 +390,8 @@ subroutine PG23_germano_identity(u, v, h, G, GV, CS)
   if (CS%id_lm>0)            call post_data(CS%id_lm, lm, CS%diag)
   if (CS%id_mm>0)            call post_data(CS%id_mm, mm, CS%diag)
 
+  if (CS%id_smag)            call post_data(CS%id_smag, smag_bi_const_DSM, CS%diag)
+
   call cpu_clock_end(CS%id_clock_post)
 
   call cpu_clock_end(CS%id_clock_module)
@@ -373,13 +400,15 @@ end subroutine PG23_germano_identity
 
 !> This function computes scalar product of leonard flux
 !! and eddy viscosity model in center points
-subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
+subroutine compute_lm_mm(lm_sum, mm_sum, leo_x, leo_y, m_x, m_y, lm, mm, &
                          G, GV, CS, halo)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
   integer, intent(in) :: halo !< Currently available halo points for vorticity fluxes
                               !! in symmetric memory model
+
+  real, intent(inout)  :: lm_sum, mm_sum !< Statistical sum of numerator and denominator
   
   real, dimension(SZI_(G),SZJB_(G)), intent(in) :: leo_x, & !< Leonard vorticity x-flux
                                                    m_x      !< Eddy visocitty in Germano identity x-flux  
@@ -399,11 +428,22 @@ subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
   do j=js-halo,je+halo ; do i=is-halo, ie+halo
     ! Here we use two-point interpolation, so coefficient is 0.5
     lm(i,j) = 0.5 * ((leo_x(i,J) * m_x(i,J) + leo_x(i,J-1) * m_x(i,J-1)) + &
-                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j)))
+                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j)
 
     mm(i,j) = 0.5 * ((m_x(i,J) * m_x(i,J) + m_x(i,J-1) * m_x(i,J-1)) + &
-                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j)))
+                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j)
   enddo ; enddo
+
+  lm_sum = 0.
+  mm_sum = 0.
+  do j=js,je; do i=is,ie
+    if (CS%reduce == 0) then
+      lm_sum = lm_sum + lm(i,j) * G%areaT(i,j)
+    else if (CS%reduce == 1) then
+      lm_sum = lm_sum + max(lm(i,j) * G%areaT(i,j),0.)
+    endif
+    mm_sum = mm_sum + mm(i,j) * G%areaT(i,j)
+  enddo; enddo
   
 end subroutine compute_lm_mm
 
