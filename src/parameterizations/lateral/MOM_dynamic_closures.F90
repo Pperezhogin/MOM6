@@ -30,6 +30,7 @@ type, public :: PG23_CS ; private
   real :: test_width      !< Width of the test filter (hat) w.r.t. grid spacing
   real :: filters_ratio   !< The ratio of combined (hat(bar)) to base (bar) filters
   integer :: reduce       !< The reduction method in Germano identity
+  logical :: offline      !< If offline, we only save fields but do not apply prediction
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -98,6 +99,9 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_REDUCE", CS%reduce, &
                  "The reduction method in Germano identity. 0: sum, 1: sum of positive elements", default=0)
+
+  call get_param(param_file, mdl, "PG23_OFFLINE", CS%offline, &
+                 "If offline, we only save fields but do not apply prediction", default=.false.)
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -395,6 +399,10 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
   call cpu_clock_end(CS%id_clock_post)
 
   call cpu_clock_end(CS%id_clock_module)
+
+  if (CS%offline) then
+    smag_bi_const_DSM = 0.06
+  endif
 
 end subroutine PG23_germano_identity
 
