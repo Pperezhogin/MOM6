@@ -12,7 +12,8 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_diag_mediator, only : post_data, register_diag_field
 use MOM_error_handler,         only : MOM_error, FATAL
 use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type, &
-                              start_group_pass, complete_group_pass, sum_across_PEs
+                              start_group_pass, complete_group_pass
+use MOM_coms,          only : reproducing_sum
 use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
@@ -280,6 +281,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
 
   integer :: k, nz
   real, dimension(SZK_(GV)) :: lm_sum, mm_sum
+  real :: dummy_argument
 
   !type(group_pass_type) :: pass_uv  ! A handle used for group halo passes
 
@@ -340,20 +342,22 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
 
     ! Output halo is 0; 
     ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
-    call compute_lm_mm(lm_sum(k), mm_sum(k), leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+    call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
     
   enddo ! end of k loop
 
   call cpu_clock_begin(CS%id_clock_reduce)
   
-  call sum_across_PEs(lm_sum(:), nz)
-  call sum_across_PEs(mm_sum(:), nz)
+  if (CS%reduce==0) then
+    dummy_argument = reproducing_sum(lm(G%isc:G%iec,G%jsc:G%jec,1:nz), sums=lm_sum)
+  else if (CS%reduce==1) then
+    dummy_argument = reproducing_sum(max(lm(G%isc:G%iec,G%jsc:G%jec,1:nz),0.0), sums=lm_sum)
+  endif
+  dummy_argument = reproducing_sum(mm(G%isc:G%iec,G%jsc:G%jec,1:nz), sums=mm_sum)
 
   call cpu_clock_end(CS%id_clock_reduce)
 
-  do k=1,nz
-    smag_bi_const_DSM(k) = max(lm_sum(k) / (mm_sum(k) + 1e-40), 0.)
-  enddo
+  smag_bi_const_DSM = max(lm_sum / (mm_sum + 1e-40), 0.0)
 
   call cpu_clock_begin(CS%id_clock_post)
 
@@ -408,15 +412,13 @@ end subroutine PG23_germano_identity
 
 !> This function computes scalar product of leonard flux
 !! and eddy viscosity model in center points
-subroutine compute_lm_mm(lm_sum, mm_sum, leo_x, leo_y, m_x, m_y, lm, mm, &
+subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
                          G, GV, CS, halo)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
   integer, intent(in) :: halo !< Currently available halo points for vorticity fluxes
                               !! in symmetric memory model
-
-  real, intent(inout)  :: lm_sum, mm_sum !< Statistical sum of numerator and denominator
   
   real, dimension(SZI_(G),SZJB_(G)), intent(in) :: leo_x, & !< Leonard vorticity x-flux
                                                    m_x      !< Eddy visocitty in Germano identity x-flux  
@@ -436,22 +438,11 @@ subroutine compute_lm_mm(lm_sum, mm_sum, leo_x, leo_y, m_x, m_y, lm, mm, &
   do j=js-halo,je+halo ; do i=is-halo, ie+halo
     ! Here we use two-point interpolation, so coefficient is 0.5
     lm(i,j) = 0.5 * ((leo_x(i,J) * m_x(i,J) + leo_x(i,J-1) * m_x(i,J-1)) + &
-                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j)
+                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
 
     mm(i,j) = 0.5 * ((m_x(i,J) * m_x(i,J) + m_x(i,J-1) * m_x(i,J-1)) + &
-                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j)
+                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
   enddo ; enddo
-
-  lm_sum = 0.
-  mm_sum = 0.
-  do j=js,je; do i=is,ie
-    if (CS%reduce == 0) then
-      lm_sum = lm_sum + lm(i,j) * G%areaT(i,j)
-    else if (CS%reduce == 1) then
-      lm_sum = lm_sum + max(lm(i,j) * G%areaT(i,j),0.)
-    endif
-    mm_sum = mm_sum + mm(i,j) * G%areaT(i,j)
-  enddo; enddo
   
 end subroutine compute_lm_mm
 
