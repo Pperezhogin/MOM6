@@ -311,6 +311,10 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   real, dimension(SZK_(GV)) :: smag_bi_const_DSM ! The smagorinsky biharmonic coefficient estimated from dynamic procedure
                                               !! in every layer
 
+  real,  dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: leo_x !< Leonard vorticity x-flux 
+
+  real,  dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: leo_y !< Leonard vorticity y-flux 
+
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dvdx, dudy, & ! components in the shearing strain [T-1 ~> s-1]
     dvdx_smooth, dudy_smooth, & ! components in the shearing strain from smoothed velocity [T-1 ~> s-1]
@@ -418,7 +422,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     visc_bound_rem  ! fraction of overall viscous bounds that remain to be applied (h or q) [nondim]
 
   if (CS%use_PG23) then
-    call PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS%PG23)
+    call PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV, CS%PG23)
   else
     smag_bi_const_DSM = 1.
   endif
@@ -1667,6 +1671,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       diffu(I,j,k) = ((G%IdyCu(I,j)*(CS%dy2h(i,j)*str_xx(i,j) - CS%dy2h(i+1,j)*str_xx(i+1,j)) + &
                        G%IdxCu(I,j)*(CS%dx2q(I,J-1)*str_xy(I,J-1) - CS%dx2q(I,J)*str_xy(I,J))) * &
                      G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
+      if (CS%use_PG23 .and. CS%PG23%ssm) then
+        diffu(I,j,k) = diffu(I,j,k) + leo_y(I,j,k)
+      endif
     enddo ; enddo
 
     if (apply_OBC) then
@@ -1687,6 +1694,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       diffv(i,J,k) = ((G%IdyCv(i,J)*(CS%dy2q(I-1,J)*str_xy(I-1,J) - CS%dy2q(I,J)*str_xy(I,J)) - &
                        G%IdxCv(i,J)*(CS%dx2h(i,j)*str_xx(i,j) - CS%dx2h(i,j+1)*str_xx(i,j+1))) * &
                      G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
+      if (CS%use_PG23 .and. CS%PG23%ssm) then
+        diffv(i,J,k) = diffv(i,J,k) - leo_x(i,J,k) 
+      endif
     enddo ; enddo
 
     if (apply_OBC) then

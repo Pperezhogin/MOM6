@@ -15,7 +15,7 @@ use MOM_domains,       only : create_group_pass, do_group_pass, group_pass_type,
                               start_group_pass, complete_group_pass
 use MOM_coms,          only : reproducing_sum
 use MOM_domains,       only : To_North, To_East
-use MOM_domains,       only : pass_var, CORNER
+use MOM_domains,       only : pass_var, CORNER, pass_vector
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
 
@@ -32,6 +32,7 @@ type, public :: PG23_CS ; private
   real :: filters_ratio   !< The ratio of combined (hat(bar)) to base (bar) filters
   integer :: reduce       !< The reduction method in Germano identity
   logical :: offline      !< If offline, we only save fields but do not apply prediction
+  logical, public :: ssm          !< Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -49,6 +50,7 @@ type, public :: PG23_CS ; private
   integer :: id_sh_xy, id_sh_xyf, id_vort_xy, id_vort_xyf, id_shear_mag, id_shear_magf, id_lap_vort, id_lap_vortf
   integer :: id_sh_xx, id_sh_xxf, id_lm, id_mm 
   integer :: id_smag
+  integer :: id_h_x, id_h_y
   !>@}
 
   !>@{ CPU time clock IDs
@@ -104,6 +106,9 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
   call get_param(param_file, mdl, "PG23_OFFLINE", CS%offline, &
                  "If offline, we only save fields but do not apply prediction", default=.false.)
 
+  call get_param(param_file, mdl, "PG23_SSM", CS%ssm, &
+                 "Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)", default=.false.)
+
   ! Register fields for output from this module.
   CS%diag => diag
 
@@ -133,6 +138,8 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
       'Zonal Vorticity flux of eddy viscosity')
   CS%id_leo_y = register_diag_field('ocean_model', 'PG23_leo_y', diag%axesCuL, Time, &
       'Zonal Vorticity flux in Germano identity')
+  CS%id_h_y = register_diag_field('ocean_model', 'PG23_h_y', diag%axesCuL, Time, &
+      'Zonal Vorticity flux of SSM in Germano identity')
 
   CS%id_vort_x = register_diag_field('ocean_model', 'PG23_vort_x', diag%axesCvL, Time, &
       'd/dx(vorticity)')
@@ -150,6 +157,8 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
       'Meridional Vorticity flux of eddy viscosity')
   CS%id_leo_x = register_diag_field('ocean_model', 'PG23_leo_x', diag%axesCvL, Time, &
       'Meridional Vorticity flux in Germano identity')
+  CS%id_h_x = register_diag_field('ocean_model', 'PG23_h_x', diag%axesCvL, Time, &
+      'Meridional Vorticity flux of SSM in Germano identity')
 
   CS%id_sh_xy = register_diag_field('ocean_model', 'PG23_sh_xy', diag%axesBL, Time, &
       'sh_xy')
@@ -231,7 +240,7 @@ end subroutine PG23_end
 !! * Compute alpha = Model_combined - hat(Model_base)
 !! * Compute products, l*alpha and alpha*alpha
 !! * Apply statistical averaging for products to infer the biharmonic Smagorinsky coefficient
-subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
+subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV, CS)
   type(ocean_grid_type),         intent(in)    :: G  !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV !< The ocean's vertical grid structure.
   type(PG23_CS),                 intent(inout) :: CS  !< PG23 control structure.
@@ -245,6 +254,12 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
   real, dimension(SZK_(GV)), &
         intent(inout)  :: smag_bi_const_DSM !< the dynamically-estimated biharmonic Smagorinsky coefficient
 
+  real,  dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+        intent(inout) :: leo_x !< Leonard vorticity x-flux 
+
+  real,  dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+        intent(inout) :: leo_y !< Leonard vorticity y-flux 
+
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) ::  uf, & ! The fitered zonal velocity [L T-1 ~> m s-1]
                                         vort_y, & ! y derivative of Vertical vorticity
                                         vort_yf, & ! y derivative of filtered Vertical vorticity
@@ -253,7 +268,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
                                         smag_y, & ! biharmonic Smagorinsky model on base level
                                         smag_yf, &  ! biharmonic Smagorinsky model on combined level
                                         m_y, & ! Smag. in dynamic model
-                                        leo_y ! Leonard vorticity flux
+                                        h_y     ! SSM y-flux in Germano identity
 
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) ::  vf, & ! The fitered meridional velocity [L T-1 ~> m s-1]
                                         vort_x, & ! x derivative of Vertical vorticity
@@ -263,7 +278,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
                                         smag_x, & ! biharmonic Smagorinsky model on base level
                                         smag_xf, &   ! biharmonic Smagorinsky model on combined level
                                         m_x, & ! Smag. in dynamic model
-                                        leo_x ! Leonard vorticity flux
+                                        h_x    ! SSM x-flux in Germano identity
 
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: sh_xy, & ! horizontal shearing strain (du/dy + dv/dx)
                                         sh_xyf, & ! filtered horizontal shearing strain (du/dy + dv/dx)
@@ -294,6 +309,10 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
 
   nz = GV%ke
 
+  uf = 0
+  vf = 0
+  vort_xyf = 0
+  
   do k=1,nz
     ! Now these arrays have halo 4
     uf(:,:,k) = u(:,:,k)
@@ -336,13 +355,16 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
     ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
     ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
     ! Output Leonard flux has halo 0 (halo 2 is also possible if needed)
-    call compute_leonard_flux(leo_x(:,:,k), leo_y(:,:,k),                                                &
+    call compute_leonard_flux(leo_x(:,:,k), leo_y(:,:,k), h_x(:,:,k), h_y(:,:,k),                        &
                               u(:,:,k), v(:,:,k), vort_xy(:,:,k), uf(:,:,k), vf(:,:,k), vort_xyf(:,:,k), &
                               G, GV, CS, CS%test_width, halo=1)
-
     ! Output halo is 0; 
     ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
-    call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+    if (CS%ssm) then
+      call compute_lm_mm(leo_x(:,:,k) - h_x(:,:,k), leo_y(:,:,k) - h_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+    else
+      call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+    endif
     
   enddo ! end of k loop
 
@@ -374,7 +396,8 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
   if (CS%id_smag_yf>0)       call post_data(CS%id_smag_yf, smag_yf, CS%diag)
   if (CS%id_m_y>0)           call post_data(CS%id_m_y, m_y, CS%diag)
   if (CS%id_leo_y>0)         call post_data(CS%id_leo_y, leo_y, CS%diag)
-
+  if (CS%id_h_y>0)           call post_data(CS%id_h_y, h_y, CS%diag)
+ 
   if (CS%id_vort_x>0)        call post_data(CS%id_vort_x, vort_x, CS%diag)
   if (CS%id_vort_xf>0)       call post_data(CS%id_vort_xf, vort_xf, CS%diag)
   if (CS%id_lap_vort_x>0)    call post_data(CS%id_lap_vort_x, lap_vort_x, CS%diag)
@@ -383,6 +406,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
   if (CS%id_smag_xf>0)       call post_data(CS%id_smag_xf, smag_xf, CS%diag)
   if (CS%id_m_x>0)           call post_data(CS%id_m_x, m_x, CS%diag)
   if (CS%id_leo_x>0)         call post_data(CS%id_leo_x, leo_x, CS%diag)
+  if (CS%id_h_x>0)           call post_data(CS%id_h_x, h_x, CS%diag)
 
   if (CS%id_sh_xy>0)         call post_data(CS%id_sh_xy, sh_xy, CS%diag)
   if (CS%id_sh_xyf>0)        call post_data(CS%id_sh_xyf, sh_xyf, CS%diag)
@@ -406,6 +430,8 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, G, GV, CS)
 
   if (CS%offline) then
     smag_bi_const_DSM = 0.06
+    leo_x = 0.
+    leo_y = 0.
   endif
 
 end subroutine PG23_germano_identity
@@ -449,7 +475,7 @@ end subroutine compute_lm_mm
 !> This function computes the leonard flux
 !! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
 !! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
-subroutine compute_leonard_flux(leo_x, leo_y,                      &
+subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
                                   u, v, vort_xy, uf, vf, vort_xyf, &
                                   G, GV, CS, filter_width, halo)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
@@ -474,12 +500,36 @@ subroutine compute_leonard_flux(leo_x, leo_y,                      &
 
   real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: leo_x ! Leonard vorticity x-flux
   real, dimension(SZIB_(G),SZJ_(G)), intent(inout) :: leo_y ! Leonard vorticity y-flux
+
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: h_x ! SSM x-flux contribution in Germano identity
+  real, dimension(SZIB_(G),SZJ_(G)), intent(inout) :: h_y ! SSM y-flux contribution in Germano identity
+
+  real, dimension(SZI_(G),SZJB_(G)) :: u_hat_vort_hat ! hat(u) * hat(vort_xy)
+  real, dimension(SZIB_(G),SZJ_(G)) :: v_hat_vort_hat ! hat(v) * hat(vort_xy)
+  real, dimension(SZI_(G),SZJB_(G)) :: leo_xf ! Leonard vorticity x-flux filtered
+  real, dimension(SZIB_(G),SZJ_(G)) :: leo_yf ! Leonard vorticity y-flux filtered
+
+  real, dimension(SZIB_(G),SZJ_(G))  :: uff
+  real, dimension(SZI_(G),SZJB_(G))  :: vff
+  real, dimension(SZIB_(G),SZJB_(G)) :: vort_xyff
     
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  uff = 0
+  vff = 0
+  vort_xyff = 0
+  leo_xf = 0
+  leo_yf = 0
+  u_hat_vort_hat = 0
+  v_hat_vort_hat = 0
+  h_x = 0
+  h_y = 0
+  leo_x = 0
+  leo_y = 0
 
   ! u * vort_xy
   do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
@@ -499,13 +549,54 @@ subroutine compute_leonard_flux(leo_x, leo_y,                      &
   
   ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
   do J=Jsq-(halo-1),Jeq+(halo-1) ; do i=is-(halo-1),ie+(halo-1)
-    leo_x(i,J) = leo_x(i,J) - 0.125 * ((uf(I,j) + uf(I-1,j+1)) + (uf(I-1,j) + uf(I,j+1))) * (vort_xyf(I,J) + vort_xyf(I-1,J)) * G%mask2dCv(i,J)
+    u_hat_vort_hat(i,J) = 0.125 * ((uf(I,j) + uf(I-1,j+1)) + (uf(I-1,j) + uf(I,j+1))) * (vort_xyf(I,J) + vort_xyf(I-1,J)) * G%mask2dCv(i,J)
   enddo ; enddo
 
   ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
   do j=js-(halo-1),je+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
-    leo_y(I,j) = leo_y(I,j) - 0.125 * ((vf(i,J) + vf(i+1,J-1)) + (vf(i,J-1) + vf(i+1,J))) * (vort_xyf(I,J) + vort_xyf(I,J-1)) * G%mask2dCu(I,j)
+    v_hat_vort_hat(I,j) = 0.125 * ((vf(i,J) + vf(i+1,J-1)) + (vf(i,J-1) + vf(i+1,J))) * (vort_xyf(I,J) + vort_xyf(I,J-1)) * G%mask2dCu(I,j)
   enddo ; enddo
+
+  ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
+  do J=Jsq-(halo-1),Jeq+(halo-1) ; do i=is-(halo-1),ie+(halo-1)
+    leo_x(i,J) = leo_x(i,J) - u_hat_vort_hat(i,J)
+  enddo ; enddo
+
+  ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
+  do j=js-(halo-1),je+(halo-1) ; do I=Isq-(halo-1),Ieq+(halo-1)
+    leo_y(I,j) = leo_y(I,j) - v_hat_vort_hat(I,j)
+  enddo ; enddo
+
+  if (CS%ssm) then
+    call pass_vector(leo_y, leo_x, G%Domain, clock=CS%id_clock_mpi) ! Because leo_x is in v points
+    call pass_vector(v_hat_vort_hat, u_hat_vort_hat, G%Domain, clock=CS%id_clock_mpi)
+
+    leo_xf = leo_x
+    leo_yf = leo_y
+    uff = uf
+    vff = vf
+    vort_xyff = vort_xyf
+
+    call pass_vector(uff, vff, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(vort_xyff, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
+
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=leo_yf, v=leo_xf)
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=v_hat_vort_hat, v=u_hat_vort_hat)
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=uff, v=vff, q=vort_xyff)
+
+    do J=Jsq-1,Jeq+1 ; do i=is-1,ie+1
+      h_x(i,J) = u_hat_vort_hat(i,J) - &
+        0.125 * ((uff(I,j) + uff(I-1,j+1)) + (uff(I-1,j) + uff(I,j+1))) * (vort_xyff(I,J) + vort_xyff(I-1,J)) * G%mask2dCv(i,J) - &
+        leo_xf(i,J)
+    enddo ; enddo
+
+    do j=js-1,je+1 ; do I=Isq-1,Ieq+1
+      h_y(I,j) = v_hat_vort_hat(I,j) - &
+        0.125 * ((vff(i,J) + vff(i+1,J-1)) + (vff(i,J-1) + vff(i+1,J))) * (vort_xyff(I,J) + vort_xyff(I,J-1)) * G%mask2dCu(I,j) - &
+        leo_yf(I,j)
+    enddo ; enddo
+
+  endif
   
 end subroutine compute_leonard_flux
 
