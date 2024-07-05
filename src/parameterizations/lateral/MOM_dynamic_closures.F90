@@ -32,7 +32,8 @@ type, public :: PG23_CS ; private
   real :: filters_ratio   !< The ratio of combined (hat(bar)) to base (bar) filters
   integer :: reduce       !< The reduction method in Germano identity
   logical :: offline      !< If offline, we only save fields but do not apply prediction
-  logical, public :: ssm          !< Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)
+  logical, public :: ssm  !< Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)
+  logical :: zelong_dynamic !< Uses Zelong2022 dynamic procedure instead of Germano
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -108,6 +109,14 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_SSM", CS%ssm, &
                  "Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)", default=.false.)
+
+  call get_param(param_file, mdl, "PG23_ZELONG_DYNAMIC", CS%zelong_dynamic, &
+                 "Uses Zelong2022 dynamic procedure instead of Germano", default=.false.)
+
+  if ((CS%ssm .or. CS%zelong_dynamic) .and. ABS(CS%filters_ratio-SQRT(2.0))>1e-10) then
+    call MOM_error(FATAL, &
+      "MOM_dynamic_closures: use default filters ratio, i.e. assume that hat_filter=bar_filter")
+  endif
 
   ! Register fields for output from this module.
   CS%diag => diag
@@ -337,20 +346,27 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
     call compute_vorticity_gradients(vort_xyf(:,:,k), &
       vort_xf(:,:,k), vort_yf(:,:,k), lap_vortf(:,:,k), lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), G, GV, CS, halo=1)
 
-    ! Computation of biharmonic Smagorinsky model of vorticity flux
-    ! Halo is 1 point smaller than for the vorticity
-    call  biharmonic_Smagorinsky(lap_vort_x(:,:,k), lap_vort_y(:,:,k), shear_mag(:,:,k), &
+    if (CS%zelong_dynamic) then
+      call  biharmonic_Smagorinsky(lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), shear_magf(:,:,k), &
+        smag_xf(:,:,k), smag_yf(:,:,k), G, GV, CS, halo=0, scaling_coefficient=1.0)
+      m_x(:,:,k) = smag_xf(:,:,k)
+      m_y(:,:,k) = smag_yf(:,:,k)
+    else
+      ! Computation of biharmonic Smagorinsky model of vorticity flux
+      ! Halo is 1 point smaller than for the vorticity
+      call  biharmonic_Smagorinsky(lap_vort_x(:,:,k), lap_vort_y(:,:,k), shear_mag(:,:,k), &
       smag_x(:,:,k), smag_y(:,:,k), G, GV, CS, halo=1, scaling_coefficient=1.0)
-    ! Note: filters ratio is in 4th power because model is biharmonic
-    call  biharmonic_Smagorinsky(lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), shear_magf(:,:,k), &
+      ! Note: filters ratio is in 4th power because model is biharmonic
+      call  biharmonic_Smagorinsky(lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), shear_magf(:,:,k), &
       smag_xf(:,:,k), smag_yf(:,:,k), G, GV, CS, halo=0, scaling_coefficient=CS%filters_ratio**4)
-    
-    ! Filter Smagorinky model on base level
-    call filter_wrapper(G, GV, CS, CS%test_width, halo=1, niter=1, u=smag_y(:,:,k), v=smag_x(:,:,k))
 
-    ! Eddy viscosity in Germano identity with halo 0 (halo 1 is possible if needed)
-    m_x(:,:,k) = smag_xf(:,:,k) - smag_x(:,:,k)
-    m_y(:,:,k) = smag_yf(:,:,k) - smag_y(:,:,k)
+      ! Filter Smagorinky model on base level
+      call filter_wrapper(G, GV, CS, CS%test_width, halo=1, niter=1, u=smag_y(:,:,k), v=smag_x(:,:,k))
+
+      ! Eddy viscosity in Germano identity with halo 0 (halo 1 is possible if needed)
+      m_x(:,:,k) = smag_xf(:,:,k) - smag_x(:,:,k)
+      m_y(:,:,k) = smag_yf(:,:,k) - smag_y(:,:,k)
+    endif
 
     ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
     ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
@@ -568,32 +584,41 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
   enddo ; enddo
 
   if (CS%ssm) then
-    call pass_vector(leo_y, leo_x, G%Domain, clock=CS%id_clock_mpi) ! Because leo_x is in v points
     call pass_vector(v_hat_vort_hat, u_hat_vort_hat, G%Domain, clock=CS%id_clock_mpi)
-
-    leo_xf = leo_x
-    leo_yf = leo_y
     uff = uf
     vff = vf
     vort_xyff = vort_xyf
-
     call pass_vector(uff, vff, G%Domain, clock=CS%id_clock_mpi)
     call pass_var(vort_xyff, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
 
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=leo_yf, v=leo_xf)
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=v_hat_vort_hat, v=u_hat_vort_hat)
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=uff, v=vff, q=vort_xyff)
+    if (CS%zelong_dynamic) then
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=v_hat_vort_hat, v=u_hat_vort_hat)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=uff, v=vff, q=vort_xyff)
+    else
+      call pass_vector(leo_y, leo_x, G%Domain, clock=CS%id_clock_mpi) ! Because leo_x is in v points
+
+      leo_xf = leo_x
+      leo_yf = leo_y
+
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=leo_yf, v=leo_xf)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=v_hat_vort_hat, v=u_hat_vort_hat)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=uff, v=vff, q=vort_xyff)
+    endif
 
     do J=Jsq-1,Jeq+1 ; do i=is-1,ie+1
       h_x(i,J) = u_hat_vort_hat(i,J) - &
-        0.125 * ((uff(I,j) + uff(I-1,j+1)) + (uff(I-1,j) + uff(I,j+1))) * (vort_xyff(I,J) + vort_xyff(I-1,J)) * G%mask2dCv(i,J) - &
-        leo_xf(i,J)
+        0.125 * ((uff(I,j) + uff(I-1,j+1)) + (uff(I-1,j) + uff(I,j+1))) * (vort_xyff(I,J) + vort_xyff(I-1,J)) * G%mask2dCv(i,J)
+      if (not(CS%zelong_dynamic)) then
+        h_x(i,J) = h_x(i,J) - leo_xf(i,J)
+      endif
     enddo ; enddo
 
     do j=js-1,je+1 ; do I=Isq-1,Ieq+1
       h_y(I,j) = v_hat_vort_hat(I,j) - &
-        0.125 * ((vff(i,J) + vff(i+1,J-1)) + (vff(i,J-1) + vff(i+1,J))) * (vort_xyff(I,J) + vort_xyff(I,J-1)) * G%mask2dCu(I,j) - &
-        leo_yf(I,j)
+        0.125 * ((vff(i,J) + vff(i+1,J-1)) + (vff(i,J-1) + vff(i+1,J))) * (vort_xyff(I,J) + vort_xyff(I,J-1)) * G%mask2dCu(I,j)
+      if (not(CS%zelong_dynamic)) then
+        h_y(I,j) = h_y(I,j) - leo_yf(I,j)
+      endif
     enddo ; enddo
 
   endif
