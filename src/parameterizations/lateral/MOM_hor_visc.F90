@@ -310,10 +310,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   real, dimension(SZK_(GV)) :: smag_bi_const_DSM ! The smagorinsky biharmonic coefficient estimated from dynamic procedure
                                               !! in every layer
+  real, dimension(SZK_(GV)) :: C_R ! The backscatter coefficient determined dynamically
 
-  real,  dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: leo_x !< Leonard vorticity x-flux 
+  real,  dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: leo_x, bx_base !< Leonard vorticity x-flux 
 
-  real,  dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: leo_y !< Leonard vorticity y-flux 
+  real,  dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: leo_y, by_base !< Leonard vorticity y-flux 
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dvdx, dudy, & ! components in the shearing strain [T-1 ~> s-1]
@@ -422,7 +423,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     visc_bound_rem  ! fraction of overall viscous bounds that remain to be applied (h or q) [nondim]
 
   if (CS%use_PG23) then
-    call PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV, CS%PG23)
+    call PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, bx_base, by_base, G, GV, CS%PG23)
   else
     smag_bi_const_DSM = 1.
   endif
@@ -1674,6 +1675,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       if (CS%use_PG23 .and. CS%PG23%ssm) then
         diffu(I,j,k) = diffu(I,j,k) + leo_y(I,j,k)
       endif
+      if (CS%use_PG23 .and. CS%PG23%reynolds) then
+        diffu(I,j,k) = diffu(I,j,k) + C_R(k) * by_base(I,j,k)
+      endif
     enddo ; enddo
 
     if (apply_OBC) then
@@ -1685,7 +1689,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           do j=OBC%segment(n)%HI%jsd,OBC%segment(n)%HI%jed
             diffu(I,j,k) = 0.
           enddo
-        endif
+        endif 
       enddo
     endif
 
@@ -1696,6 +1700,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                      G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
       if (CS%use_PG23 .and. CS%PG23%ssm) then
         diffv(i,J,k) = diffv(i,J,k) - leo_x(i,J,k) 
+      endif
+      if (CS%use_PG23 .and. CS%PG23%reynolds) then
+        diffv(i,J,k) = diffv(i,J,k) - C_R(k) * bx_base(i,J,k) 
       endif
     enddo ; enddo
 

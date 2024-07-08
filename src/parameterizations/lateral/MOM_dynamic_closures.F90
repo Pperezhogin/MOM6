@@ -33,6 +33,7 @@ type, public :: PG23_CS ; private
   integer :: reduce       !< The reduction method in Germano identity
   logical :: offline      !< If offline, we only save fields but do not apply prediction
   logical, public :: ssm  !< Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)
+  logical, public :: reynolds  !< Turns on the Reynolds model (i.e., Reynolds Stress of Germano decomposition)
   logical :: zelong_dynamic !< Uses Zelong2022 dynamic procedure instead of Germano
 
   real, dimension(:,:), allocatable :: &
@@ -49,8 +50,9 @@ type, public :: PG23_CS ; private
   integer :: id_uf, id_vort_y, id_vort_yf, id_lap_vort_y, id_lap_vort_yf, id_smag_y, id_smag_yf, id_m_y, id_leo_y
   integer :: id_vf, id_vort_x, id_vort_xf, id_lap_vort_x, id_lap_vort_xf, id_smag_x, id_smag_xf, id_m_x, id_leo_x
   integer :: id_sh_xy, id_sh_xyf, id_vort_xy, id_vort_xyf, id_shear_mag, id_shear_magf, id_lap_vort, id_lap_vortf
-  integer :: id_sh_xx, id_sh_xxf, id_lm, id_mm 
-  integer :: id_smag
+  integer :: id_sh_xx, id_sh_xxf, id_lm, id_mm, id_mb, id_lb, id_bb
+  integer :: id_smag, id_CR
+  integer :: id_bx, id_by, id_bx_base, id_by_base
   integer :: id_h_x, id_h_y
   !>@}
 
@@ -109,6 +111,9 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_SSM", CS%ssm, &
                  "Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)", default=.false.)
+  
+  call get_param(param_file, mdl, "PG23_REYNOLDS", CS%reynolds, &
+                 "Turns on the Reynolds model (i.e., Reynolds Stress of Germano decomposition)", default=.false.)
 
   call get_param(param_file, mdl, "PG23_ZELONG_DYNAMIC", CS%zelong_dynamic, &
                  "Uses Zelong2022 dynamic procedure instead of Germano", default=.false.)
@@ -149,7 +154,12 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
       'Zonal Vorticity flux in Germano identity')
   CS%id_h_y = register_diag_field('ocean_model', 'PG23_h_y', diag%axesCuL, Time, &
       'Zonal Vorticity flux of SSM in Germano identity')
+  CS%id_by = register_diag_field('ocean_model', 'PG23_by', diag%axesCuL, Time, &
+      'Zonal Vorticity flux of Reynolds in Germano identity')
+  CS%id_by_base = register_diag_field('ocean_model', 'PG23_by_base', diag%axesCuL, Time, &
+      'Zonal Vorticity flux of Reynolds on base filter level')
 
+  ! To DO: swap zonal and meridional in description
   CS%id_vort_x = register_diag_field('ocean_model', 'PG23_vort_x', diag%axesCvL, Time, &
       'd/dx(vorticity)')
   CS%id_vort_xf = register_diag_field('ocean_model', 'PG23_vort_xf', diag%axesCvL, Time, &
@@ -168,6 +178,10 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
       'Meridional Vorticity flux in Germano identity')
   CS%id_h_x = register_diag_field('ocean_model', 'PG23_h_x', diag%axesCvL, Time, &
       'Meridional Vorticity flux of SSM in Germano identity')
+  CS%id_bx = register_diag_field('ocean_model', 'PG23_bx', diag%axesCvL, Time, &
+      'Meridional Vorticity flux of Reynolds in Germano identity')
+  CS%id_bx_base = register_diag_field('ocean_model', 'PG23_bx_base', diag%axesCvL, Time, &
+      'Meridional Vorticity flux of Reynolds on base filter level')
 
   CS%id_sh_xy = register_diag_field('ocean_model', 'PG23_sh_xy', diag%axesBL, Time, &
       'sh_xy')
@@ -194,9 +208,17 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
       'Numerator of Germano identity')
   CS%id_mm = register_diag_field('ocean_model', 'PG23_mm', diag%axesTL, Time, &
       'Denominator of Germano identity')
+  CS%id_lb = register_diag_field('ocean_model', 'PG23_lb', diag%axesTL, Time, &
+      'Leonard * Backscatter in Germano identity')
+  CS%id_mb = register_diag_field('ocean_model', 'PG23_mb', diag%axesTL, Time, &
+      'Viscosity * Backscatter in Germano identity')
+  CS%id_bb = register_diag_field('ocean_model', 'PG23_bb', diag%axesTL, Time, &
+      'Backscatter * Backscatter in Germano identity')
 
   CS%id_smag = register_diag_field('ocean_model', 'smag_const', diag%axesZL, Time, &
       'Smagorinsky coefficient determined dynamically', 'nondim')
+  CS%id_CR = register_diag_field('ocean_model', 'CR_const', diag%axesZL, Time, &
+      'Reynolds coefficient determined dynamically', 'nondim')
 
   ! Clock IDs
   CS%id_clock_module = cpu_clock_id('(Ocean Perezhogin-Glazunov-2023)', grain=CLOCK_MODULE)
@@ -249,7 +271,7 @@ end subroutine PG23_end
 !! * Compute alpha = Model_combined - hat(Model_base)
 !! * Compute products, l*alpha and alpha*alpha
 !! * Apply statistical averaging for products to infer the biharmonic Smagorinsky coefficient
-subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV, CS)
+subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, bx_base, by_base, G, GV, CS)
   type(ocean_grid_type),         intent(in)    :: G  !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV !< The ocean's vertical grid structure.
   type(PG23_CS),                 intent(inout) :: CS  !< PG23 control structure.
@@ -261,13 +283,13 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  &
         intent(in)     :: h  !< Layer thicknesses [H ~> m or kg m-2].
   real, dimension(SZK_(GV)), &
-        intent(inout)  :: smag_bi_const_DSM !< the dynamically-estimated biharmonic Smagorinsky coefficient
-
+        intent(inout)  :: smag_bi_const_DSM, & !< The dynamically-estimated biharmonic Smagorinsky coefficient
+                          C_R                  !< The dynamically-estimated backscatter coefficient
   real,  dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-        intent(inout) :: leo_x !< Leonard vorticity x-flux 
+        intent(inout) :: leo_x, bx_base !< Leonard vorticity x-flux 
 
   real,  dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-        intent(inout) :: leo_y !< Leonard vorticity y-flux 
+        intent(inout) :: leo_y, by_base !< Leonard vorticity y-flux 
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) ::  uf, & ! The fitered zonal velocity [L T-1 ~> m s-1]
                                         vort_y, & ! y derivative of Vertical vorticity
@@ -277,7 +299,8 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
                                         smag_y, & ! biharmonic Smagorinsky model on base level
                                         smag_yf, &  ! biharmonic Smagorinsky model on combined level
                                         m_y, & ! Smag. in dynamic model
-                                        h_y     ! SSM y-flux in Germano identity
+                                        h_y, &     ! SSM y-flux in Germano identity
+                                        by
 
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) ::  vf, & ! The fitered meridional velocity [L T-1 ~> m s-1]
                                         vort_x, & ! x derivative of Vertical vorticity
@@ -287,7 +310,8 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
                                         smag_x, & ! biharmonic Smagorinsky model on base level
                                         smag_xf, &   ! biharmonic Smagorinsky model on combined level
                                         m_x, & ! Smag. in dynamic model
-                                        h_x    ! SSM x-flux in Germano identity
+                                        h_x, &    ! SSM x-flux in Germano identity
+                                        bx
 
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: sh_xy, & ! horizontal shearing strain (du/dy + dv/dx)
                                         sh_xyf, & ! filtered horizontal shearing strain (du/dy + dv/dx)
@@ -301,10 +325,11 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV))   :: sh_xx, & ! horizontal tension (du/dx - dv/dy)
                                         sh_xxf, &  ! filtered horizontal tension (du/dx - dv/dy)
                                         lm, &      ! numerator of Germano identity
-                                        mm         ! denominator of Germano identity
+                                        mm, &         ! denominator of Germano identity
+                                        lb, mb, bb
 
-  integer :: k, nz
-  real, dimension(SZK_(GV)) :: lm_sum, mm_sum
+  integer :: k, nz 
+  real, dimension(SZK_(GV)) :: lm_sum, mm_sum, lb_sum, mb_sum, bb_sum
   real :: dummy_argument
 
   !type(group_pass_type) :: pass_uv  ! A handle used for group halo passes
@@ -372,12 +397,18 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
     ! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
     ! Output Leonard flux has halo 0 (halo 2 is also possible if needed)
     call compute_leonard_flux(leo_x(:,:,k), leo_y(:,:,k), h_x(:,:,k), h_y(:,:,k),                        &
+                              bx(:,:,k), by(:,:,k), bx_base(:,:,k), by_base(:,:,k),                      &
                               u(:,:,k), v(:,:,k), vort_xy(:,:,k), uf(:,:,k), vf(:,:,k), vort_xyf(:,:,k), &
                               G, GV, CS, CS%test_width, halo=1)
     ! Output halo is 0; 
     ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
     if (CS%ssm) then
-      call compute_lm_mm(leo_x(:,:,k) - h_x(:,:,k), leo_y(:,:,k) - h_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+      if (CS%reynolds) then
+        call compute_lm_mm(leo_x(:,:,k) - h_x(:,:,k), leo_y(:,:,k) - h_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1, &
+                           bx=bx(:,:,k), by=by(:,:,k), lb=lb(:,:,k), mb=mb(:,:,k), bb=bb(:,:,k))
+      else
+        call compute_lm_mm(leo_x(:,:,k) - h_x(:,:,k), leo_y(:,:,k) - h_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+      endif
     else
       call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
     endif
@@ -392,10 +423,19 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
     dummy_argument = reproducing_sum(max(lm(G%isc:G%iec,G%jsc:G%jec,1:nz),0.0), sums=lm_sum)
   endif
   dummy_argument = reproducing_sum(mm(G%isc:G%iec,G%jsc:G%jec,1:nz), sums=mm_sum)
+  if (CS%reynolds) then
+    dummy_argument = reproducing_sum(lb(G%isc:G%iec,G%jsc:G%jec,1:nz), sums=lb_sum)
+    dummy_argument = reproducing_sum(bb(G%isc:G%iec,G%jsc:G%jec,1:nz), sums=bb_sum)
+    dummy_argument = reproducing_sum(mb(G%isc:G%iec,G%jsc:G%jec,1:nz), sums=mb_sum)
+  endif
 
   call cpu_clock_end(CS%id_clock_reduce)
 
   smag_bi_const_DSM = max(lm_sum / (mm_sum + 1e-40), 0.0)
+
+  if (CS%reynolds) then
+    C_R = max((lb_sum - smag_bi_const_DSM * mb_sum) / (bb_sum + 1e-40), 0.0)
+  endif
 
   call cpu_clock_begin(CS%id_clock_post)
 
@@ -437,8 +477,18 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, leo_x, leo_y, G, GV
   if (CS%id_sh_xxf>0)        call post_data(CS%id_sh_xxf, sh_xxf, CS%diag)
   if (CS%id_lm>0)            call post_data(CS%id_lm, lm, CS%diag)
   if (CS%id_mm>0)            call post_data(CS%id_mm, mm, CS%diag)
+  if (CS%id_bb>0)            call post_data(CS%id_bb, bb, CS%diag)
+  if (CS%id_mb>0)            call post_data(CS%id_mb, mb, CS%diag)
+  if (CS%id_lb>0)            call post_data(CS%id_lb, lb, CS%diag)
 
-  if (CS%id_smag)            call post_data(CS%id_smag, smag_bi_const_DSM, CS%diag)
+  if (CS%id_bx>0)            call post_data(CS%id_bx, bx, CS%diag)
+  if (CS%id_bx_base>0)       call post_data(CS%id_bx_base, bx_base, CS%diag)
+
+  if (CS%id_by>0)            call post_data(CS%id_by, by, CS%diag)
+  if (CS%id_by_base>0)       call post_data(CS%id_by_base, by_base, CS%diag)
+
+  if (CS%id_smag>0)           call post_data(CS%id_smag, smag_bi_const_DSM, CS%diag)
+  if (CS%id_CR>0)             call post_data(CS%id_CR, C_R, CS%diag)
 
   call cpu_clock_end(CS%id_clock_post)
 
@@ -455,7 +505,8 @@ end subroutine PG23_germano_identity
 !> This function computes scalar product of leonard flux
 !! and eddy viscosity model in center points
 subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
-                         G, GV, CS, halo)
+                         G, GV, CS, halo,                &
+                         bx, by, lb, mb, bb)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   type(PG23_CS),           intent(in) :: CS      !< PG23 control structure.
@@ -466,9 +517,13 @@ subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
                                                    m_x      !< Eddy visocitty in Germano identity x-flux  
   real, dimension(SZIB_(G),SZJ_(G)), intent(in) :: leo_y, & !< Leonard vorticity y-flux
                                                    m_y      !< Eddy visocitty in Germano identity y-flux  
+  real, dimension(SZI_(G),SZJB_(G)), optional, intent(in) :: bx !< Reynolds flux
+  real, dimension(SZIB_(G),SZJ_(G)), optional, intent(in) :: by !< Reynolds flux
 
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: lm, &  !< Germano identity: Leonard flux times eddy viscosity flux
                                                      mm     !< Germano identity: eddy viscosity flux squared
+  real, dimension(SZI_(G),SZJ_(G)), optional, intent(inout) :: &
+                                                     lb, mb, bb
   
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
@@ -484,6 +539,14 @@ subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
 
     mm(i,j) = 0.5 * ((m_x(i,J) * m_x(i,J) + m_x(i,J-1) * m_x(i,J-1)) + &
                      (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+    if (present(bx)) then
+      lb(i,j) = 0.5 * ((leo_x(i,J) * bx(i,J) + leo_x(i,J-1) * bx(i,J-1)) + &
+                       (leo_y(I,j) * by(I,j) + leo_y(I-1,j) * by(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+      mb(i,j) = 0.5 * ((m_x(i,J) * bx(i,J) + m_x(i,J-1) * bx(i,J-1)) + &
+                       (m_y(I,j) * by(I,j) + m_y(I-1,j) * by(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+      bb(i,j) = 0.5 * ((bx(i,J) * bx(i,J) + bx(i,J-1) * bx(i,J-1)) + &
+                       (by(I,j) * by(I,j) + by(I-1,j) * by(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+    endif
   enddo ; enddo
   
 end subroutine compute_lm_mm
@@ -492,6 +555,7 @@ end subroutine compute_lm_mm
 !! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
 !! leo_y = bar(v * vort_xy) - bar(v) * bar(vort_xy)
 subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
+                                  bx, by, bx_base, by_base,        &
                                   u, v, vort_xy, uf, vf, vort_xyf, &
                                   G, GV, CS, filter_width, halo)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
@@ -520,10 +584,28 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
   real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: h_x ! SSM x-flux contribution in Germano identity
   real, dimension(SZIB_(G),SZJ_(G)), intent(inout) :: h_y ! SSM y-flux contribution in Germano identity
 
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout)  :: bx
+  real, dimension(SZIB_(G),SZJ_(G)), intent(inout)  :: by
+
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout)  :: bx_base ! Reynolds on base filter level
+  real, dimension(SZIB_(G),SZJ_(G)), intent(inout)  :: by_base ! Reynolds on base filter level
+
   real, dimension(SZI_(G),SZJB_(G)) :: u_hat_vort_hat ! hat(u) * hat(vort_xy)
   real, dimension(SZIB_(G),SZJ_(G)) :: v_hat_vort_hat ! hat(v) * hat(vort_xy)
   real, dimension(SZI_(G),SZJB_(G)) :: leo_xf ! Leonard vorticity x-flux filtered
   real, dimension(SZIB_(G),SZJ_(G)) :: leo_yf ! Leonard vorticity y-flux filtered
+
+  real, dimension(SZIB_(G),SZJ_(G)) :: ur_base ! Residual velocity on base filter level
+  real, dimension(SZI_(G),SZJB_(G)) :: vr_base ! Residual velocity on base filter level
+  real, dimension(SZIB_(G),SZJB_(G)) :: vortr_base ! Residual vorticity on base filter level
+
+  real, dimension(SZI_(G),SZJB_(G)) :: bx_basef ! Reynolds on base filter level filtered
+  real, dimension(SZIB_(G),SZJ_(G)) :: by_basef ! Reynolds on base filter level filtered
+
+
+  real, dimension(SZIB_(G),SZJ_(G)) :: ur_comb
+  real, dimension(SZI_(G),SZJB_(G)) :: vr_comb
+  real, dimension(SZIB_(G),SZJB_(G)) :: vortr_comb
 
   real, dimension(SZIB_(G),SZJ_(G))  :: uff
   real, dimension(SZI_(G),SZJB_(G))  :: vff
@@ -620,7 +702,76 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
         h_y(I,j) = h_y(I,j) - leo_yf(I,j)
       endif
     enddo ; enddo
+  endif
 
+  if (CS%reynolds) then
+    if (.not.CS%ssm .or. CS%zelong_dynamic) then
+      call MOM_error(FATAL, &
+         "MOM_dynamic_closures: Not implemented")
+    endif
+
+    ur_base = u - uf
+    vr_base = v - vf
+    vortr_base = vort_xy - vort_xyf
+
+    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+      bx_base(i,J) = 0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
+    enddo ; enddo
+
+    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+      by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
+    enddo ; enddo
+
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_base, v=bx_base)
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=ur_base, v=vr_base, q=vortr_base)
+
+    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+      bx_base(i,J) = bx_base(i,J) -  0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
+    enddo ; enddo
+
+    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+      by_base(I,j) = by_base(I,j) - 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
+    enddo ; enddo
+
+    call pass_vector(by_base, bx_base, G%Domain, clock=CS%id_clock_mpi)
+    bx_basef = bx_base
+    by_basef = by_base
+
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_basef, v=bx_basef)
+
+    !!!!!!!!!!! Combined level !!!!!!!!!!!!!
+    ur_comb = uf - uff
+    vr_comb = vf - vff
+    vortr_comb = vort_xyf - vort_xyff
+
+    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+      bx(i,J) = 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
+    enddo ; enddo
+
+    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+      by(I,j) = 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
+    enddo ; enddo
+
+    call pass_vector(ur_comb, vr_comb, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(vortr_comb, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
+    call pass_vector(by, bx, G%Domain, clock=CS%id_clock_mpi)
+
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=by, v=bx)
+    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=ur_comb, v=vr_comb, q=vortr_comb)
+
+    ! Combined level
+    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+      bx(i,J) = bx(i,J) - 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
+    enddo ; enddo
+
+    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+      by(I,j) = by(I,j) - 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
+    enddo ; enddo
+
+    ! Germano identity level
+    bx = bx - bx_basef
+    by = by - by_basef
+    
   endif
   
 end subroutine compute_leonard_flux
