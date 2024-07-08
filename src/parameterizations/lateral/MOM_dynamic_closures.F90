@@ -705,72 +705,131 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
   endif
 
   if (CS%reynolds) then
-    if (.not.CS%ssm .or. CS%zelong_dynamic) then
+    if (.not.CS%ssm) then
       call MOM_error(FATAL, &
          "MOM_dynamic_closures: Not implemented")
     endif
 
-    ur_base = u - uf
-    vr_base = v - vf
-    vortr_base = vort_xy - vort_xyf
+    if (not(CS%zelong_dynamic)) then
 
-    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
-      bx_base(i,J) = 0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
-    enddo ; enddo
+      ur_base = u - uf
+      vr_base = v - vf
+      vortr_base = vort_xy - vort_xyf
 
-    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
-      by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
-    enddo ; enddo
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx_base(i,J) = 0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
 
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_base, v=bx_base)
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=ur_base, v=vr_base, q=vortr_base)
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
 
-    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
-      bx_base(i,J) = bx_base(i,J) -  0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
-    enddo ; enddo
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_base, v=bx_base)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=ur_base, v=vr_base, q=vortr_base)
 
-    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
-      by_base(I,j) = by_base(I,j) - 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
-    enddo ; enddo
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx_base(i,J) = bx_base(i,J) -  0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
 
-    call pass_vector(by_base, bx_base, G%Domain, clock=CS%id_clock_mpi)
-    bx_basef = bx_base
-    by_basef = by_base
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by_base(I,j) = by_base(I,j) - 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
 
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_basef, v=bx_basef)
+      call pass_vector(by_base, bx_base, G%Domain, clock=CS%id_clock_mpi)
+      bx_basef = bx_base
+      by_basef = by_base
 
-    !!!!!!!!!!! Combined level !!!!!!!!!!!!!
-    ur_comb = uf - uff
-    vr_comb = vf - vff
-    vortr_comb = vort_xyf - vort_xyff
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_basef, v=bx_basef)
 
-    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
-      bx(i,J) = 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
-    enddo ; enddo
+      !!!!!!!!!!! Combined level !!!!!!!!!!!!!
+      ur_comb = uf - uff
+      vr_comb = vf - vff
+      vortr_comb = vort_xyf - vort_xyff
 
-    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
-      by(I,j) = 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
-    enddo ; enddo
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx(i,J) = 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
 
-    call pass_vector(ur_comb, vr_comb, G%Domain, clock=CS%id_clock_mpi)
-    call pass_var(vortr_comb, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
-    call pass_vector(by, bx, G%Domain, clock=CS%id_clock_mpi)
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by(I,j) = 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
 
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=by, v=bx)
-    call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=ur_comb, v=vr_comb, q=vortr_comb)
+      call pass_vector(ur_comb, vr_comb, G%Domain, clock=CS%id_clock_mpi)
+      call pass_var(vortr_comb, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
+      call pass_vector(by, bx, G%Domain, clock=CS%id_clock_mpi)
 
-    ! Combined level
-    do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
-      bx(i,J) = bx(i,J) - 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
-    enddo ; enddo
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=by, v=bx)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=2, u=ur_comb, v=vr_comb, q=vortr_comb)
 
-    do j=js-2,je+2 ; do I=Isq-2,Ieq+2
-      by(I,j) = by(I,j) - 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
-    enddo ; enddo
+      ! Combined level
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx(i,J) = bx(i,J) - 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
 
-    ! Germano identity level
-    bx = bx - bx_basef
-    by = by - by_basef
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by(I,j) = by(I,j) - 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
+
+      ! Germano identity level
+      bx = bx - bx_basef
+      by = by - by_basef
+    else
+
+      ur_base = u - uf
+      vr_base = v - vf
+      vortr_base = vort_xy - vort_xyf
+
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx_base(i,J) = 0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
+
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
+
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by_base, v=bx_base)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=ur_base, v=vr_base, q=vortr_base)
+ 
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx_base(i,J) = bx_base(i,J) -  0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
+
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by_base(I,j) = by_base(I,j) - 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
+
+      call pass_vector(by_base, bx_base, G%Domain, clock=CS%id_clock_mpi)
+
+      !!!!!!!!!!! Combined level !!!!!!!!!!!!!
+      ur_comb = uf - uff
+      vr_comb = vf - vff
+      vortr_comb = vort_xyf - vort_xyff
+
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx(i,J) = 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
+
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by(I,j) = 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
+
+      call pass_vector(ur_comb, vr_comb, G%Domain, clock=CS%id_clock_mpi)
+      call pass_var(vortr_comb, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
+      call pass_vector(by, bx, G%Domain, clock=CS%id_clock_mpi)
+
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=by, v=bx)
+      call filter_wrapper(G, GV, CS, filter_width, halo=4, niter=1, u=ur_comb, v=vr_comb, q=vortr_comb)
+
+      ! Combined level
+      do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
+        bx(i,J) = bx(i,J) - 0.125 * ((ur_comb(I,j) + ur_comb(I-1,j+1)) + (ur_comb(I-1,j) + ur_comb(I,j+1))) * (vortr_comb(I,J) + vortr_comb(I-1,J)) * G%mask2dCv(i,J)
+      enddo ; enddo
+
+      do j=js-2,je+2 ; do I=Isq-2,Ieq+2
+        by(I,j) = by(I,j) - 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
+      enddo ; enddo
+
+    endif
     
   endif
   
