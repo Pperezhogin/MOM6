@@ -35,6 +35,7 @@ type, public :: PG23_CS ; private
   logical, public :: ssm  !< Turns on the SSM model (i.e., Leonard Stress of Germano decomposition)
   logical, public :: reynolds  !< Turns on the Reynolds model (i.e., Reynolds Stress of Germano decomposition)
   logical :: zelong_dynamic !< Uses Zelong2022 dynamic procedure instead of Germano
+  integer :: boundary_discard !< The number of grid points near the boundary to discard in Dynamic procedure
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -42,6 +43,9 @@ type, public :: PG23_CS ; private
           dx_dyBu,   & !< Pre-calculated dx/dy at q points [nondim]
           dy_dxBu,   & !< Pre-calculated dy/dx at q points [nondim]
           grid_sp_q4   !< Pre-calculated dx^4  at q point  [L4 ~> m4]
+  
+  real, dimension(:,:), allocatable :: &
+          mask2dT_boundary !< Mask in T points excluding the number of boundary points equal to boundary_discard
   
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   
@@ -117,6 +121,9 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_ZELONG_DYNAMIC", CS%zelong_dynamic, &
                  "Uses Zelong2022 dynamic procedure instead of Germano", default=.false.)
+
+  call get_param(param_file, mdl, "PG23_BOUNDARY_DISCARD", CS%boundary_discard, &
+                 "The number of grid points near the boundary to discard in Dynamic procedure", default=0)
 
   if ((CS%ssm .or. CS%zelong_dynamic) .and. ABS(CS%filters_ratio-SQRT(2.0))>1e-10) then
     call MOM_error(FATAL, &
@@ -230,8 +237,19 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
   allocate(CS%dx_dyT(SZI_(G),SZJ_(G)), source=0.)
   allocate(CS%dy_dxT(SZI_(G),SZJ_(G)), source=0.)
   allocate(CS%dx_dyBu(SZIB_(G),SZJB_(G)), source=0.)
-  allocate(CS%dy_dxBu(SZIB_(G),SZJB_(G)), source=0.)
+  allocate(CS%dy_dxBu(SZIB_(G),SZJB_(G)), source=0.) 
   allocate(CS%grid_sp_q4(SZIB_(G),SZJB_(G)), source=0.)
+  allocate(CS%mask2dT_boundary(SZI_(G),SZJ_(G)), source=0.)
+
+  CS%mask2dT_boundary = G%mask2dT
+  do i=1,CS%boundary_discard
+    call filter_wrapper(G, GV, CS, 2., halo=1, niter=1, h=CS%mask2dT_boundary)
+    call pass_var(CS%mask2dT_boundary, G%Domain)
+  enddo
+
+  where (CS%mask2dT_boundary<1.0)
+    CS%mask2dT_boundary=0.
+  endwhere
 
   do j=jsd,jed ; do i=isd,ied
     CS%dx_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; CS%dy_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
@@ -254,6 +272,7 @@ subroutine PG23_end(CS)
   deallocate(CS%dx_dyBu)
   deallocate(CS%dy_dxBu)
   deallocate(CS%grid_sp_q4)
+  deallocate(CS%mask2dT_boundary)
 
 end subroutine PG23_end
 
@@ -535,17 +554,17 @@ subroutine compute_lm_mm(leo_x, leo_y, m_x, m_y, lm, mm, &
   do j=js-halo,je+halo ; do i=is-halo, ie+halo
     ! Here we use two-point interpolation, so coefficient is 0.5
     lm(i,j) = 0.5 * ((leo_x(i,J) * m_x(i,J) + leo_x(i,J-1) * m_x(i,J-1)) + &
-                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+                     (leo_y(I,j) * m_y(I,j) + leo_y(I-1,j) * m_y(I-1,j))) * CS%mask2dT_boundary(i,j) * G%areaT(i,j)
 
     mm(i,j) = 0.5 * ((m_x(i,J) * m_x(i,J) + m_x(i,J-1) * m_x(i,J-1)) + &
-                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+                     (m_y(I,j) * m_y(I,j) + m_y(I-1,j) * m_y(I-1,j))) * CS%mask2dT_boundary(i,j) * G%areaT(i,j)
     if (present(bx)) then
       lb(i,j) = 0.5 * ((leo_x(i,J) * bx(i,J) + leo_x(i,J-1) * bx(i,J-1)) + &
-                       (leo_y(I,j) * by(I,j) + leo_y(I-1,j) * by(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+                       (leo_y(I,j) * by(I,j) + leo_y(I-1,j) * by(I-1,j))) * CS%mask2dT_boundary(i,j) * G%areaT(i,j)
       mb(i,j) = 0.5 * ((m_x(i,J) * bx(i,J) + m_x(i,J-1) * bx(i,J-1)) + &
-                       (m_y(I,j) * by(I,j) + m_y(I-1,j) * by(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+                       (m_y(I,j) * by(I,j) + m_y(I-1,j) * by(I-1,j))) * CS%mask2dT_boundary(i,j) * G%areaT(i,j)
       bb(i,j) = 0.5 * ((bx(i,J) * bx(i,J) + bx(i,J-1) * bx(i,J-1)) + &
-                       (by(I,j) * by(I,j) + by(I-1,j) * by(I-1,j))) * G%mask2dT(i,j) * G%areaT(i,j)
+                       (by(I,j) * by(I,j) + by(I-1,j) * by(I-1,j))) * CS%mask2dT_boundary(i,j) * G%areaT(i,j)
     endif
   enddo ; enddo
   
