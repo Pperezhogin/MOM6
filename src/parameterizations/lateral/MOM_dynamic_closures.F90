@@ -429,7 +429,12 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
         call compute_lm_mm(leo_x(:,:,k) - h_x(:,:,k), leo_y(:,:,k) - h_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
       endif
     else
-      call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+      if (CS%reynolds) then
+        call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1, &
+                           bx=bx(:,:,k), by=by(:,:,k), lb=lb(:,:,k), mb=mb(:,:,k), bb=bb(:,:,k))
+      else
+        call compute_lm_mm(leo_x(:,:,k), leo_y(:,:,k), m_x(:,:,k), m_y(:,:,k), lm(:,:,k), mm(:,:,k), G, GV, CS, halo=1)
+      endif
     endif
     
   enddo ! end of k loop
@@ -684,7 +689,7 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
     leo_y(I,j) = leo_y(I,j) - v_hat_vort_hat(I,j)
   enddo ; enddo
 
-  if (CS%ssm) then
+  if (CS%ssm .or. CS%reynolds) then
     call pass_vector(v_hat_vort_hat, u_hat_vort_hat, G%Domain, clock=CS%id_clock_mpi)
     uff = uf
     vff = vf
@@ -724,10 +729,6 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
   endif
 
   if (CS%reynolds) then
-    if (.not.CS%ssm) then
-      call MOM_error(FATAL, &
-         "MOM_dynamic_closures: Not implemented")
-    endif
 
     if (not(CS%zelong_dynamic)) then
 
