@@ -21,7 +21,7 @@ use MOM_MEKE_types,            only : MEKE_type
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_variables,             only : thermo_var_ptrs, cont_diag_ptrs
 use MOM_verticalGrid,          only : verticalGrid_type
-use MOM_dynamic_closures,      only : SSM_thickness_flux
+use MOM_dynamic_closures,      only : SSM_thickness_flux, compute_leonard_thickness_flux
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -93,6 +93,7 @@ type, public :: thickness_diffuse_CS ; private
                                  !! isopycnal height diffusivity
   logical :: use_stanley_gm      !< If true, also use the Stanley parameterization in MOM_thickness_diffuse
   logical :: thickness_fluxes_SSM !< Use SSM model (Leonard stress) to parameterize thickness fluxes
+  logical :: thickness_streamfun_SSM !< Use SSM model (Leonard stress) to parameterize thickness streamfunction
   real    :: test_width !< Width of the test filter (hat) w.r.t. grid spacing
 
   type(diag_ctrl), pointer :: diag => NULL() !< structure used to regulate timing of diagnostics
@@ -147,6 +148,9 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   real :: uhD(SZIB_(G),SZJ_(G),SZK_(GV)) ! Diffusive u*h fluxes [L2 H T-1 ~> m3 s-1 or kg s-1]
   real :: vhD(SZI_(G),SZJB_(G),SZK_(GV)) ! Diffusive v*h fluxes [L2 H T-1 ~> m3 s-1 or kg s-1]
 
+  real :: Sfn_unlim_u_SSM(SZIB_(G),SZJ_(G),SZK_(GV)+1) ! Volume streamfunction for u-points [Z L2 T-1 ~> m3 s-1]
+  real :: Sfn_unlim_v_SSM(SZI_(G),SZJB_(G),SZK_(GV)+1)  ! Volume streamfunction for v-points [Z L2 T-1 ~> m3 s-1]
+
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1) :: &
     KH_u, &       ! Isopycnal height diffusivities in u-columns [L2 T-1 ~> m2 s-1]
     int_slope_u   ! A nondimensional ratio from 0 to 1 that gives the relative
@@ -182,15 +186,16 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   logical :: use_VarMix, Resoln_scaled, Depth_scaled, use_stored_slopes, khth_use_ebt_struct, use_Visbeck
   logical :: use_QG_Leith
   integer :: i, j, k, is, ie, js, je, nz
+  real :: h_upper, h_lower
 
   if (.not. CS%initialized) call MOM_error(FATAL, "MOM_thickness_diffuse: "//&
          "Module must be initialized before it is used.")
 
-  if (CS%thickness_fluxes_SSM) then
-    if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
-    if (CS%id_v>0)       call post_data(CS%id_v, v, CS%diag)
-    if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
+  if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
+  if (CS%id_v>0)       call post_data(CS%id_v, v, CS%diag)
+  if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
 
+  if (CS%thickness_fluxes_SSM) then
     call SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, CS%test_width, dt, G, GV)
     if (CS%id_uhSSM>0)       call post_data(CS%id_uhSSM, uhD, CS%diag)
     if (CS%id_vhSSM>0)       call post_data(CS%id_vhSSM, vhD, CS%diag)
@@ -199,10 +204,42 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
 
   if ((.not.CS%thickness_diffuse) &
       .or. .not. (CS%Khth > 0.0 .or. CS%read_khth &
-      .or. VarMix%use_variable_mixing)) return
+      .or. VarMix%use_variable_mixing .or. CS%thickness_streamfun_SSM)) return
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   h_neglect = GV%H_subroundoff
+
+  if (CS%thickness_streamfun_SSM) then
+    do k=1,nz
+      call compute_leonard_thickness_flux(uhD(:,:,k), vhD(:,:,k), u(:,:,k), v(:,:,k), h(:,:,k), &
+                                        dt, G, GV, CS%test_width, halo=2, apply_limiter=.False.)
+    enddo
+
+    if (nz .ne. 2) then
+      write(*,*) 'Error: SSM thickness flux not implemented'
+    endif
+
+    ! u streamfunction
+    Sfn_unlim_u_SSM = 0.
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      h_upper = (h(i,j,1) + h(i+1,j,1)) * 0.5 * G%mask2dCu(i,j)
+      h_lower = (h(i,j,2) + h(i+1,j,2)) * 0.5 * G%mask2dCu(i,j)
+      Sfn_unlim_u_SSM(i,j,2) = (h_upper * uhD(i,j,2) - h_lower * uhD(i,j,1)) / ((h_upper + h_lower) + h_neglect)
+    enddo; enddo
+
+    ! v streamfunction
+    Sfn_unlim_v_SSM = 0.
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      h_upper = (h(i,j,1) + h(i,j+1,1)) * 0.5 * G%mask2dCv(i,j)
+      h_lower = (h(i,j,2) + h(i,j+1,2)) * 0.5 * G%mask2dCv(i,j)
+      Sfn_unlim_v_SSM(i,j,2) = (h_upper * vhD(i,j,2) - h_lower * vhD(i,j,1)) / ((h_upper + h_lower) + h_neglect)
+    enddo; enddo
+
+    ! To be sure that fluxes are obtained by MOM6 code
+    uhD = 0.
+    vhD = 0.
+
+  endif
 
   if (allocated(MEKE%GM_src)) then
     do j=js,je ; do i=is,ie ; MEKE%GM_src(i,j) = 0. ; enddo ; enddo
@@ -496,10 +533,10 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
 
   ! Calculate uhD, vhD from h, e, KH_u, KH_v, tv%T/S
   if (use_stored_slopes) then
-    call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
+    call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, Sfn_unlim_u_SSM, Sfn_unlim_v_SSM, cg1, dt, G, GV, US, MEKE, CS, &
                                 int_slope_u, int_slope_v, VarMix%slope_x, VarMix%slope_y)
   else
-    call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
+    call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, Sfn_unlim_u_SSM, Sfn_unlim_v_SSM, cg1, dt, G, GV, US, MEKE, CS, &
                                 int_slope_u, int_slope_v)
   endif
 
@@ -514,8 +551,13 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
 
   ! offer diagnostic fields for averaging
   if (query_averaging_enabled(CS%diag)) then
-    if (CS%id_uhGM > 0)   call post_data(CS%id_uhGM, uhD, CS%diag)
-    if (CS%id_vhGM > 0)   call post_data(CS%id_vhGM, vhD, CS%diag)
+    if (CS%thickness_streamfun_SSM) then
+      if (CS%id_uhSSM>0)       call post_data(CS%id_uhSSM, uhD, CS%diag)
+      if (CS%id_vhSSM>0)       call post_data(CS%id_vhSSM, vhD, CS%diag)
+    else
+      if (CS%id_uhGM > 0)   call post_data(CS%id_uhGM, uhD, CS%diag)
+      if (CS%id_vhGM > 0)   call post_data(CS%id_vhGM, vhD, CS%diag)
+    endif
     if (CS%id_GMwork > 0) call post_data(CS%id_GMwork, CS%GMwork, CS%diag)
     if (CS%id_KH_u > 0)   call post_data(CS%id_KH_u, KH_u, CS%diag)
     if (CS%id_KH_v > 0)   call post_data(CS%id_KH_v, KH_v, CS%diag)
@@ -610,7 +652,7 @@ end subroutine thickness_diffuse
 !> Calculates parameterized layer transports for use in the continuity equation.
 !! Fluxes are limited to give positive definite thicknesses.
 !! Called by thickness_diffuse().
-subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, &
+subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, Sfn_unlim_u_SSM, Sfn_unlim_v_SSM, cg1, dt, G, GV, US, MEKE, &
                                   CS, int_slope_u, int_slope_v, slope_x, slope_y)
   type(ocean_grid_type),                        intent(in)  :: G     !< Ocean grid structure
   type(verticalGrid_type),                      intent(in)  :: GV    !< Vertical grid structure
@@ -626,6 +668,8 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
                                                                      !! [H L2 T-1 ~> m3 s-1 or kg s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)),   intent(out) :: vhD   !< Meridional mass fluxes
                                                                      !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: Sfn_unlim_u_SSM ! Volume streamfunction for u-points by SSM model [Z L2 T-1 ~> m3 s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in) :: Sfn_unlim_v_SSM  ! Volume streamfunction for v-points by SSM model [Z L2 T-1 ~> m3 s-1]
   real, dimension(:,:),                         pointer     :: cg1   !< Wave speed [L T-1 ~> m s-1]
   real,                                         intent(in)  :: dt    !< Time increment [T ~> s]
   type(MEKE_type),                              intent(inout) :: MEKE !< MEKE fields
@@ -1020,8 +1064,12 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
             Slope_x_PE(I,j,k) = MIN(Slope,CS%slope_max)
             if (CS%id_slope_x > 0) CS%diagSlopeX(I,j,k) = Slope
 
-            ! Estimate the streamfunction at each interface [H L2 T-1 ~> m3 s-1 or kg s-1].
-            Sfn_unlim_u(I,K) = -(KH_u(I,j,K)*G%dy_Cu(I,j))*Slope
+            if (CS%thickness_streamfun_SSM) then
+              Sfn_unlim_u(I,K) =  Sfn_unlim_u_SSM(i,j,k)
+            else
+              ! Estimate the streamfunction at each interface [H L2 T-1 ~> m3 s-1 or kg s-1].
+              Sfn_unlim_u(I,K) = -(KH_u(I,j,K)*G%dy_Cu(I,j))*Slope
+            endif
 
             ! Avoid moving dense water upslope from below the level of
             ! the bottom on the receiving side.
@@ -1050,7 +1098,11 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
               Slope = ((e(i,j,K)-e(i+1,j,K))*G%IdxCu(I,j)) * G%OBCmaskCu(I,j)
             endif
             if (CS%id_slope_x > 0) CS%diagSlopeX(I,j,k) = Slope
-            Sfn_unlim_u(I,K) = ((KH_u(I,j,K)*G%dy_Cu(I,j))*Slope)
+            if (CS%thickness_streamfun_SSM) then
+              Sfn_unlim_u(I,K) =  Sfn_unlim_u_SSM(i,j,k)
+            else
+              Sfn_unlim_u(I,K) = ((KH_u(I,j,K)*G%dy_Cu(I,j))*Slope)
+            endif
             dzN2_u(I,K) = GV%g_prime(K)
           endif ! if (use_EOS)
         else ! if (k > nk_linear)
@@ -1335,7 +1387,11 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
             Slope_y_PE(i,J,k) = MIN(Slope,CS%slope_max)
             if (CS%id_slope_y > 0) CS%diagSlopeY(I,j,k) = Slope
 
-            Sfn_unlim_v(i,K) = -((KH_v(i,J,K)*G%dx_Cv(i,J))*Slope)
+            if (CS%thickness_streamfun_SSM) then
+              Sfn_unlim_v(i,K) = Sfn_unlim_v_SSM(i,j,k)
+            else
+              Sfn_unlim_v(i,K) = -((KH_v(i,J,K)*G%dx_Cv(i,J))*Slope)
+            endif
 
             ! Avoid moving dense water upslope from below the level of
             ! the bottom on the receiving side.
@@ -1364,7 +1420,11 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
               Slope = ((e(i,j,K)-e(i,j+1,K))*G%IdyCv(i,J)) * G%OBCmaskCv(i,J)
             endif
             if (CS%id_slope_y > 0) CS%diagSlopeY(I,j,k) = Slope
-            Sfn_unlim_v(i,K) = ((KH_v(i,J,K)*G%dx_Cv(i,J))*Slope)
+            if (CS%thickness_streamfun_SSM) then
+              Sfn_unlim_v(i,K) = Sfn_unlim_v_SSM(i,j,k)
+            else
+              Sfn_unlim_v(i,K) = ((KH_v(i,J,K)*G%dx_Cv(i,J))*Slope)
+            endif
             dzN2_v(i,K) = GV%g_prime(K)
           endif ! if (use_EOS)
         else ! if (k > nk_linear)
@@ -2122,6 +2182,8 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
   ! This option must be used together with THICKNESSDIFFUSE
   call get_param(param_file, mdl, "PG23_THICKNESS_FLUXES_SSM", CS%thickness_fluxes_SSM, &
                  "Use SSM model (Leonard stress) to parameterize thickness fluxes", default=.false.)
+  call get_param(param_file, mdl, "PG23_THICKNESS_STREAMFUN_SSM", CS%thickness_streamfun_SSM, &
+                 "Use SSM model (Leonard stress) to parameterize thickness streamfunction", default=.false.)
   call get_param(param_file, mdl, "PG23_TEST_WIDTH", CS%test_width, &
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
 

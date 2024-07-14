@@ -23,7 +23,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public PG23_germano_identity, PG23_init, PG23_end, SSM_thickness_flux
+public PG23_germano_identity, PG23_init, PG23_end, SSM_thickness_flux, compute_leonard_thickness_flux
 
 !> Control structure for Perezhogin & Glazunov 2023
 type, public :: PG23_CS ; private
@@ -569,7 +569,7 @@ subroutine SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, filter_width, dt, G
   !! See Lines 561-575 of MOM_thickness_diffuse.F90
   do k=1,nz
     call compute_leonard_thickness_flux(uhD(:,:,k), vhD(:,:,k), u(:,:,k), v(:,:,k), h(:,:,k), &
-                                        dt, G, GV, filter_width, halo=2)
+                                        dt, G, GV, filter_width, halo=2, apply_limiter=.True.)
     do j=js,je ; do I=is-1,ie
       uhtr(I,j,k) = uhtr(I,j,k) + uhD(I,j,k) * dt
     enddo ; enddo
@@ -590,7 +590,7 @@ end subroutine SSM_thickness_flux
 !! uhD = (bar(uh) - bar(u) * bar(h)) * dy
 !! vhD = (bar(vh) - bar(v) * bar(h)) * dx
 !! Flux is limited to prevent negative thickness
-subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_width, halo)
+subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_width, halo, apply_limiter)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   integer, intent(in) :: halo !< Currently available halo points for velocity and thickness
@@ -598,6 +598,7 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
   real, intent(in) :: filter_width !< Filter width (nondim) used to compute bar(u*h)
                                    !! and used to compute bar(u), var(v) and bar(h)
   real,                                       intent(in)    :: dt     !< Time increment [T ~> s]
+  logical, intent(in) :: apply_limiter
 
   real, dimension(SZIB_(G),SZJ_(G)), &
            intent(in) :: u !< The zonal velocity [L T-1 ~> m s-1].
@@ -681,17 +682,19 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
   !! dim(uhD) = (L/T) * H * L
   !! dim(V/dt) = H * L^2 / T
 
-  do j=js-halo,je+halo ; do i=is-halo,ie+halo
-    V025_idt(i,j) = 0.25 * (h(i,j) * G%areaT(i,j)) / dt
-  enddo; enddo
- 
-  do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
-    uhD(I,j) = max(min(uhD(I,j), V025_idt(i,j)), -V025_idt(i+1,j))
-  enddo ; enddo
+  if (apply_limiter) then
+    do j=js-halo,je+halo ; do i=is-halo,ie+halo
+      V025_idt(i,j) = 0.25 * (h(i,j) * G%areaT(i,j)) / dt
+    enddo; enddo
+  
+    do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
+      uhD(I,j) = max(min(uhD(I,j), V025_idt(i,j)), -V025_idt(i+1,j))
+    enddo ; enddo
 
-  do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
-    vhD(i,J) = max(min(vhD(i,J), V025_idt(i,j)), -V025_idt(i,j+1))
-  enddo ; enddo
+    do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
+      vhD(i,J) = max(min(vhD(i,J), V025_idt(i,j)), -V025_idt(i,j+1))
+    enddo ; enddo
+  endif
 
 end subroutine compute_leonard_thickness_flux
 
