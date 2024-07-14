@@ -628,7 +628,8 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
   hf = h * G%mask2dT
 
   ! bar(u), bar(v), bar(h)
-  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, u=uf, v=vf, h=hf)
+  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, u=uf, v=vf)
+  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, h=hf, neumann=.True.)
 
   ! u*h
   do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
@@ -1214,7 +1215,7 @@ end subroutine compute_velocity_gradients
 !! arrays are substituted. 
 !! The input array must have zero B.C. applied. B.C. is applied for output array with
 !! multiplying by mask.
-subroutine filter_wrapper(G, GV, filter_width, halo, niter, q, h, u, v, id_clock_filter)
+subroutine filter_wrapper(G, GV, filter_width, halo, niter, q, h, u, v, id_clock_filter, neumann)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G)),   optional, &
@@ -1229,6 +1230,7 @@ subroutine filter_wrapper(G, GV, filter_width, halo, niter, q, h, u, v, id_clock
   integer, intent(in)    :: niter                !< The number of iterations to perform
   real,    intent(in)    :: filter_width         !< Filter width of the filter w.r.t. grid spacing
   integer, optional, intent(in) :: id_clock_filter
+  logical, optional, intent(in) :: neumann       !< Neumann B.C.
 
   if (niter == 0) return ! nothing to do
 
@@ -1240,28 +1242,28 @@ subroutine filter_wrapper(G, GV, filter_width, halo, niter, q, h, u, v, id_clock
     call filter_2D(h, G%mask2dT, filter_width,     &
               G%isd, G%ied, G%jsd, G%jed,          &
               G%isc, G%iec, G%jsc, G%jec,          &
-              halo, niter)
+              halo, niter, neumann)
   endif
 
   if (present(q)) then
     call filter_2D(q, G%mask2dBu, filter_width,    &
               G%IsdB, G%IedB, G%JsdB, G%JedB,      &
               G%IscB, G%IecB, G%JscB, G%JecB,      &
-              halo, niter)
+              halo, niter, neumann)
   endif
 
   if (present(u)) then
     call filter_2D(u, G%mask2dCu, filter_width,    &
               G%IsdB, G%IedB, G%jsd, G%jed,        &
               G%IscB, G%IecB, G%jsc, G%jec,        &
-              halo, niter)
+              halo, niter, neumann)
   endif
 
   if (present(v)) then
     call filter_2D(v, G%mask2dCv, filter_width,    &
               G%isd, G%ied, G%JsdB, G%JedB,        &
               G%isc, G%iec, G%JscB, G%JecB,        &
-              halo, niter)
+              halo, niter, neumann)
   endif
 
   if (present(id_clock_filter)) then
@@ -1282,7 +1284,7 @@ end subroutine filter_wrapper
 !! multiplying by mask.
 subroutine filter_2D(x, mask, filter_width,                 &
                      isd, ied, jsd, jed, is, ie, js, je,    &
-                     current_halo, niter)
+                     current_halo, niter, neumann)
   integer, intent(in) :: isd !< Indices of array size
   integer, intent(in) :: ied !< Indices of array size
   integer, intent(in) :: jsd !< Indices of array size
@@ -1298,16 +1300,26 @@ subroutine filter_2D(x, mask, filter_width,                 &
   real,    intent(in)    :: filter_width         !< Filter width of the filter w.r.t. grid spacing
   integer, intent(in)    :: current_halo         !< Currently available halo points
   integer, intent(in)    :: niter                !< The number of iterations to perform
+  logical, optional, intent(in) :: neumann       !< Neumann B.C.
+  
+  logical :: neumann_bc
 
   real :: weight_center, weight_side ! Filter weights [nondim]
+  real :: sum_of_weights 
   integer :: i, j, k, iter, halo
 
   real :: tmp(isd:ied, jsd:jed) ! Array with temporary results [arbitrary]
+  real :: maskf(isd:ied, jsd:jed)
 
   if (niter == 0) return ! nothing to do
   if (niter > current_halo) then
     call MOM_error(FATAL, &
          "MOM_dynamic_closures: filter_2D requires too many iterations")
+  endif
+
+  neumann_bc = .False.
+  if (present(neumann)) then
+    neumann_bc = neumann
   endif
 
   weight_side = filter_width**2 / 24.
@@ -1317,10 +1329,17 @@ subroutine filter_2D(x, mask, filter_width,                 &
   do iter=1,niter
       do j = js-halo, je+halo; do i = is-halo-1, ie+halo+1
         tmp(i,j) = weight_center * x(i,j) + weight_side * (x(i,j-1) + x(i,j+1))
+        if (neumann_bc) then
+          maskf(i,j) = weight_center * mask(i,j) + weight_side * (mask(i,j-1) + mask(i,j+1))
+        endif
       enddo; enddo
 
       do j = js-halo, je+halo; do i = is-halo, ie+halo;
         x(i,j) = (weight_center * tmp(i,j) + weight_side * (tmp(i-1,j) + tmp(i+1,j))) * mask(i,j)
+        if (neumann_bc) then
+          sum_of_weights = weight_center * maskf(i,j) + weight_side * (maskf(i-1,j) + maskf(i+1,j))
+          x(i,j) = x(i,j) / (1e-40 + sum_of_weights)
+        endif
       enddo; enddo
     halo = halo - 1
   enddo
