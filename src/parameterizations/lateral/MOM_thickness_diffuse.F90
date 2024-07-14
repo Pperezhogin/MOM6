@@ -21,6 +21,7 @@ use MOM_MEKE_types,            only : MEKE_type
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_variables,             only : thermo_var_ptrs, cont_diag_ptrs
 use MOM_verticalGrid,          only : verticalGrid_type
+use MOM_dynamic_closures,      only : SSM_thickness_flux
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -91,6 +92,8 @@ type, public :: thickness_diffuse_CS ; private
   logical :: read_khth           !< If true, read a file containing the spatially varying horizontal
                                  !! isopycnal height diffusivity
   logical :: use_stanley_gm      !< If true, also use the Stanley parameterization in MOM_thickness_diffuse
+  logical :: thickness_fluxes_SSM !< Use SSM model (Leonard stress) to parameterize thickness fluxes
+  real    :: test_width !< Width of the test filter (hat) w.r.t. grid spacing
 
   type(diag_ctrl), pointer :: diag => NULL() !< structure used to regulate timing of diagnostics
   real, allocatable :: GMwork(:,:)        !< Work by isopycnal height diffusion [R Z L2 T-3 ~> W m-2]
@@ -111,6 +114,8 @@ type, public :: thickness_diffuse_CS ; private
   integer :: id_KH_u1   = -1, id_KH_v1   = -1, id_KH_t1  = -1
   integer :: id_slope_x = -1, id_slope_y = -1
   integer :: id_sfn_unlim_x = -1, id_sfn_unlim_y = -1, id_sfn_x = -1, id_sfn_y = -1
+  integer :: id_uhSSM = -1, id_vhSSM = -1
+  integer :: id_u = -1, id_v = -1, id_h = -1
   !>@}
 end type thickness_diffuse_CS
 
@@ -119,10 +124,12 @@ contains
 !> Calculates isopycnal height diffusion coefficients and applies isopycnal height diffusion
 !! by modifying to the layer thicknesses, h. Diffusivities are limited to ensure stability.
 !! Also returns along-layer mass fluxes used in the continuity equation.
-subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp, CS)
+subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp, CS)
   type(ocean_grid_type),                      intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Vertical grid structure
   type(unit_scale_type),                      intent(in)    :: US     !< A dimensional unit scaling type
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)    :: u      !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)    :: v      !< The meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: h      !< Layer thickness [H ~> m or kg m-2]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: uhtr   !< Accumulated zonal mass flux
                                                                       !! [L2 H ~> m3 or kg]
@@ -178,6 +185,17 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
 
   if (.not. CS%initialized) call MOM_error(FATAL, "MOM_thickness_diffuse: "//&
          "Module must be initialized before it is used.")
+
+  if (CS%thickness_fluxes_SSM) then
+    if (CS%id_u>0)       call post_data(CS%id_u, u, CS%diag)
+    if (CS%id_v>0)       call post_data(CS%id_v, v, CS%diag)
+    if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
+
+    call SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, CS%test_width, dt, G, GV)
+    if (CS%id_uhSSM>0)       call post_data(CS%id_uhSSM, uhD, CS%diag)
+    if (CS%id_vhSSM>0)       call post_data(CS%id_vhSSM, vhD, CS%diag)
+    return
+  endif
 
   if ((.not.CS%thickness_diffuse) &
       .or. .not. (CS%Khth > 0.0 .or. CS%read_khth &
@@ -2100,6 +2118,13 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
   call get_param(param_file, mdl, "THICKNESSDIFFUSE", CS%thickness_diffuse, &
                  "If true, interface heights are diffused with a "//&
                  "coefficient of KHTH.", default=.false.)
+
+  ! This option must be used together with THICKNESSDIFFUSE
+  call get_param(param_file, mdl, "PG23_THICKNESS_FLUXES_SSM", CS%thickness_fluxes_SSM, &
+                 "Use SSM model (Leonard stress) to parameterize thickness fluxes", default=.false.)
+  call get_param(param_file, mdl, "PG23_TEST_WIDTH", CS%test_width, &
+                 "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
+
   call get_param(param_file, mdl, "KHTH", CS%Khth, &
                  "The background horizontal thickness diffusivity.", &
                  default=0.0, units="m2 s-1", scale=US%m_to_L**2*US%T_to_s)
@@ -2282,6 +2307,18 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
            'kg s-1', conversion=GV%H_to_kg_m2*US%L_to_m**2*US%s_to_T, &
            x_cell_method='sum', v_extensive=.true.)
   if (CS%id_vhGM > 0) call safe_alloc_ptr(CDp%vhGM,G%isd,G%ied,G%JsdB,G%JedB,GV%ke)
+
+  CS%id_uhSSM = register_diag_field('ocean_model', 'uhSSM', diag%axesCuL, Time, &
+      'Zonal mass flux due to SSM model')
+  CS%id_vhSSM = register_diag_field('ocean_model', 'vhSSM', diag%axesCvL, Time, &
+      'Meridional mass flux due to SSM model')
+
+  CS%id_u = register_diag_field('ocean_model', 'SSM_u', diag%axesCuL, Time, &
+      'u velocity', 'm s-1', conversion=US%L_T_to_m_s)
+  CS%id_v = register_diag_field('ocean_model', 'SSM_v', diag%axesCvL, Time, &
+      'v velocity', 'm s-1', conversion=US%L_T_to_m_s)
+  CS%id_h = register_diag_field('ocean_model', 'SSM_h', diag%axesTL, Time, &
+      'h thickness', 'm')
 
   CS%id_GMwork = register_diag_field('ocean_model', 'GMwork', diag%axesT1, Time, &
           'Integrated Tendency of Ocean Mesoscale Eddy KE from Parameterized Eddy Advection', &
