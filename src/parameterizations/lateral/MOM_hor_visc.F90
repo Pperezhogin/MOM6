@@ -1676,7 +1676,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         diffu(I,j,k) = diffu(I,j,k) + leo_y(I,j,k)
       endif
       if (CS%use_PG23 .and. CS%PG23%reynolds) then
-        diffu(I,j,k) = diffu(I,j,k) + C_R(k) * by_base(I,j,k)
+        diffu(I,j,k) = diffu(I,j,k) + by_base(I,j,k)
       endif
     enddo ; enddo
 
@@ -1702,7 +1702,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         diffv(i,J,k) = diffv(i,J,k) - leo_x(i,J,k) 
       endif
       if (CS%use_PG23 .and. CS%PG23%reynolds) then
-        diffv(i,J,k) = diffv(i,J,k) - C_R(k) * bx_base(i,J,k) 
+        diffv(i,J,k) = diffv(i,J,k) - bx_base(i,J,k) 
       endif
     enddo ; enddo
 

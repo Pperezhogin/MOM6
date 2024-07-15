@@ -475,6 +475,10 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
     if (CS%CR_set > 0.) then
       C_R = CS%CR_set
     endif
+    do k=1,nz
+      bx_base(:,:,k) = bx_base(:,:,k) * C_R(k)
+      by_base(:,:,k) = by_base(:,:,k) * C_R(k)
+    enddo
   endif
 
   call cpu_clock_begin(CS%id_clock_post)
