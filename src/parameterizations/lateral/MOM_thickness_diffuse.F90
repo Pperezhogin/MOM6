@@ -95,6 +95,7 @@ type, public :: thickness_diffuse_CS ; private
   logical :: thickness_fluxes_SSM !< Use SSM model (Leonard stress) to parameterize thickness fluxes
   logical :: thickness_streamfun_SSM !< Use SSM model (Leonard stress) to parameterize thickness streamfunction
   real    :: test_width !< Width of the test filter (hat) w.r.t. grid spacing
+  integer :: test_iter !< Width of the test filter (hat) w.r.t. grid spacing
 
   type(diag_ctrl), pointer :: diag => NULL() !< structure used to regulate timing of diagnostics
   real, allocatable :: GMwork(:,:)        !< Work by isopycnal height diffusion [R Z L2 T-3 ~> W m-2]
@@ -196,7 +197,7 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   if (CS%id_h>0)       call post_data(CS%id_h, h, CS%diag)
 
   if (CS%thickness_fluxes_SSM) then
-    call SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, CS%test_width, dt, G, GV)
+    call SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, CS%test_width, CS%test_iter, dt, G, GV)
     if (CS%id_uhSSM>0)       call post_data(CS%id_uhSSM, uhD, CS%diag)
     if (CS%id_vhSSM>0)       call post_data(CS%id_vhSSM, vhD, CS%diag)
     return
@@ -212,7 +213,7 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   if (CS%thickness_streamfun_SSM) then
     do k=1,nz
       call compute_leonard_thickness_flux(uhD(:,:,k), vhD(:,:,k), u(:,:,k), v(:,:,k), h(:,:,k), &
-                                        dt, G, GV, CS%test_width, halo=2, apply_limiter=.False.)
+                                        dt, G, GV, CS%test_width, CS%test_iter, halo=4, apply_limiter=.False.)
     enddo
 
     if (nz .ne. 2) then
@@ -2186,7 +2187,8 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
                  "Use SSM model (Leonard stress) to parameterize thickness streamfunction", default=.false.)
   call get_param(param_file, mdl, "PG23_TEST_WIDTH", CS%test_width, &
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
-
+  call get_param(param_file, mdl, "PG23_TEST_ITER", CS%test_iter, &
+                 "Number of iterations of the test filter", default=1)
   call get_param(param_file, mdl, "KHTH", CS%Khth, &
                  "The background horizontal thickness diffusivity.", &
                  default=0.0, units="m2 s-1", scale=US%m_to_L**2*US%T_to_s)

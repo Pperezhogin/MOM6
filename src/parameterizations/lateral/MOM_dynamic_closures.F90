@@ -38,6 +38,7 @@ type, public :: PG23_CS ; private
   integer :: boundary_discard !< The number of grid points near the boundary to discard in Dynamic procedure
   logical :: dynamic_Cs !< Dynamic estimation of Smagorinsky coefficient. If false, SMAG_BI_CONST value will be use
   real :: CR_set !< If positive, use the value from namelist instead of the dynamically estimated value
+  integer :: test_iter
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -105,6 +106,14 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_TEST_WIDTH", CS%test_width, &
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
+
+  call get_param(param_file, mdl, "PG23_TEST_ITER", CS%test_iter, &
+                 "Number of iterations of the test filter", default=1)
+  
+  if (CS%test_iter>2) then
+    call MOM_error(FATAL, &
+      "MOM_dynamic_closures: not implemented more than two iterations of test filter")
+  endif
 
   call get_param(param_file, mdl, "PG23_FILTERS_RATIO", CS%filters_ratio, &
                  "The ratio of combined (hat(bar)) to base (bar) filters", units="nondim", default=SQRT(2.0))
@@ -380,7 +389,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
     vf(:,:,k) = v(:,:,k)
     
     ! Apply test filter to velocities (halo=3 is default in MOM6 for velocities)
-    call filter_wrapper(G, GV, CS%test_width, halo=3, niter=1, u=uf(:,:,k), v=vf(:,:,k), id_clock_filter=CS%id_clock_filter)
+    call filter_wrapper(G, GV, CS%test_width, halo=4, niter=CS%test_iter, u=uf(:,:,k), v=vf(:,:,k), id_clock_filter=CS%id_clock_filter)
 
     ! Compute velocity gradients for eddy viscosity model on base level
     ! We impose actual halo for filtered and unfiltered velocities
@@ -409,11 +418,12 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
       call  biharmonic_Smagorinsky(lap_vort_x(:,:,k), lap_vort_y(:,:,k), shear_mag(:,:,k), &
       smag_x(:,:,k), smag_y(:,:,k), G, GV, CS, halo=1, scaling_coefficient=1.0)
       ! Note: filters ratio is in 4th power because model is biharmonic
+      ! Note: even if test filter has many iterations, the filters ratio is fixed to sqrt(2) because base=test always
       call  biharmonic_Smagorinsky(lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), shear_magf(:,:,k), &
       smag_xf(:,:,k), smag_yf(:,:,k), G, GV, CS, halo=0, scaling_coefficient=CS%filters_ratio**4)
 
       ! Filter Smagorinky model on base level
-      call filter_wrapper(G, GV, CS%test_width, halo=1, niter=1, u=smag_y(:,:,k), v=smag_x(:,:,k), id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, CS%test_width, halo=4, niter=CS%test_iter, u=smag_y(:,:,k), v=smag_x(:,:,k), id_clock_filter=CS%id_clock_filter)
 
       ! Eddy viscosity in Germano identity with halo 0 (halo 1 is possible if needed)
       m_x(:,:,k) = smag_xf(:,:,k) - smag_x(:,:,k)
@@ -553,7 +563,7 @@ end subroutine PG23_germano_identity
 !! h = h - dt * div(Fluxes), where Fluxes are:
 !! Flux_zonal      = bar(uh) - bar(u) * bar(h)
 !! Flux_meridional = bar(vh) - bar(v) * bar(h)
-subroutine SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, filter_width, dt, G, GV)
+subroutine SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, filter_width, filter_iter, dt, G, GV)
   type(ocean_grid_type),         intent(in)    :: G   !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV  !< The ocean's vertical grid structure.
 
@@ -566,6 +576,7 @@ subroutine SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, filter_width, dt, G
 
   real, intent(in) :: filter_width !< Filter width (nondim) used to compute bar(u*h)
                                    !! and used to compute bar(u), var(v) and bar(h)
+  integer, intent(in) :: filter_iter !< The number of iterations of filter
 
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: uhtr   !< Accumulated zonal mass flux
         !! [L2 H ~> m3 or kg]
@@ -589,7 +600,7 @@ subroutine SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, filter_width, dt, G
   !! See Lines 561-575 of MOM_thickness_diffuse.F90
   do k=1,nz
     call compute_leonard_thickness_flux(uhD(:,:,k), vhD(:,:,k), u(:,:,k), v(:,:,k), h(:,:,k), &
-                                        dt, G, GV, filter_width, halo=2, apply_limiter=.True.)
+                                        dt, G, GV, filter_width, filter_iter, halo=4, apply_limiter=.True.)
     do j=js,je ; do I=is-1,ie
       uhtr(I,j,k) = uhtr(I,j,k) + uhD(I,j,k) * dt
     enddo ; enddo
@@ -610,7 +621,7 @@ end subroutine SSM_thickness_flux
 !! uhD = (bar(uh) - bar(u) * bar(h)) * dy
 !! vhD = (bar(vh) - bar(v) * bar(h)) * dx
 !! Flux is limited to prevent negative thickness
-subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_width, halo, apply_limiter)
+subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_width, filter_iter, halo, apply_limiter)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   integer, intent(in) :: halo !< Currently available halo points for velocity and thickness
@@ -619,6 +630,7 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
                                    !! and used to compute bar(u), var(v) and bar(h)
   real,                                       intent(in)    :: dt     !< Time increment [T ~> s]
   logical, intent(in) :: apply_limiter
+  integer, intent(in) :: filter_iter !< The number of iterations of filter
 
   real, dimension(SZIB_(G),SZJ_(G)), &
            intent(in) :: u !< The zonal velocity [L T-1 ~> m s-1].
@@ -649,8 +661,8 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
   hf = h * G%mask2dT
 
   ! bar(u), bar(v), bar(h)
-  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, u=uf, v=vf)
-  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, h=hf, neumann=.True.)
+  call filter_wrapper(G, GV, filter_width, halo=halo, niter=filter_iter, u=uf, v=vf)
+  call filter_wrapper(G, GV, filter_width, halo=halo, niter=filter_iter, h=hf, neumann=.True.)
 
   ! u*h
   do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
@@ -666,7 +678,7 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
   enddo ; enddo
 
   ! bar(u*h) and bar(v*h)
-  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, u=uhD, v=vhD)
+  call filter_wrapper(G, GV, filter_width, halo=halo, niter=filter_iter, u=uhD, v=vhD)
 
   ! (bar(u*h) - bar(u)*bar(h)) * dy
   do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
@@ -844,6 +856,19 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
   h_y = 0
   leo_x = 0
   leo_y = 0
+  bx = 0.
+  by = 0.
+  ur_base = 0.
+  vr_base = 0.
+  vortr_base = 0.
+  ur_comb = 0.
+  vr_comb = 0.
+  vortr_comb = 0.
+  bx_basef = 0.
+  by_basef = 0.
+  bx_base = 0.
+  by_base = 0.
+
 
   ! u * vort_xy
   do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
@@ -859,7 +884,7 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
   enddo ; enddo
 
   ! bar(u * vort_xy) and bar(v * vort_xy)
-  call filter_wrapper(G, GV, filter_width, halo=halo, niter=1, u=leo_y, v=leo_x, id_clock_filter=CS%id_clock_filter)
+  call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=leo_y, v=leo_x, id_clock_filter=CS%id_clock_filter)
   
   ! leo_x = bar(u * vort_xy) - bar(u) * bar(vort_xy)
   do J=Jsq-(halo-1),Jeq+(halo-1) ; do i=is-(halo-1),ie+(halo-1)
@@ -890,17 +915,18 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
     call pass_var(vort_xyff, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
 
     if (CS%zelong_dynamic) then
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=v_hat_vort_hat, v=u_hat_vort_hat, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=uff, v=vff, q=vort_xyff, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=v_hat_vort_hat, v=u_hat_vort_hat, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=uff, v=vff, q=vort_xyff, id_clock_filter=CS%id_clock_filter)
     else
       call pass_vector(leo_y, leo_x, G%Domain, clock=CS%id_clock_mpi) ! Because leo_x is in v points
 
       leo_xf = leo_x
       leo_yf = leo_y
 
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=leo_yf, v=leo_xf, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=2, u=v_hat_vort_hat, v=u_hat_vort_hat, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=2, u=uff, v=vff, q=vort_xyff, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=leo_yf, v=leo_xf, id_clock_filter=CS%id_clock_filter)
+      ! Note: this is combined filter. So we need to increase number of iterations twice
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter*2, u=v_hat_vort_hat, v=u_hat_vort_hat, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter*2, u=uff, v=vff, q=vort_xyff, id_clock_filter=CS%id_clock_filter)
     endif
 
     do J=Jsq-1,Jeq+1 ; do i=is-1,ie+1
@@ -924,10 +950,11 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
 
     if (not(CS%zelong_dynamic)) then
 
-      ur_base = u - uf
-      vr_base = v - vf
-      vortr_base = vort_xy - vort_xyf
-
+      ur_base(Isq:Ieq,js:je) = u(Isq:Ieq,js:je) - uf(Isq:Ieq,js:je)
+      vr_base(is:ie,Jsq:Jeq) = v(is:ie,Jsq:Jeq) - vf(is:ie,Jsq:Jeq)
+      vortr_base(Isq:Ieq,Jsq:Jeq) = vort_xy(Isq:Ieq,Jsq:Jeq) - vort_xyf(Isq:Ieq,Jsq:Jeq)
+      call pass_vector(ur_base, vr_base, G%Domain, clock=CS%id_clock_mpi)
+      call pass_var(vortr_base, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
       do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
         bx_base(i,J) = 0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
       enddo ; enddo
@@ -936,8 +963,8 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
         by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
       enddo ; enddo
 
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=by_base, v=bx_base, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=ur_base, v=vr_base, q=vortr_base, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=by_base, v=bx_base, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=ur_base, v=vr_base, q=vortr_base, id_clock_filter=CS%id_clock_filter)
 
       do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
         bx_base(i,J) = bx_base(i,J) -  0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
@@ -951,7 +978,7 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
       bx_basef = bx_base
       by_basef = by_base
 
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=by_basef, v=bx_basef, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=by_basef, v=bx_basef, id_clock_filter=CS%id_clock_filter)
 
       !!!!!!!!!!! Combined level !!!!!!!!!!!!!
       ur_comb = uf - uff
@@ -966,12 +993,8 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
         by(I,j) = 0.125 * ((vr_comb(i,J) + vr_comb(i+1,J-1)) + (vr_comb(i,J-1) + vr_comb(i+1,J))) * (vortr_comb(I,J) + vortr_comb(I,J-1)) * G%mask2dCu(I,j)
       enddo ; enddo
 
-      call pass_vector(ur_comb, vr_comb, G%Domain, clock=CS%id_clock_mpi)
-      call pass_var(vortr_comb, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
-      call pass_vector(by, bx, G%Domain, clock=CS%id_clock_mpi)
-
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=2, u=by, v=bx, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=2, u=ur_comb, v=vr_comb, q=vortr_comb, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter*2, u=by, v=bx, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter*2, u=ur_comb, v=vr_comb, q=vortr_comb, id_clock_filter=CS%id_clock_filter)
 
       ! Combined level
       do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
@@ -999,8 +1022,8 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
         by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
       enddo ; enddo
 
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=by_base, v=bx_base, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=ur_base, v=vr_base, q=vortr_base, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=by_base, v=bx_base, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=ur_base, v=vr_base, q=vortr_base, id_clock_filter=CS%id_clock_filter)
  
       do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
         bx_base(i,J) = bx_base(i,J) -  0.125 * ((ur_base(I,j) + ur_base(I-1,j+1)) + (ur_base(I-1,j) + ur_base(I,j+1))) * (vortr_base(I,J) + vortr_base(I-1,J)) * G%mask2dCv(i,J)
@@ -1029,8 +1052,8 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
       call pass_var(vortr_comb, G%Domain, position=CORNER, clock=CS%id_clock_mpi)
       call pass_vector(by, bx, G%Domain, clock=CS%id_clock_mpi)
 
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=by, v=bx, id_clock_filter=CS%id_clock_filter)
-      call filter_wrapper(G, GV, filter_width, halo=4, niter=1, u=ur_comb, v=vr_comb, q=vortr_comb, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=by, v=bx, id_clock_filter=CS%id_clock_filter)
+      call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=ur_comb, v=vr_comb, q=vortr_comb, id_clock_filter=CS%id_clock_filter)
 
       ! Combined level
       do J=Jsq-2,Jeq+2 ; do i=is-2,ie+2
@@ -1262,31 +1285,46 @@ subroutine filter_wrapper(G, GV, filter_width, halo, niter, q, h, u, v, id_clock
   endif
 
   if (present(h)) then
+    if (niter>1) then 
+      call pass_var(h, G%Domain)
+    endif
     call filter_2D(h, G%mask2dT, filter_width,     &
               G%isd, G%ied, G%jsd, G%jed,          &
               G%isc, G%iec, G%jsc, G%jec,          &
               halo, niter, neumann)
+    if (niter>1) then 
+      call pass_var(h, G%Domain)
+    endif
   endif
 
   if (present(q)) then
+    if (niter>1) then
+      call pass_var(q, G%Domain, position=CORNER)
+    endif
     call filter_2D(q, G%mask2dBu, filter_width,    &
               G%IsdB, G%IedB, G%JsdB, G%JedB,      &
               G%IscB, G%IecB, G%JscB, G%JecB,      &
               halo, niter, neumann)
+    if (niter>1) then
+      call pass_var(q, G%Domain, position=CORNER)
+    endif
   endif
 
-  if (present(u)) then
+  if (present(u) .and. present(v)) then
+    if (niter>1) then
+      call pass_vector(u, v, G%Domain)
+    endif
     call filter_2D(u, G%mask2dCu, filter_width,    &
               G%IsdB, G%IedB, G%jsd, G%jed,        &
               G%IscB, G%IecB, G%jsc, G%jec,        &
               halo, niter, neumann)
-  endif
-
-  if (present(v)) then
     call filter_2D(v, G%mask2dCv, filter_width,    &
               G%isd, G%ied, G%JsdB, G%JedB,        &
               G%isc, G%iec, G%JscB, G%JecB,        &
               halo, niter, neumann)
+    if (niter>1) then
+      call pass_vector(u, v, G%Domain)
+    endif
   endif
 
   if (present(id_clock_filter)) then
