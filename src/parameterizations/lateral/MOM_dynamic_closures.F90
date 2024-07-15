@@ -36,6 +36,8 @@ type, public :: PG23_CS ; private
   logical, public :: reynolds  !< Turns on the Reynolds model (i.e., Reynolds Stress of Germano decomposition)
   logical :: zelong_dynamic !< Uses Zelong2022 dynamic procedure instead of Germano
   integer :: boundary_discard !< The number of grid points near the boundary to discard in Dynamic procedure
+  logical :: dynamic_Cs !< Dynamic estimation of Smagorinsky coefficient. If false, SMAG_BI_CONST value will be use
+  real :: CR_set !< If positive, use the value from namelist instead of the dynamically estimated value
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -124,6 +126,12 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_BOUNDARY_DISCARD", CS%boundary_discard, &
                  "The number of grid points near the boundary to discard in Dynamic procedure", default=0)
+  
+  call get_param(param_file, mdl, "PG23_DYNAMIC_CS", CS%dynamic_Cs, &
+                 "Dynamic estimation of Smagorinsky coefficient. If false, SMAG_BI_CONST value will be use", default=.True.)
+
+  call get_param(param_file, mdl, "PG23_CR_SET", CS%CR_set, &
+                 "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=-1.)
 
   if ((CS%ssm .or. CS%zelong_dynamic) .and. ABS(CS%filters_ratio-SQRT(2.0))>1e-10) then
     call MOM_error(FATAL, &
@@ -457,8 +465,16 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
 
   smag_bi_const_DSM = max(lm_sum / (mm_sum + 1e-40), 0.0)
 
+  if (.not. CS%dynamic_Cs) then
+    ! In this case pass the value through SMAG_BI_CONST
+    smag_bi_const_DSM = 1.
+  endif
+
   if (CS%reynolds) then
     C_R = max((lb_sum - smag_bi_const_DSM * mb_sum) / (bb_sum + 1e-40), 0.0)
+    if (CS%CR_set > 0.) then
+      C_R = CS%CR_set
+    endif
   endif
 
   call cpu_clock_begin(CS%id_clock_post)
