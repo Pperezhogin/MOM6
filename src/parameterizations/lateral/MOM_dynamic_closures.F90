@@ -39,6 +39,7 @@ type, public :: PG23_CS ; private
   logical :: dynamic_Cs !< Dynamic estimation of Smagorinsky coefficient. If false, SMAG_BI_CONST value will be use
   real :: CR_set !< If positive, use the value from namelist instead of the dynamically estimated value
   integer :: test_iter
+  real :: bi_const_min !< Minimum possible number of biharmonic Smagorinsky coefficient in dynamic procedure
 
   real, dimension(:,:), allocatable :: &
           dx_dyT,    & !< Pre-calculated dx/dy at h points [nondim]
@@ -141,6 +142,10 @@ subroutine PG23_init(Time, G, GV, US, param_file, diag, CS, use_PG23)
 
   call get_param(param_file, mdl, "PG23_CR_SET", CS%CR_set, &
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=-1.)
+                 
+  call get_param(param_file, mdl, "PG23_BI_CONST_MIN", CS%bi_const_min, &
+                 "Minimum possible number of biharmonic Smagorinsky coefficient in dynamic procedure", units="nondim", default=0.)
+
 
   if ((CS%ssm .or. CS%zelong_dynamic) .and. ABS(CS%filters_ratio-SQRT(2.0))>1e-10) then
     call MOM_error(FATAL, &
@@ -473,7 +478,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
 
   call cpu_clock_end(CS%id_clock_reduce)
 
-  smag_bi_const_DSM = max(lm_sum / (mm_sum + 1e-40), 0.0)
+  smag_bi_const_DSM = max(lm_sum / (mm_sum + 1e-40), CS%bi_const_min)
 
   if (.not. CS%dynamic_Cs) then
     ! In this case pass the value through SMAG_BI_CONST
