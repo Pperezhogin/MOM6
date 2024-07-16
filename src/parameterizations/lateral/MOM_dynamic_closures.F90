@@ -557,6 +557,8 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
     smag_bi_const_DSM = 0.06
     leo_x = 0.
     leo_y = 0.
+    bx_base = 0.
+    by_base = 0.
   endif
 
 end subroutine PG23_germano_identity
@@ -605,7 +607,8 @@ subroutine SSM_thickness_flux(u, v, h, uhtr, vhtr, uhD, vhD, filter_width, filte
   !! See Lines 561-575 of MOM_thickness_diffuse.F90
   do k=1,nz
     call compute_leonard_thickness_flux(uhD(:,:,k), vhD(:,:,k), u(:,:,k), v(:,:,k), h(:,:,k), &
-                                        dt, G, GV, filter_width, filter_iter, halo=4, apply_limiter=.True.)
+                                        dt, G, GV, filter_width, filter_iter, halo=4, &
+                                        apply_limiter=.True., max_bolus_velocity=-1.)
     do j=js,je ; do I=is-1,ie
       uhtr(I,j,k) = uhtr(I,j,k) + uhD(I,j,k) * dt
     enddo ; enddo
@@ -626,7 +629,9 @@ end subroutine SSM_thickness_flux
 !! uhD = (bar(uh) - bar(u) * bar(h)) * dy
 !! vhD = (bar(vh) - bar(v) * bar(h)) * dx
 !! Flux is limited to prevent negative thickness
-subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_width, filter_iter, halo, apply_limiter)
+subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, &
+                                          filter_width, filter_iter, halo, &
+                                          apply_limiter, max_bolus_velocity)
   type(ocean_grid_type),   intent(in) :: G       !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV      !< The ocean's vertical grid structure
   integer, intent(in) :: halo !< Currently available halo points for velocity and thickness
@@ -636,6 +641,7 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
   real,                                       intent(in)    :: dt     !< Time increment [T ~> s]
   logical, intent(in) :: apply_limiter
   integer, intent(in) :: filter_iter !< The number of iterations of filter
+  real, intent(in) :: max_bolus_velocity
 
   real, dimension(SZIB_(G),SZJ_(G)), &
            intent(in) :: u !< The zonal velocity [L T-1 ~> m s-1].
@@ -657,6 +663,7 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
     
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
+  real :: uhD_max, vhD_max
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -687,12 +694,25 @@ subroutine compute_leonard_thickness_flux(uhD, vhD, u, v, h, dt, G, GV, filter_w
 
   ! (bar(u*h) - bar(u)*bar(h)) * dy
   do j=js-halo,je+halo ; do I=Isq-halo,Ieq+halo
-    uhD(I,j) = (uhD(I,j) - 0.5 * uf(i,J) * (hf(i,j) + hf(i+1,j))) * G%dyCu(I,j)
+    uhD(I,j) = uhD(I,j) - 0.5 * uf(i,J) * (hf(i,j) + hf(i+1,j))
+    ! - max_bolus_velocity * h < uhD < max_bolus_velocity * h
+    if (max_bolus_velocity>0.) then
+      ! We use minimum, because this would bound the flux near the jump of the interface
+      uhD_max = min(h(i,j) * G%mask2dT(i,j), h(i+1,j) * G%mask2dT(i+1,j)) * max_bolus_velocity
+      uhD(I,j) = max(min(uhD(I,j), uhD_max), -uhD_max)
+    endif
+    uhD(I,j) = uhD(I,j) * G%dyCu(I,j)
   enddo ; enddo
 
   ! (bar(v*h) - bar(v)*bar(h)) * dx
   do J=Jsq-halo,Jeq+halo ; do i=is-halo,ie+halo
-    vhD(i,J) = (vhD(i,J) - 0.5 * vf(i,J) * (hf(i,j) + hf(i,j+1))) * G%dxCv(i,J)
+    vhD(i,J) = vhD(i,J) - 0.5 * vf(i,J) * (hf(i,j) + hf(i,j+1))
+    ! - max_bolus_velocity * h < vhD < max_bolus_velocity * h
+    if (max_bolus_velocity>0.) then
+      vhD_max = min(h(i,j) * G%mask2dT(i,j), h(i,j+1) * G%mask2dT(i,j+1)) * max_bolus_velocity
+      vhD(i,J) = max(min(vhD(i,J), vhD_max), -vhD_max)
+    endif
+    vhD(i,J) = vhD(i,J) * G%dxCv(i,J)
   enddo ; enddo
 
   !! Keeping in mind that fluxes will contribute to continuity equation as follows:

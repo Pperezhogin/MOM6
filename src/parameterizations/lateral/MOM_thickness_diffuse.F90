@@ -96,6 +96,7 @@ type, public :: thickness_diffuse_CS ; private
   logical :: thickness_streamfun_SSM !< Use SSM model (Leonard stress) to parameterize thickness streamfunction
   real    :: test_width !< Width of the test filter (hat) w.r.t. grid spacing
   integer :: test_iter !< Width of the test filter (hat) w.r.t. grid spacing
+  real    :: max_bolus_velocity !< Maximum allowable bolus velocity, i.e. |uhSSM|/h < this number
 
   type(diag_ctrl), pointer :: diag => NULL() !< structure used to regulate timing of diagnostics
   real, allocatable :: GMwork(:,:)        !< Work by isopycnal height diffusion [R Z L2 T-3 ~> W m-2]
@@ -213,7 +214,8 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   if (CS%thickness_streamfun_SSM) then
     do k=1,nz
       call compute_leonard_thickness_flux(uhD(:,:,k), vhD(:,:,k), u(:,:,k), v(:,:,k), h(:,:,k), &
-                                        dt, G, GV, CS%test_width, CS%test_iter, halo=4, apply_limiter=.False.)
+                                        dt, G, GV, CS%test_width, CS%test_iter, halo=4, &
+                                        apply_limiter=.False., max_bolus_velocity=CS%max_bolus_velocity)
     enddo
 
     ! u streamfunction
@@ -2193,6 +2195,9 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
   call get_param(param_file, mdl, "PG23_TEST_ITER", CS%test_iter, &
                  "Number of iterations of the test filter", default=1)
+  call get_param(param_file, mdl, "PG23_MAX_BOLUS_VELOCITY", CS%max_bolus_velocity, &
+                 "Maximum allowable bolus velocity, i.e. |uhSSM|/h < this number. "//&
+                 "Negative number implies no limiting", units="nondim", default=-1.)
   call get_param(param_file, mdl, "KHTH", CS%Khth, &
                  "The background horizontal thickness diffusivity.", &
                  default=0.0, units="m2 s-1", scale=US%m_to_L**2*US%T_to_s)
