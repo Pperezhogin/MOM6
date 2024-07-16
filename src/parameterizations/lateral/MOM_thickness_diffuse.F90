@@ -187,7 +187,7 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   logical :: use_VarMix, Resoln_scaled, Depth_scaled, use_stored_slopes, khth_use_ebt_struct, use_Visbeck
   logical :: use_QG_Leith
   integer :: i, j, k, is, ie, js, je, nz
-  real :: h_upper, h_lower
+  real :: h_upper, h_lower, flux_upper, flux_lower
 
   if (.not. CS%initialized) call MOM_error(FATAL, "MOM_thickness_diffuse: "//&
          "Module must be initialized before it is used.")
@@ -216,24 +216,28 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
                                         dt, G, GV, CS%test_width, CS%test_iter, halo=4, apply_limiter=.False.)
     enddo
 
-    if (nz .ne. 2) then
-      write(*,*) 'Error: SSM thickness flux not implemented'
-    endif
-
     ! u streamfunction
     Sfn_unlim_u_SSM = 0.
     do j=js-2,je+2 ; do i=is-2,ie+2
-      h_upper = (h(i,j,1) + h(i+1,j,1)) * 0.5 * G%mask2dCu(i,j)
-      h_lower = (h(i,j,2) + h(i+1,j,2)) * 0.5 * G%mask2dCu(i,j)
-      Sfn_unlim_u_SSM(i,j,2) = (h_upper * uhD(i,j,2) - h_lower * uhD(i,j,1)) / ((h_upper + h_lower) + h_neglect)
+      do k=2,nz
+        h_upper = SUM(h(i,j,1:k-1) + h(i+1,j,1:k-1)) * 0.5 * G%mask2dCu(i,j)
+        h_lower = SUM(h(i,j,k:nz)  + h(i+1,j,k:nz))  * 0.5 * G%mask2dCu(i,j)
+        flux_upper = SUM(uhD(i,j,1:k-1))
+        flux_lower = SUM(uhD(i,j,k:nz))
+        Sfn_unlim_u_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
+      enddo
     enddo; enddo
 
     ! v streamfunction
     Sfn_unlim_v_SSM = 0.
     do j=js-2,je+2 ; do i=is-2,ie+2
-      h_upper = (h(i,j,1) + h(i,j+1,1)) * 0.5 * G%mask2dCv(i,j)
-      h_lower = (h(i,j,2) + h(i,j+1,2)) * 0.5 * G%mask2dCv(i,j)
-      Sfn_unlim_v_SSM(i,j,2) = (h_upper * vhD(i,j,2) - h_lower * vhD(i,j,1)) / ((h_upper + h_lower) + h_neglect)
+      do k=2,nz
+        h_upper = SUM(h(i,j,1:k-1) + h(i,j+1,1:k-1)) * 0.5 * G%mask2dCv(i,j)
+        h_lower = SUM(h(i,j,k:nz)  + h(i,j+1,k:nz))  * 0.5 * G%mask2dCv(i,j)
+        flux_upper = SUM(vhD(i,j,1:k-1))
+        flux_lower = SUM(vhD(i,j,k:nz))
+        Sfn_unlim_v_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
+      enddo
     enddo; enddo
 
     ! To be sure that fluxes are obtained by MOM6 code
