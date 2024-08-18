@@ -399,22 +399,22 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
     ! Compute velocity gradients for eddy viscosity model on base level
     ! We impose actual halo for filtered and unfiltered velocities
     call compute_velocity_gradients(u(:,:,k), v(:,:,k), &
-      sh_xx(:,:,k), sh_xy(:,:,k), vort_xy(:,:,k), shear_mag(:,:,k), G, GV, CS, halo=3)
+      sh_xx(:,:,k), sh_xy(:,:,k), vort_xy(:,:,k), shear_mag(:,:,k), G, GV, CS, halo=4)
     ! On combined level
     call compute_velocity_gradients(uf(:,:,k), vf(:,:,k), &
-      sh_xxf(:,:,k), sh_xyf(:,:,k), vort_xyf(:,:,k), shear_magf(:,:,k), G, GV, CS, halo=2)
+      sh_xxf(:,:,k), sh_xyf(:,:,k), vort_xyf(:,:,k), shear_magf(:,:,k), G, GV, CS, halo=4)
 
     ! Compute grad(Lap(vorticity)) for eddy viscosity model
     ! In both cases available halo of vorticity is 1 point smaller than for velocity
     call compute_vorticity_gradients(vort_xy(:,:,k), &
-      vort_x(:,:,k), vort_y(:,:,k), lap_vort(:,:,k), lap_vort_x(:,:,k), lap_vort_y(:,:,k), G, GV, CS, halo=2)
+      vort_x(:,:,k), vort_y(:,:,k), lap_vort(:,:,k), lap_vort_x(:,:,k), lap_vort_y(:,:,k), G, GV, CS, halo=4)
     ! On combined level
     call compute_vorticity_gradients(vort_xyf(:,:,k), &
-      vort_xf(:,:,k), vort_yf(:,:,k), lap_vortf(:,:,k), lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), G, GV, CS, halo=1)
+      vort_xf(:,:,k), vort_yf(:,:,k), lap_vortf(:,:,k), lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), G, GV, CS, halo=4)
 
     if (CS%zelong_dynamic) then
       call  biharmonic_Smagorinsky(lap_vort_xf(:,:,k), lap_vort_yf(:,:,k), shear_magf(:,:,k), &
-        smag_xf(:,:,k), smag_yf(:,:,k), G, GV, CS, halo=0, scaling_coefficient=1.0)
+        smag_xf(:,:,k), smag_yf(:,:,k), G, GV, CS, halo=4, scaling_coefficient=1.0)
       m_x(:,:,k) = smag_xf(:,:,k)
       m_y(:,:,k) = smag_yf(:,:,k)
     else
@@ -441,7 +441,7 @@ subroutine PG23_germano_identity(u, v, h, smag_bi_const_DSM, C_R, leo_x, leo_y, 
     call compute_leonard_flux(leo_x(:,:,k), leo_y(:,:,k), h_x(:,:,k), h_y(:,:,k),                        &
                               bx(:,:,k), by(:,:,k), bx_base(:,:,k), by_base(:,:,k),                      &
                               u(:,:,k), v(:,:,k), vort_xy(:,:,k), uf(:,:,k), vf(:,:,k), vort_xyf(:,:,k), &
-                              G, GV, CS, CS%test_width, halo=1)
+                              G, GV, CS, CS%test_width, halo=4)
     ! Output halo is 0; 
     ! So, dynamic biharmonic Smagorinsky model requires halo 3 (as default for velocities)
     if (CS%ssm) then
@@ -1046,10 +1046,6 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
       do j=js-2,je+2 ; do I=Isq-2,Ieq+2
         by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
       enddo ; enddo
-
-      if (G%symmetric) then
-        call pass_vector(by_base, bx_base, G%Domain, clock=CS%id_clock_mpi)
-      endif
 
       call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=by_base, v=bx_base, id_clock_filter=CS%id_clock_filter)
       call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=ur_base, v=vr_base, q=vortr_base, id_clock_filter=CS%id_clock_filter)
