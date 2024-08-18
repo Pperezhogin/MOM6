@@ -1047,6 +1047,10 @@ subroutine compute_leonard_flux(leo_x, leo_y, h_x, h_y,            &
         by_base(I,j) = 0.125 * ((vr_base(i,J) + vr_base(i+1,J-1)) + (vr_base(i,J-1) + vr_base(i+1,J))) * (vortr_base(I,J) + vortr_base(I,J-1)) * G%mask2dCu(I,j)
       enddo ; enddo
 
+      if (G%symmetric) then
+        call pass_vector(by_base, bx_base, G%Domain, clock=CS%id_clock_mpi)
+      endif
+
       call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=by_base, v=bx_base, id_clock_filter=CS%id_clock_filter)
       call filter_wrapper(G, GV, filter_width, halo=4, niter=CS%test_iter, u=ur_base, v=vr_base, q=vortr_base, id_clock_filter=CS%id_clock_filter)
  
