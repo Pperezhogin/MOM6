@@ -22,7 +22,7 @@ def create_slurm(p, filename, MOM6_file='MOM6'):
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
     'source ~/MOM6-examples/build/intel/env',
-    f'time srun ./{MOM6_file} > out.txt',
+    f'time mpiexec ./{MOM6_file} > out.txt',
     'sacct -j $SLURM_JOB_ID --format=JobID,JobName,MaxRSS,Elapsed',
     'sacct -j $SLURM_JOB_ID --units=G --format=User,JobID%24,JobName,state,elapsed,TotalCPU,ReqMem,MaxRss,MaxVMSize,nnodes,ncpus,nodelist,Elapsed',
     'mkdir -p output',
@@ -610,12 +610,12 @@ if __name__ == '__main__':
 
     for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24)
-        ntasks = dict(R2=4, R3=8, R4=16, R5=16, R6=16, R7=32, R8=32)[conf]
-        hpc = HPC.add(mem=8, ntasks=ntasks, time=8)
+        ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+        hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
 
     for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24).add(SMAG_BI_CONST=0.06)
-        ntasks = dict(R2=4, R3=8, R4=16, R5=16, R6=16, R7=32, R8=32)[conf]
-        hpc = HPC.add(mem=8, ntasks=ntasks, time=8)
+        ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+        hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-0.06-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
