@@ -22,7 +22,7 @@ def create_slurm(p, filename, MOM6_file='MOM6'):
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
     'source ~/MOM6-examples/build/intel/env',
-    f'time mpiexec ./{MOM6_file} > out.txt',
+    f'time srun ./{MOM6_file} > out.txt',
     'sacct -j $SLURM_JOB_ID --format=JobID,JobName,MaxRSS,Elapsed',
     'sacct -j $SLURM_JOB_ID --units=G --format=User,JobID%24,JobName,state,elapsed,TotalCPU,ReqMem,MaxRss,MaxVMSize,nnodes,ncpus,nodelist,Elapsed',
     'mkdir -p output',
@@ -219,6 +219,62 @@ JansenHeld = dictionary(
     SMAGORINSKY_KH=False, # No Smagorinsky diffusivity
     BOUND_KH=False, # bounding is not needed for negative diffusivity
     BETTER_BOUND_KH=False
+)
+
+Yankovsky24 = dictionary(
+    USE_VARIABLE_MIXING = True,
+    RESOLN_SCALED_KH = True,
+    RESOLN_SCALED_KHTH = True,
+    KH_RES_SCALE_COEF = 3.1416,
+    KH_RES_FN_POWER = 1,
+    VISC_RES_SCALE_COEF = 3.1416,
+    VISC_RES_FN_POWER = 1,
+    RES_SCALE_MEKE_VISC = True,
+    LAPLACIAN =  True,
+    BIHARMONIC = True,
+    THICKNESSDIFFUSE = True,
+    USE_MEKE = True,
+    MEKE_DAMPING = 0.0,
+    MEKE_CD_SCALE = 1.0,
+    MEKE_CB = 0.0,
+    MEKE_MIN_GAMMA2 = 1.0E-04,
+    MEKE_CT = 0.0,
+    MEKE_GMCOEFF = 1.0,
+    MEKE_FRCOEFF = 1.0,
+    MEKE_BGSRC = 0.0,
+    MEKE_KH = 0.0,
+    MEKE_K4 = -1.0,
+    MEKE_DTSCALE = 1.0,
+    MEKE_KHCOEFF = 0.00,
+    MEKE_USCALE = 0.0,
+    MEKE_VISC_DRAG = True,
+    MEKE_KHTH_FAC = 1.0,
+    MEKE_KHTR_FAC = 0.0,
+    MEKE_KHMEKE_FAC = 1.0,
+    MEKE_OLD_LSCALE = False,
+    MEKE_MIN_LSCALE = True,
+    MEKE_RD_MAX_SCALE = False,
+    MEKE_VISCOSITY_COEFF_KU = -0.3,
+    MEKE_VISCOSITY_COEFF_AU = 0.0,
+    MEKE_FIXED_MIXING_LENGTH = 0.0,
+    MEKE_ALPHA_DEFORM = 0.0,
+    MEKE_ALPHA_RHINES = 1.0,
+    MEKE_ALPHA_EADY = 0.0,
+    MEKE_ALPHA_FRICT = 0.0,
+    MEKE_ALPHA_GRID = 1.0,
+    MEKE_COLD_START = True,
+    MEKE_BACKSCAT_RO_C = 0.0,
+    MEKE_BACKSCAT_RO_POW = 0.0,
+    MEKE_ADVECTION_FACTOR = 1.0,
+    MEKE_TOPOGRAPHIC_BETA = 1.0,
+    CDRAG = 0.003,
+    MEKE_BHFRCOEFF = 1.0,
+    BOUND_KH_WITH_MEKE = True,
+    KILL_SWITCH_COEF = 0.25,
+    KHTH_USE_EBT_STRUCT = True,
+    RESOLN_USE_EBT = True,
+    EBT_POWER = 2,
+    SMAG_BI_CONST=0.2
 )
 
 #########################################################################################
@@ -507,47 +563,59 @@ if __name__ == '__main__':
     #         hpc = HPC.add(mem=4, ntasks=ntasks)
     #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
 
-    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.0]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
-                                        ZB_SCHEME=0).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-non-cons-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+    # MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+    #                                     ZB_SCHEME=0).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-non-cons-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
 
-    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.0]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
-                                        ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-non-cons-attenuation-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+    # MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+    #                                     ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-non-cons-attenuation-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
 
-    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [1.0]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
-                                        ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-attenuation-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+    # MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [1.0]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+    #                                     ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-attenuation-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
 
-    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [2.5]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
-                                        ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+    # MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [2.5]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1,
+    #                                     ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Smooth-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
 
-    MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # MOM6_exe = '/home/pp2681/MOM6-examples/src/MOM6/experiments/MOM6compiled/MOM6-PR-second'
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for ZB_SCALING in [2.5]:
+    #         parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1, VG_SHARP_PASS = 4,
+    #                                     ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
+    #         ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
+    #         hpc = HPC.add(mem=4, ntasks=ntasks)
+    #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+
     for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for ZB_SCALING in [2.5]:
-            parameters = PARAMETERS.add(USE_ZB2020='True',SMAG_BI_CONST=0.06,ZB_SCALING=ZB_SCALING,STRESS_SMOOTH_PASS=4,STRESS_SMOOTH_SEL=1, VG_SHARP_PASS = 4,
-                                        ZB_SCHEME=0, ZB_KLOWER_R_DISS=1.).add(**configuration(conf))
-            ntasks = dict(R2=1, R3=1, R4=1, R5=1, R6=10, R7=10, R8=10)[conf]
-            hpc = HPC.add(mem=4, ntasks=ntasks)
-            run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
+        parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24)
+        ntasks = dict(R2=4, R3=8, R4=16, R5=16, R6=16, R7=32, R8=32)[conf]
+        hpc = HPC.add(mem=8, ntasks=ntasks, time=8)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
+
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+        parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24).add(SMAG_BI_CONST=0.06)
+        ntasks = dict(R2=4, R3=8, R4=16, R5=16, R6=16, R7=32, R8=32)[conf]
+        hpc = HPC.add(mem=8, ntasks=ntasks, time=8)
+        run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-0.06-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
