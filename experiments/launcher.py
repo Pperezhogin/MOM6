@@ -19,6 +19,7 @@ def create_slurm(p, filename, MOM6_file='MOM6'):
     '#SBATCH --time='+str(p['time'])+':00:00',
     '#SBATCH --begin=now+'+str(p['begin']),
     '#SBATCH --job-name='+str(p['name']),
+    '#SBATCH --partition='+str(p['partition']) if 'partition' in p.keys() else '',
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
     'source ~/MOM6-examples/build/intel/env',
@@ -41,14 +42,14 @@ def create_MOM_override(p, filename):
 
 def run_experiment(folder, hpc, parameters, MOM6_exe='/MOM6-examples/build/intel/ocean_only/repro/MOM6'):
     if os.path.exists(folder):
-        #print('Folder '+folder+' already exists. We skip it')
-        #return
-        print('Folder '+folder+' already exists. Delete it? (y/n)')
-        if input()!='y':
-            print('Experiment is not launched. Exit.')
-            return
-        else:
-            os.system('rm -r '+folder)
+        print('Folder '+folder+' already exists. We skip it')
+        return
+        # print('Folder '+folder+' already exists. Delete it? (y/n)')
+        # if input()!='y':
+        #     print('Experiment is not launched. Exit.')
+        #     return
+        # else:
+        #     os.system('rm -r '+folder)
     os.system('mkdir -p '+folder)
     os.system('mkdir -p '+folder+'/RESTART')
 
@@ -613,14 +614,44 @@ if __name__ == '__main__':
     #         hpc = HPC.add(mem=4, ntasks=ntasks)
     #         run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/ZB-Reynolds-PR-second-NW2-{conf}/ZB-{ZB_SCALING}', hpc, parameters, MOM6_exe)
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24)
-        ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
-        hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24)
+    #     ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+    #     hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24).add(SMAG_BI_CONST=0.06)
+    #     ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+    #     hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-0.06-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(**configuration(conf)).add(SMAG_BI_CONST=0.06, THICKNESSDIFFUSE = True, KHTH = 500.0)
+    #     ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+    #     hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Feb2022/bare/{conf}-GM-500', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/MOM6')
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(**configuration(conf)).add(SMAG_BI_CONST=0.06, THICKNESSDIFFUSE = True, KHTH = 2000.0)
+    #     ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+    #     hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Feb2022/bare/{conf}-GM-2000', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/MOM6')
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(**configuration(conf)).add(SMAG_BI_CONST=0.06, THICKNESSDIFFUSE = True, KHTH = 8000.0)
+    #     ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+    #     hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Feb2022/bare/{conf}-GM-8000', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/MOM6')
 
     for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        parameters = PARAMETERS.add(**configuration(conf)).add(**Yankovsky24).add(SMAG_BI_CONST=0.06)
+        parameters = PARAMETERS.add(**configuration(conf)).add(SMAG_BI_CONST=0.06, THICKNESSDIFFUSE = True, KHTH = 250.0)
         ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
         hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
-        run_experiment(f'/scratch/pp2681/mom6/Apr2023/generalization/Yankovsky24-0.06-{conf}/ref', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/EBT_testing')
+        run_experiment(f'/scratch/pp2681/mom6/Feb2022/bare/{conf}-GM-250', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/MOM6')
+
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+        parameters = PARAMETERS.add(**configuration(conf)).add(SMAG_BI_CONST=0.06, THICKNESSDIFFUSE = True, KHTH = 125.0)
+        ntasks = dict(R2=1, R3=1, R4=2, R5=4, R6=10, R7=10, R8=14)[conf]
+        hpc = HPC.add(mem=4, ntasks=ntasks, time=6)
+        run_experiment(f'/scratch/pp2681/mom6/Feb2022/bare/{conf}-GM-125', hpc, parameters, MOM6_exe='/home/pp2681/MOM6-examples/build/compiled_executables/MOM6')
