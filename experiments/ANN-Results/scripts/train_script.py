@@ -16,7 +16,7 @@ if __name__ == '__main__':
     ########## Manual input of parameters ###############
     parser = argparse.ArgumentParser()
     parser.add_argument('--stencil_size', type=int, default=3)
-    parser.add_argument('--hidden_layers', type=str, default='[64,64]')
+    parser.add_argument('--hidden_layers', type=str, default='[20]')
     parser.add_argument('--collocated', type=str, default='True')
     parser.add_argument('--short_waves_dissipation', type=str, default='False')
     parser.add_argument('--short_waves_zero', type=str, default='False')
@@ -28,10 +28,10 @@ if __name__ == '__main__':
     parser.add_argument('--predict_smagorinsky', type=str, default='False')
 
     parser.add_argument('--dimensional_scaling', type=str, default='True')
-    parser.add_argument('--feature_functions', type=str, default='[deformation_radius_over_grid_spacing_linear]')
+    parser.add_argument('--feature_functions', type=str, default='[]')
     parser.add_argument('--gradient_features', type=str, default="['sh_xy', 'sh_xx', 'rel_vort']")
 
-    parser.add_argument('--subfilter', type=str, default='subfilter')
+    parser.add_argument('--subfilter', type=str, default='subfilter-Taper')
     parser.add_argument('--FGR', type=int, default=3)
     parser.add_argument('--factors', type=str, default='[4,9,12,15]')
     parser.add_argument('--depth_idx', type=str, default='np.arange(10)')
