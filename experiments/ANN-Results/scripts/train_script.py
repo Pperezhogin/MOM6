@@ -31,7 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('--feature_functions', type=str, default='[]')
     parser.add_argument('--gradient_features', type=str, default="['sh_xy', 'sh_xx', 'rel_vort']")
 
-    parser.add_argument('--subfilter', type=str, default='subfilter-Taper')
+    parser.add_argument('--subfilter', type=str, default='subfilter')
     parser.add_argument('--FGR', type=int, default=3)
     parser.add_argument('--factors', type=str, default='[4,9,12,15]')
     parser.add_argument('--depth_idx', type=str, default='np.arange(10)')
