@@ -59,12 +59,12 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
     ANNx = prediction['ZB20u'] * SGS_norm
     ANNy = prediction['ZB20v'] * SGS_norm
 
-    MSE_train = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2)
+    MSE_train = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2) / reduction((SGSx)**2, (SGSy)**2)
 
     u = tensor_from_xarray(batch.data.u)
     v = tensor_from_xarray(batch.data.v)
 
-    dEdt_error = torch.abs(reduction(u*(ANNx-SGSx), v*(ANNy-SGSy))) / torch.abs(reduction(u*SGSx,v*SGSy))
+    dEdt_error = torch.abs(reduction(u*(ANNx-SGSx), v*(ANNy-SGSy))) / (torch.abs(reduction(u*SGSx,v*SGSy)) + torch.abs(reduction(u*ANNx.detach(),v*ANNy.detach())))
 
     if short_waves_dissipation:
         perturbed_prediction = batch_perturbed.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
