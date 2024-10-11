@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import xarray as xr
-from helpers.cm26 import read_datasets
+from helpers.cm26 import read_datasets, propagate_mask
 from helpers.ann_tools import ANN, export_ANN, tensor_from_xarray, torch_pad
 import torch
 import torch.optim as optim
@@ -36,16 +36,25 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         batch_perturbed=None,
         response_norm=None, smagx_response=None, smagy_response=None,
         jacobian_trace=False, Cs_biharm=0.06,
-        perturbed_inputs=False, jacobian_reduction='component'):
+        perturbed_inputs=False, jacobian_reduction='component',
+        away_from_coast=0):
     prediction = batch.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
         stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
         feature_functions=feature_functions, gradient_features=gradient_features,
         rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y,
         jacobian_trace=jacobian_trace)
 
+    # If away_from_coast=0, all wet points are included into the loss
+    wet_u = tensor_from_xarray(propagate_mask(batch.param.wet_u, batch.grid, niter=away_from_coast))
+    wet_v = tensor_from_xarray(propagate_mask(batch.param.wet_v, batch.grid, niter=away_from_coast))
+
+    def reduction(x,y):
+        return (x * wet_u + y * wet_v).mean()
+    
     ANNx = prediction['ZB20u'] * SGS_norm
     ANNy = prediction['ZB20v'] * SGS_norm
-    MSE_train = ((ANNx-SGSx)**2 + (ANNy-SGSy)**2).mean()
+
+    MSE_train = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2)
 
     if short_waves_dissipation:
         perturbed_prediction = batch_perturbed.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
@@ -56,10 +65,7 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         ANNx_response = (perturbed_prediction['ZB20u'] - prediction['ZB20u']) * response_norm
         ANNy_response = (perturbed_prediction['ZB20v'] - prediction['ZB20v']) * response_norm
         
-        MSE_plane_waves = (
-            (ANNx_response - smagx_response)**2 +
-            (ANNy_response - smagy_response)**2
-        ).mean()
+        MSE_plane_waves = reduction((ANNx_response - smagx_response)**2, (ANNy_response - smagy_response)**2)
     else:
         MSE_plane_waves = torch.tensor(0)
 
@@ -69,10 +75,11 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
             return (4 * x[1:-1,1:-1] + 2 * (x[2:,1:-1] + x[:-2,1:-1] + x[1:-1,2:] + x[1:-1,:-2]) + (x[2:,2:] + x[2:,:-2] + x[:-2,2:] + x[:-2,:-2])) / 16.
         annx_sharpen = ANNx - fltr(ANNx)
         anny_sharpen = ANNy - fltr(ANNy)
-        MSE_short_zero = (annx_sharpen**2 + anny_sharpen**2).mean()
+        MSE_short_zero = reduction(annx_sharpen**2, anny_sharpen**2)
     else:
         MSE_short_zero = torch.tensor(0)
 
+    # Note this should not be used with away_from_coast > 0
     if jacobian_trace:
         # First we define mean jacobian trace (per unit grid element)
         # for Smagorinsky model which is analytical
@@ -114,7 +121,7 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
 
         ANNx = perturbed_prediction['ZB20u'] * SGS_norm
         ANNy = perturbed_prediction['ZB20v'] * SGS_norm
-        MSE_perturbed = ((ANNx-SGSx)**2 + (ANNy-SGSy)**2).mean()
+        MSE_perturbed = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2)
     else:
         MSE_perturbed = torch.tensor(0)
         
@@ -143,6 +150,7 @@ def train_ANN(factors=[12,15],
               Cs_biharm=0.06,
               load=False,
               subfilter='subfilter',
+              away_from_coast=0,
               FGR=3):
     '''
     time_iters is the number of time snaphots
@@ -263,7 +271,8 @@ def train_ANN(factors=[12,15],
                                 batch_perturbed=batch_perturbed,
                                 response_norm=response_norm, smagx_response=smagx_response, smagy_response=smagy_response,
                                 jacobian_trace=jacobian_trace, Cs_biharm=Cs_biharm,
-                                perturbed_inputs=perturbed_inputs, jacobian_reduction=jacobian_reduction
+                                perturbed_inputs=perturbed_inputs, jacobian_reduction=jacobian_reduction,
+                                away_from_coast=away_from_coast
                                 )
                 if short_waves_dissipation:
                     (MSE_train + MSE_plain_waves).backward()
@@ -286,7 +295,8 @@ def train_ANN(factors=[12,15],
             with torch.no_grad():
                 MSE_validate, _, _, _, _ = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                     stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
-                                    feature_functions=feature_functions, gradient_features=gradient_features)
+                                    feature_functions=feature_functions, gradient_features=gradient_features,
+                                    away_from_coast=away_from_coast)
             
             del batch
         

@@ -53,6 +53,14 @@ def discard_land(x, percentile=1):
         return (x==1).astype('float32')
     else:
         return (x>percentile).astype('float32')
+    
+def propagate_mask(wet0, grid, niter=1):
+    wet = wet0.copy()
+
+    for iter in range(niter):
+        wet = grid.interp(grid.interp(wet, ['X', 'Y']), ['X', 'Y'])
+
+    return discard_land(wet, percentile=1)
 
 def create_grid(param):
     '''
@@ -452,6 +460,7 @@ class DatasetCM26():
         in a few regions
         '''
         grid = self.grid
+        data = self.data
         param = self.param
         SGSx = self.data.SGSx
         SGSy = self.data.SGSy
@@ -528,5 +537,15 @@ class DatasetCM26():
             skill['transfer_ZB_'+region] = transfer.rename({'freq_r': 'freq_r_'+region})
             skill['power_ZB_'+region] = power.rename({'freq_r': 'freq_r_'+region})
             skill['power_time_ZB_'+region] = power_time
+
+        ########### Global energy analysis ###############
+        areaT = param.dxT * param.dyT
+        areaU = param.dxCu * param.dyCu
+        areaV = param.dxCv * param.dyCv
+        skill['dEdt_map'] = ((grid.interp(data.SGSx * data.u * areaU,'X') + grid.interp(data.SGSy * data.v * areaV,'Y')) * param.wet / areaT).mean('time')
+        skill['dEdt_map_ZB'] = ((grid.interp(data.ZB20u * data.u * areaU,'X') + grid.interp(data.ZB20v * data.v * areaV,'Y')) * param.wet / areaT).mean('time')
+
+        skill['dEdt'] = (skill['dEdt_map'] * areaT).sum(['xh', 'yh']) / (areaT).sum(['xh', 'yh'])
+        skill['dEdt_ZB'] = (skill['dEdt_map_ZB'] * areaT).sum(['xh', 'yh']) / (areaT).sum(['xh', 'yh'])
 
         return skill.compute()
