@@ -41,6 +41,10 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--permute_factors_and_depth', type=str, default='True')
 
+    parser.add_argument('--away_from_coast', type=int, default=0)
+    parser.add_argument('--MSE_weight', type=float, default=1.)
+    parser.add_argument('--dEdt_weight', type=float, default=0.)
+
     parser.add_argument('--path_save', type=str, default='EXP0')
     parser.add_argument('--load', type=str, default='False')
 
@@ -92,6 +96,9 @@ if __name__ == '__main__':
                   args.jacobian_reduction,
                   args.predict_smagorinsky,
                   args.Cs_biharm,
+                  args.away_from_coast,
+                  args.MSE_weight,
+                  args.dEdt_weight,
                   args.load,
                   args.subfilter,
                   args.FGR

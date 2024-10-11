@@ -45,16 +45,26 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
         jacobian_trace=jacobian_trace)
 
     # If away_from_coast=0, all wet points are included into the loss
-    wet_u = tensor_from_xarray(propagate_mask(batch.param.wet_u, batch.grid, niter=away_from_coast))
-    wet_v = tensor_from_xarray(propagate_mask(batch.param.wet_v, batch.grid, niter=away_from_coast))
+    wet_u = propagate_mask(batch.param.wet_u, batch.grid, niter=away_from_coast)
+    wet_v = propagate_mask(batch.param.wet_v, batch.grid, niter=away_from_coast)
+    areaU = tensor_from_xarray(batch.param.dxCu * batch.param.dyCu * wet_u)
+    areaV = tensor_from_xarray(batch.param.dxCv * batch.param.dyCv * wet_v)
+    # To make sure that this reduction factor is almost like a mask and of the order of 1
+    areaU = areaU / (areaU).max()
+    areaV = areaV / (areaV).max()
 
     def reduction(x,y):
-        return (x * wet_u + y * wet_v).mean()
+        return (x * areaU + y * areaV).mean()
     
     ANNx = prediction['ZB20u'] * SGS_norm
     ANNy = prediction['ZB20v'] * SGS_norm
 
     MSE_train = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2)
+
+    u = tensor_from_xarray(batch.data.u)
+    v = tensor_from_xarray(batch.data.v)
+
+    dEdt_error = torch.abs(reduction(u*(ANNx-SGSx), v*(ANNy-SGSy))) / torch.abs(reduction(u*SGSx,v*SGSy))
 
     if short_waves_dissipation:
         perturbed_prediction = batch_perturbed.state.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall,
@@ -125,7 +135,7 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
     else:
         MSE_perturbed = torch.tensor(0)
         
-    return MSE_train, MSE_plane_waves, MSE_short_zero, MSE_jacobian_trace, MSE_perturbed
+    return MSE_train, MSE_plane_waves, MSE_short_zero, MSE_jacobian_trace, MSE_perturbed, dEdt_error
 
 def train_ANN(factors=[12,15],
               stencil_size = 3,
@@ -148,9 +158,11 @@ def train_ANN(factors=[12,15],
               jacobian_reduction='component',
               predict_smagorinsky=False,
               Cs_biharm=0.06,
+              away_from_coast=0,
+              MSE_weight=1.,
+              dEdt_weight=0.,
               load=False,
               subfilter='subfilter',
-              away_from_coast=0,
               FGR=3):
     '''
     time_iters is the number of time snaphots
@@ -164,7 +176,7 @@ def train_ANN(factors=[12,15],
 
     ########## Init logger ###########
     logger = xr.Dataset()
-    for key in ['MSE_train', 'MSE_plain_waves', 'MSE_short_zero', 'MSE_jacobian_trace', 'MSE_validate', 'MSE_perturbed']:
+    for key in ['MSE_train', 'MSE_plain_waves', 'MSE_short_zero', 'MSE_jacobian_trace', 'MSE_validate', 'MSE_perturbed', 'dEdt_error', 'dEdt_error_validate']:
         logger[key] = xr.DataArray(np.zeros([time_iters, len(factors), len(depth_idx)]), 
                                    dims=['iter', 'factor', 'depth'], 
                                    coords={'factor': factors, 'depth': depth_idx})
@@ -262,7 +274,7 @@ def train_ANN(factors=[12,15],
             ######## Optionally, apply symmetries by data augmentation #########
             for rotation, reflect_x, reflect_y in augment():
                 optimizer.zero_grad()
-                MSE_train, MSE_plain_waves, MSE_short_zero, MSE_jacobian_trace, MSE_perturbed = \
+                MSE_train, MSE_plain_waves, MSE_short_zero, MSE_jacobian_trace, MSE_perturbed, dEdt_error = \
                             MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                 stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
                                 feature_functions=feature_functions, gradient_features=gradient_features,
@@ -283,7 +295,7 @@ def train_ANN(factors=[12,15],
                 elif perturbed_inputs:
                     (MSE_perturbed).backward()
                 else:    
-                    MSE_train.backward()
+                    (MSE_weight * MSE_train + dEdt_weight * dEdt_error).backward()
                 optimizer.step()
 
             del batch
@@ -293,7 +305,7 @@ def train_ANN(factors=[12,15],
             batch = dataset[f'validate-{factor}'].select2d(zl=depth)
             SGSx, SGSy, SGS_norm = get_SGS(batch)
             with torch.no_grad():
-                MSE_validate, _, _, _, _ = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
+                MSE_validate, _, _, _, _, dEdt_error_validate = MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
                                     stencil_size=stencil_size, dimensional_scaling=dimensional_scaling,
                                     feature_functions=feature_functions, gradient_features=gradient_features,
                                     away_from_coast=away_from_coast)
@@ -307,11 +319,13 @@ def train_ANN(factors=[12,15],
             MSE_plain_waves = float(MSE_plain_waves.data)
             MSE_short_zero = float(MSE_short_zero.data)
             MSE_jacobian_trace = float(MSE_jacobian_trace.data)
+            dEdt_error = float(dEdt_error.data)
+            dEdt_error_validate = float(dEdt_error_validate.data)
 
-            for key in ['MSE_train', 'MSE_plain_waves', 'MSE_short_zero', 'MSE_jacobian_trace', 'MSE_validate', 'MSE_perturbed']:
+            for key in ['MSE_train', 'MSE_plain_waves', 'MSE_short_zero', 'MSE_jacobian_trace', 'MSE_validate', 'MSE_perturbed', 'dEdt_error', 'dEdt_error_validate']:
                 logger[key].loc[{'iter': time_iter, 'factor': factor, 'depth': depth}] = eval(key)
             if (time_iter+1) % print_iters == 0:
-                print(f'Factor: {factor}, depth: {depth}, '+'MSE train/validate/perturbed/waves/short/trace: [%.6f, %.6f, %.6f, %.6f, %.6f, %.6f]' % (MSE_train, MSE_validate, MSE_perturbed, MSE_plain_waves, MSE_short_zero, MSE_jacobian_trace))
+                print(f'Factor: {factor}, depth: {depth}, '+'MSE train/validate: [%.6f, %.6f], dEdt error: train/validate [%.6f, %.6f]' % (MSE_train, MSE_validate, dEdt_error, dEdt_error_validate))
         t = time()
         if (time_iter+1) % print_iters == 0:
             print(f'Iter/num_iters [{time_iter+1}/{time_iters}]. Iter time/Remaining time in seconds: [%.2f/%.1f]' % (t-t_e, (t-t_s)*(time_iters/(time_iter+1)-1)))
