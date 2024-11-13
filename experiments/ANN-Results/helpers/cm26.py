@@ -213,15 +213,17 @@ class DatasetCM26():
         del self.data, self.param, self.grid, self.state
         return
     
-    def nanvar(self, x):
+    def nanvar(self, x, away_from_coast=0):
         if 'xh' in x.dims and 'yh' in x.dims:
-            return x.where(self.param.wet)
+            wet = self.param.wet
         if 'xh' in x.dims and 'yq' in x.dims:
-            return x.where(self.param.wet_v)
+            wet = self.param.wet_v
         if 'xq' in x.dims and 'yh' in x.dims:
-            return x.where(self.param.wet_u)
+            wet = self.param.wet_u
         if 'xq' in x.dims and 'yq' in x.dims:
-            return x.where(self.param.wet_c)
+            wet = self.param.wet_c
+        
+        return x.where(propagate_mask(wet, self.grid, away_from_coast))
     
     def select2d(self, time = None, zl=None, compute=lambda x: x):
         data = self.data

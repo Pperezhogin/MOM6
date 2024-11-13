@@ -818,13 +818,14 @@ class StateFunctions():
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'smagx': smagx, 'smagy': smagy}
 
-    def ZB20(self, ZB_scaling=1.0, VGM='False'):
+    def ZB20(self, ZB_scaling=1.0, VGM='False', scheme='staggered', coef=1./18., FGR=3.0, subtract_div=True):
         param = self.param
         grid = self.grid
-        
+            
         sh_xy, sh_xx, vort_xy, div = self.velocity_gradients()
+        rel_vort = self.relative_vorticity()
 
-        vort_xy_center = grid.interp(vort_xy,['X','Y']) * param.wet
+        vort_xy_center = grid.interp(rel_vort,['X','Y']) * param.wet
         sh_xy_center = grid.interp(sh_xy,['X','Y']) * param.wet
         sh_xx_corner = grid.interp(sh_xx,['X', 'Y']) * param.wet_c
 
@@ -834,20 +835,102 @@ class StateFunctions():
 
         Txx = - vort_sh + sum_sq
         Tyy = + vort_sh + sum_sq
-        Txy = vort_xy * sh_xx_corner
+        if scheme == 'staggered':
+            Txy = rel_vort * sh_xx_corner
+        elif scheme == 'collocated':
+            Txy = grid.interp(vort_xy_center * sh_xx, ['X', 'Y'])
 
         if VGM == 'VGM_flux':
             div_corner = grid.interp(div, ['X', 'Y']) * param.wet_c
             Txx +=   div * sh_xx + div**2
             Tyy += - div * sh_xx + div**2
             Txy +=   div_corner * sh_xy
+        
+        # The next order approximation based on Wang2022
+        # https://pubs.aip.org/aip/pof/article/34/9/095108/2845352/Constant-coefficient-spatial-gradient-models-for
+        if VGM == 'VGM2':
+            '''
+            Note, empirically, coef=4./18. works better. However, it is not yet derived.
+            '''
+            def filter_4points(x, axis):
+                weight = np.array([[0., 1., 0.],
+                                   [1., 0., 1.],
+                                   [0., 1., 0.]])
+                return (x * weight).sum((-1,-2))
+            
+            def filter_wrapper(phi, x='xh', y='yh', flt=filter_4points):
+                return phi.pad({x:1,y:1}, constant_values=0).rolling({x:3, y:3}, center=True).reduce(flt).fillna(0.).isel({x:slice(1,-1),y:slice(1,-1)})
+            
+            Txy_center = vort_xy_center * sh_xx + coef * (
+                filter_wrapper(vort_xy_center * sh_xx) - vort_xy_center * filter_wrapper(sh_xx) - filter_wrapper(vort_xy_center) * sh_xx
+            )
+            Txy = grid.interp(Txy_center * param.wet, ['X', 'Y'])
 
+            vort_sh = vort_xy_center * sh_xy_center + coef * (
+                filter_wrapper(vort_xy_center * sh_xy_center) - vort_xy_center * filter_wrapper(sh_xy_center) - filter_wrapper(vort_xy_center) * sh_xy_center
+            )
+
+            sum_sq = 0.5 * (
+                vort_xy_center**2 + sh_xy_center**2 + sh_xx**2 + coef * (
+                    filter_wrapper(vort_xy_center**2 + sh_xy_center**2 + sh_xx**2) - 2 * vort_xy_center * filter_wrapper(vort_xy_center) \
+                                                                                   - 2 * sh_xy_center   * filter_wrapper(sh_xy_center)   \
+                                                                                   - 2 * sh_xx          * filter_wrapper(sh_xx)
+                )
+            )
+
+            Txx = - vort_sh + sum_sq
+            Tyy = + vort_sh + sum_sq    
+ 
         kappa_t = - param.dxT * param.dyT * param.wet * ZB_scaling
         kappa_q = - param.dxBu * param.dyBu * param.wet_c * ZB_scaling
 
         Txx = kappa_t * Txx
         Tyy = kappa_t * Tyy
         Txy = kappa_q * Txy
+
+        if VGM == 'VGM2_direct':
+            dudx = grid.diff(self.data.u, 'X') / param.dxT * param.wet
+            dvdy = grid.diff(self.data.v, 'Y') / param.dyT * param.wet
+
+            if subtract_div:
+                div = (dudx + dvdy).compute()
+                dudx = dudx - div * 0.5
+                dvdy = dvdy - div * 0.5
+
+            dudy = grid.diff(self.data.u, 'Y') / param.dyBu * param.wet_c
+            dvdx = grid.diff(self.data.v, 'X') / param.dxBu * param.wet_c
+
+            d2udx2  = grid.diff(dudx, 'X') / param.dxCu * param.wet_u 
+            d2udxdy = grid.diff(dudx, 'Y') / param.dyCv * param.wet_v
+            d2udy2  = grid.diff(dudy, 'Y') / param.dyCu * param.wet_u
+
+            d2vdx2  = grid.diff(dvdx, 'X') / param.dxCv * param.wet_v
+            d2vdxdy = grid.diff(dvdx, 'Y') / param.dyCu * param.wet_u
+            d2vdy2  = grid.diff(dvdy, 'Y') / param.dyCv * param.wet_v
+
+            # Interpolate everything to center
+            dudy = grid.interp(dudy, ['X', 'Y']) * param.wet
+            dvdx = grid.interp(dvdx, ['X', 'Y']) * param.wet
+
+            d2udx2  = grid.interp(d2udx2,  'X') * param.wet
+            d2udxdy = grid.interp(d2udxdy, 'Y') * param.wet
+            d2udy2  = grid.interp(d2udy2,  'X') * param.wet
+
+            d2vdx2  = grid.interp(d2vdx2,  'Y') * param.wet
+            d2vdxdy = grid.interp(d2vdxdy, 'X') * param.wet
+            d2vdy2  = grid.interp(d2vdy2,  'Y') * param.wet
+
+            # Filter scale ** 2 / 12
+            Delta2 = FGR**2 * param.dxT * param.dyT / 12.
+            # Here is conventional LES sign notation
+            Txx = Delta2 * (dudx**2 + dudy**2) + 0.5 * Delta2**2 * (d2udx2**2 + d2udy2**2 + 2 * d2udxdy**2)
+            Tyy = Delta2 * (dvdx**2 + dvdy**2) + 0.5 * Delta2**2 * (d2vdx2**2 + d2vdy2**2 + 2 * d2vdxdy**2)
+            Txy = Delta2 * (dudx * dvdx + dudy * dvdy) + 0.5 * Delta2**2 * (d2udx2*d2vdx2 + d2udy2 * d2vdy2 + 2 * d2udxdy * d2vdxdy)
+
+            # additional tuning constant and change sign notation back to standard ZB20
+            Txx = - Txx * ZB_scaling
+            Tyy = - Tyy * ZB_scaling
+            Txy = - grid.interp(Txy, ['X', 'Y']) * param.wet_c * ZB_scaling
 
         ZB20u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
                + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
@@ -856,22 +939,6 @@ class StateFunctions():
         ZB20v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
                    + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
                    / (param.dxCv*param.dyCv)
-        
-        if VGM == 'VGM_full':
-            kappa_u = - param.dxCu * param.dyCu * param.wet_u * ZB_scaling
-            kappa_v = - param.dxCv * param.dyCv * param.wet_v * ZB_scaling
-            
-            Dxy = grid.diff(sh_xx, 'X') / param.dxCu + grid.diff(sh_xy, 'Y') / param.dyCu
-            div_u = grid.interp(div, 'X') * param.wet_u
-            vort_xy_u = grid.interp(vort_xy, 'Y')
-            div_y = grid.interp(grid.diff(div, 'Y') / param.dyCv,['X', 'Y'])
-            ZB20u += kappa_u * (div_u * Dxy + vort_xy_u * div_y)
-
-            Dxy = -grid.diff(sh_xx, 'Y') / param.dyCv + grid.diff(sh_xy, 'X') / param.dxCv
-            div_v = grid.interp(div, 'Y') * param.wet_v
-            vort_xy_v = grid.interp(vort_xy, 'X')
-            div_x = grid.interp(grid.diff(div, 'X') / param.dxCu,['X', 'Y'])
-            ZB20v += kappa_v * (div_v * Dxy - vort_xy_v * div_x)
 
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
                 'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}

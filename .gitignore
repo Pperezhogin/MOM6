@@ -52,3 +52,4 @@ config_src/drivers/ice_solo_driver/atmos_ocean_fluxes_mod.mod
 experiments/ANN-Results/greene-notebooks/test.nc
 experiments/ANN-Results/greene-notebooks/my_func_stats
 experiments/MOM6compiled/*
+experiments/ANN-Results/offline_analysis/offline-skill-old-models*
