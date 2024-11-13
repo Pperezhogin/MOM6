@@ -189,6 +189,7 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
   logical :: use_QG_Leith
   integer :: i, j, k, is, ie, js, je, nz
   real :: h_upper, h_lower, flux_upper, flux_lower
+  real, dimension(SZK_(GV)+1) :: h_cumsum, flux_cumsum
 
   if (.not. CS%initialized) call MOM_error(FATAL, "MOM_thickness_diffuse: "//&
          "Module must be initialized before it is used.")
@@ -221,11 +222,18 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
     ! u streamfunction
     Sfn_unlim_u_SSM = 0.
     do j=js-2,je+2 ; do i=is-2,ie+2
+      h_cumsum(1) = 0.
+      flux_cumsum(1) = 0.
+      do k=1,nz
+        h_cumsum(k+1) = h_cumsum(k) + (h(i,j,k) + h(i+1,j,k)) * 0.5 * G%mask2dCu(i,j)
+        flux_cumsum(k+1) = flux_cumsum(k) + uhD(i,j,k)
+      enddo
+
       do k=2,nz
-        h_upper = SUM(h(i,j,1:k-1) + h(i+1,j,1:k-1)) * 0.5 * G%mask2dCu(i,j)
-        h_lower = SUM(h(i,j,k:nz)  + h(i+1,j,k:nz))  * 0.5 * G%mask2dCu(i,j)
-        flux_upper = SUM(uhD(i,j,1:k-1))
-        flux_lower = SUM(uhD(i,j,k:nz))
+        h_upper = h_cumsum(k)
+        h_lower = h_cumsum(nz+1) - h_upper
+        flux_upper = flux_cumsum(k)
+        flux_lower = flux_cumsum(nz+1) - flux_upper
         Sfn_unlim_u_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
       enddo
     enddo; enddo
@@ -233,11 +241,18 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
     ! v streamfunction
     Sfn_unlim_v_SSM = 0.
     do j=js-2,je+2 ; do i=is-2,ie+2
+      h_cumsum(1) = 0.
+      flux_cumsum(1) = 0.
+      do k=1,nz
+        h_cumsum(k+1) = h_cumsum(k) + (h(i,j,k) + h(i,j+1,k)) * 0.5 * G%mask2dCv(i,j)
+        flux_cumsum(k+1) = flux_cumsum(k) + vhD(i,j,k)
+      enddo
+
       do k=2,nz
-        h_upper = SUM(h(i,j,1:k-1) + h(i,j+1,1:k-1)) * 0.5 * G%mask2dCv(i,j)
-        h_lower = SUM(h(i,j,k:nz)  + h(i,j+1,k:nz))  * 0.5 * G%mask2dCv(i,j)
-        flux_upper = SUM(vhD(i,j,1:k-1))
-        flux_lower = SUM(vhD(i,j,k:nz))
+        h_upper = h_cumsum(k)
+        h_lower = h_cumsum(nz+1) - h_upper
+        flux_upper = flux_cumsum(k)
+        flux_lower = flux_cumsum(nz+1) - flux_upper
         Sfn_unlim_v_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
       enddo
     enddo; enddo
