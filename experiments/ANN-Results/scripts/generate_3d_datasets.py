@@ -22,7 +22,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
 
-    base_path = '/scratch/pp2681/mom6/CM26_datasets/ocean3d'
+    base_path = '/vast/pp2681/CM26_datasets/ocean3d'
     folder = os.path.join(base_path, args.subfilter+'-Taper', f'FGR{args.FGR}/factor-{args.factor}')
     os.system(f'mkdir -p {folder}')
     with open(f'{folder}/filter.txt', "w") as outfile: 

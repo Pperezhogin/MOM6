@@ -36,7 +36,7 @@ if __name__ == '__main__':
     print(args)
 
     factors = [4,6,9,12]
-    base_path = '/scratch/pp2681/mom6/CM26_datasets'
+    base_path = '/vast/pp2681/CM26_datasets'
     batch_size = 14
 
     ds = DatasetCM26()

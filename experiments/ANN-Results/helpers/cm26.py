@@ -10,7 +10,7 @@ def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15], su
     dictionary = {}
     depth_selector = lambda x: x.isel(zl=np.arange(0,50,5))
     for factor in factors:
-        base_path = f'/scratch/pp2681/mom6/CM26_datasets/ocean3d/{subfilter}/FGR{FGR}/factor-{factor}'
+        base_path = f'/vast/pp2681/CM26_datasets/ocean3d/{subfilter}/FGR{FGR}/factor-{factor}'
         param = depth_selector(xr.open_dataset(f'{base_path}/param.nc'))
 
         nfiles = {'train': 96, 'test': 24, 'validate': 12}
@@ -109,7 +109,7 @@ class DatasetCM26():
             param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr').rename(
                 {'st_ocean': 'zl', 'st_edges_ocean': 'zi'})
         elif '3d-' in source:
-            base_path = '/scratch/pp2681/mom6/CM26_datasets/ocean3d/rawdata'
+            base_path = '/vast/pp2681/CM26_datasets/ocean3d/rawdata'
             param = xr.open_dataset(f'{base_path}/param.nc')
             if source == '3d-train':
                 file_list = [f'{base_path}/train-{j}.nc' for j in range(96)]
