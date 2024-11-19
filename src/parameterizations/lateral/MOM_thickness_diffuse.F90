@@ -94,6 +94,7 @@ type, public :: thickness_diffuse_CS ; private
   logical :: use_stanley_gm      !< If true, also use the Stanley parameterization in MOM_thickness_diffuse
   logical :: thickness_fluxes_SSM !< Use SSM model (Leonard stress) to parameterize thickness fluxes
   logical :: thickness_streamfun_SSM !< Use SSM model (Leonard stress) to parameterize thickness streamfunction
+  integer :: thickness_vertical_summation !< Switch between vertical summation algorithms 
   real    :: test_width !< Width of the test filter (hat) w.r.t. grid spacing
   integer :: test_iter !< Width of the test filter (hat) w.r.t. grid spacing
   real    :: max_bolus_velocity !< Maximum allowable bolus velocity, i.e. |uhSSM|/h < this number
@@ -234,7 +235,11 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
         h_lower = h_cumsum(nz+1) - h_upper
         flux_upper = flux_cumsum(k)
         flux_lower = flux_cumsum(nz+1) - flux_upper
-        Sfn_unlim_u_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
+        if (CS%thickness_vertical_summation == 0) then
+          Sfn_unlim_u_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
+        else if (CS%thickness_vertical_summation == 1) then
+          Sfn_unlim_u_SSM(i,j,k) = flux_lower
+        endif
       enddo
     enddo; enddo
 
@@ -253,7 +258,11 @@ subroutine thickness_diffuse(u, v, h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMi
         h_lower = h_cumsum(nz+1) - h_upper
         flux_upper = flux_cumsum(k)
         flux_lower = flux_cumsum(nz+1) - flux_upper
-        Sfn_unlim_v_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
+        if (CS%thickness_vertical_summation == 0) then
+          Sfn_unlim_v_SSM(i,j,k) = (h_upper * flux_lower - h_lower * flux_upper) / ((h_upper + h_lower) + h_neglect)
+        else if (CS%thickness_vertical_summation == 1) then
+          Sfn_unlim_v_SSM(i,j,k) = flux_lower
+        endif
       enddo
     enddo; enddo
 
@@ -2206,6 +2215,8 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
                  "Use SSM model (Leonard stress) to parameterize thickness fluxes", default=.false.)
   call get_param(param_file, mdl, "PG23_THICKNESS_STREAMFUN_SSM", CS%thickness_streamfun_SSM, &
                  "Use SSM model (Leonard stress) to parameterize thickness streamfunction", default=.false.)
+  call get_param(param_file, mdl, "PG23_VERTICAL_SUMMATION", CS%thickness_vertical_summation, &
+                 "If 0, use combination of cumsum from bottom and surf, if 1 use cumsum from the bottom", default=0)
   call get_param(param_file, mdl, "PG23_TEST_WIDTH", CS%test_width, &
                  "Width of the test filter (hat) w.r.t. grid spacing", units="nondim", default=SQRT(6.0))
   call get_param(param_file, mdl, "PG23_TEST_ITER", CS%test_iter, &
