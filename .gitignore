@@ -12,3 +12,14 @@ config.status
 configure
 /Makefile
 Makefile.mkmf
+*.ffmpeg*
+*.png
+*.out
+*.mp4
+*.pdf
+*.ipynb
+*.pyc
+*.nc
+*.err
+*.gif
+*.json
