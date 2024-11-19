@@ -382,7 +382,7 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   elseif (CS%use_ann == 2) then
     call ANN_init(CS%ann_Txy, CS%ann_file_Txy)
     call ANN_init(CS%ann_Txx_Tyy, CS%ann_file_Txx_Tyy)
-  elseif (CS%use_ann == 3) then
+  elseif (CS%use_ann == 3 .OR. CS%use_ann == 4) then
     call ANN_init(CS%ann_Tall, CS%ann_file_Tall)
   endif
 
@@ -649,6 +649,8 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
     call compute_stress_ANN_3x3(G, GV, CS)
   elseif (CS%use_ann==3) then
     call compute_stress_ANN_collocated(G, GV, CS)
+  elseif (CS%use_ann==4) then
+    call compute_stress_ANN_strain(G, GV, CS)
   endif
 
   ! Smooth the stress tensor if specified
@@ -1708,6 +1710,97 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   call cpu_clock_end(CS%id_clock_stress_ANN)
 
 end subroutine compute_stress_ANN_collocated
+
+!> Compute stress tensor T =
+!! (Txx, Txy;
+!!  Txy, Tyy)
+!!  with ANN
+!! As compared to function above, 
+!! this function uses only strain-tensor as input feature
+subroutine compute_stress_ANN_strain(G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, n
+
+  real :: x(2*CS%stencil_size**2), y(3)
+  real :: input_norm
+  integer :: shift, stencil_points
+
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
+        sh_xy_h,   & ! sh_xy interpolated to the center [T-1 ~ s-1]
+        norm_h       ! Norm in h points [T-1 ~ s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        sqr_h, & ! Sum of squares in h points
+        Txy      ! Predicted Txy in center points to be interpolated to coreners
+
+  call cpu_clock_begin(CS%id_clock_stress_ANN)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  sh_xy_h = 0.
+  norm_h = 0.
+
+  call pass_var(CS%sh_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%sh_xx, G%Domain, clock=CS%id_clock_mpi)
+
+  shift = (CS%stencil_size-1)/2
+  stencil_points = CS%stencil_size**2
+
+  ! Interpolate input features
+  do k=1,nz
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      ! It is assumed that B.C. is applied to sh_xy and vort_xy
+      sh_xy_h(i,j,k) = 0.25 * ( (CS%sh_xy(I-1,J-1,k) + CS%sh_xy(I,J,k)) &
+                       + (CS%sh_xy(I-1,J,k) + CS%sh_xy(I,J-1,k)) ) * G%mask2dT(i,j)
+      
+      sqr_h(i,j) = CS%sh_xx(i,j,k)**2 + sh_xy_h(i,j,k)**2
+    enddo; enddo
+
+    do j=js,je ; do i=is,ie
+      norm_h(i,j,k) = sqrt(SUM(sqr_h(i-shift:i+shift,j-shift:j+shift)))
+    enddo; enddo
+  enddo
+
+  call pass_var(sh_xy_h, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(norm_h, G%Domain, clock=CS%id_clock_mpi) 
+
+  do k=1,nz
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      x(1:stencil_points) = RESHAPE(sh_xy_h(i-shift:i+shift,j-shift:j+shift,k), (/stencil_points/))
+      x(stencil_points+1:2*stencil_points) = RESHAPE(CS%sh_xx(i-shift:i+shift,j-shift:j+shift,k), (/stencil_points/))
+
+      input_norm = norm_h(i,j,k)
+
+      x(1:2*stencil_points) = x(1:2*stencil_points) / (input_norm + CS%subroundoff_shear)
+
+      call ANN_apply(x, y, CS%ann_Tall)
+
+      y = y * input_norm * input_norm * CS%kappa_h(i,j)
+
+      Txy(i,j)      = y(1)
+      CS%Txx(i,j,k) = y(2)
+      CS%Tyy(i,j,k) = y(3)
+    enddo ; enddo
+
+    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+      CS%Txy(I,J,k) = 0.25 * ( (Txy(i+1,j+1) + Txy(i,j)) &
+                             + (Txy(i+1,j)   + Txy(i,j+1))) * G%mask2dBu(I,J)
+    enddo; enddo
+
+  enddo ! end of k loop
+
+  call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%Txx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Tyy, G%Domain, clock=CS%id_clock_mpi)
+
+  call cpu_clock_end(CS%id_clock_stress_ANN)
+
+end subroutine compute_stress_ANN_strain
 
 !> Compute the divergence of subgrid stress
 !! weighted with thickness, i.e.
