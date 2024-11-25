@@ -818,7 +818,7 @@ class StateFunctions():
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'smagx': smagx, 'smagy': smagy}
 
-    def ZB20(self, ZB_scaling=1.0, VGM='False', scheme='staggered', coef=1./18., FGR=3.0, subtract_div=True):
+    def ZB20(self, ZB_scaling=1.0, VGM='False', scheme='staggered', coef=1./18., FGR=3.0, subtract_div=True, subtract_vort=False):
         param = self.param
         grid = self.grid
             
@@ -900,6 +900,14 @@ class StateFunctions():
             dudy = grid.diff(self.data.u, 'Y') / param.dyBu * param.wet_c
             dvdx = grid.diff(self.data.v, 'X') / param.dxBu * param.wet_c
 
+            if subtract_vort:
+                vort_xy=dvdx-dudy
+                #sh_xy = dvdx+dudy
+                # dudy = (sh_xy - vort_xy) * 0.5
+                # dvdx = (sh_xy + vort_xy) * 0.5
+                dudy = dudy + vort_xy * 0.5
+                dvdx = dvdx - vort_xy * 0.5
+
             d2udx2  = grid.diff(dudx, 'X') / param.dxCu * param.wet_u 
             d2udxdy = grid.diff(dudx, 'Y') / param.dyCv * param.wet_v
             d2udy2  = grid.diff(dudy, 'Y') / param.dyCu * param.wet_u
@@ -927,6 +935,8 @@ class StateFunctions():
             Tyy = Delta2 * (dvdx**2 + dvdy**2) + 0.5 * Delta2**2 * (d2vdx2**2 + d2vdy2**2 + 2 * d2vdxdy**2)
             Txy = Delta2 * (dudx * dvdx + dudy * dvdy) + 0.5 * Delta2**2 * (d2udx2*d2vdx2 + d2udy2 * d2vdy2 + 2 * d2udxdy * d2vdxdy)
 
+            test_field = dudx * dvdx + dudy * dvdy
+
             # additional tuning constant and change sign notation back to standard ZB20
             Txx = - Txx * ZB_scaling
             Tyy = - Tyy * ZB_scaling
@@ -941,7 +951,7 @@ class StateFunctions():
                    / (param.dxCv*param.dyCv)
 
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
-                'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
+                'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'test_field' : test_field}
     
     @lru_cache(maxsize=2)
     def compute_features(self):
