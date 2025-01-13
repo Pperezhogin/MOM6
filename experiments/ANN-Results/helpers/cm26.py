@@ -102,12 +102,12 @@ class DatasetCM26():
             param_init  = cat["GFDL_CM2_6_grid"].to_dask()
         elif source == 'cmip6':
             ds = xr.open_dataset("gs://cmip6/GFDL_CM2_6/control/surface", engine='zarr', chunks={}, use_cftime=True).rename(**rename_surf)
-            param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr')
+            param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr').reset_coords()
         elif source == 'cmip6-3d':
             ds = xr.open_dataset("gs://cmip6/GFDL_CM2_6/control/ocean_3d", engine='zarr', chunks={}, use_cftime=True).rename(
                 {'st_ocean': 'zl'})
             param_init = xr.open_dataset('gs://cmip6/GFDL_CM2_6/grid', engine='zarr').rename(
-                {'st_ocean': 'zl', 'st_edges_ocean': 'zi'})
+                {'st_ocean': 'zl', 'st_edges_ocean': 'zi'}).reset_coords()
         elif '3d-' in source:
             base_path = '/vast/pp2681/CM26_datasets/ocean3d/rawdata'
             param = xr.open_dataset(f'{base_path}/param.nc')
@@ -130,20 +130,23 @@ class DatasetCM26():
         
         ############ Rename coordinates ###########
         rename = {'xt_ocean': 'xh', 'yt_ocean': 'yh', 'xu_ocean': 'xq', 'yu_ocean': 'yq'}
-        rename_param = {'dxt': 'dxT', 'dyt': 'dyT', 'dxu': 'dxBu', 'dyu': 'dyBu'}
- 
+        rename_param = {'dxt': 'dxT', 'dyt': 'dyT', 'dxu': 'dxBu', 'dyu': 'dyBu',
+                        'geolon_t': 'geolon', 'geolat_t': 'geolat',
+                        'geolon_c': 'geolon_w', 'geolat_c': 'geolat_w',
+                        'geolon_n': 'geolon_v', 'geolat_n': 'geolat_v',
+                        'geolon_e': 'geolon_u', 'geolat_e': 'geolat_u',
+                        }
+
         ds = ds.rename(**rename).chunk({'yh':-1, 'yq':-1})
         param_init = param_init.rename(**rename, **rename_param).chunk({'yh':-1, 'yq':-1})
 
         ############ Drop unnecessary coordinates ###########
-        param = xr.Dataset()
-        for key in ['xh', 'yh', 'xq', 'yq', 'zl', 'zi']:
-            if key in param_init.keys():
-                param[key] = param_init[key]
-        for key in ['dxT', 'dyT']:
-            param[key] = param_init[key].drop(['area_t', 'dxT', 'dyT', 'geolat_t', 'geolon_t', 'ht', 'kmt', 'wet'])
-        for key in ['dxBu', 'dyBu']:
-            param[key] = param_init[key].drop(['area_u', 'dxBu', 'dyBu', 'geolat_c', 'geolon_c', 'hu', 'kmu'])
+        keep_variables = ['xh', 'yh', 'xq', 'yq', 'zl', 'zi',
+                  'dxT', 'dyT', 'dxBu', 'dyBu',
+                  'geolon', 'geolat', 'geolon_w', 'geolat_w',
+                  'geolon_u', 'geolat_u', 'geolon_v', 'geolat_v']
+
+        param = param_init[keep_variables]
         
         ############ Init xgcm.Grid object for C-grid ###########
         # Note, we implement B.C. only in zonal diretion,
@@ -268,6 +271,8 @@ class DatasetCM26():
         param['yh'] = yh
         param['yq'] = yq
         # These four summations are well defined without nans
+        # These supposed to be simple two-point interpolations. 
+        # They should work fine. Do not think that lat and lon are 2D arrays
         param['dxT']  = self.param.dxT.coarsen({'xh':factor}).sum().interp(yh=yh)
         param['dyT']  = self.param.dyT.coarsen({'yh':factor}).sum().interp(xh=xh)
         param['dyCu'] = self.param.dyCu.coarsen({'yh':factor}).sum().interp(xq=xq)
@@ -303,6 +308,20 @@ class DatasetCM26():
         if 'zl' in param.dims:
             param['wet_w'] = discard_land(grid.interp(param['wet'].chunk({'zl':-1}), 'Z'))
 
+
+        ############### Saving coordinate information ##############
+        param['geolon']  = self.param.geolon.interp(xh=xh, yh=yh)
+        param['geolat']  = self.param.geolat.interp(xh=xh, yh=yh)
+
+        param['geolon_u']  = self.param.geolon_u.interp(xq=xq, yh=yh)
+        param['geolat_u']  = self.param.geolat_u.interp(xq=xq, yh=yh)
+
+        param['geolon_v']  = self.param.geolon_v.interp(xh=xh, yq=yq)
+        param['geolat_v']  = self.param.geolat_v.interp(xh=xh, yq=yq)
+
+        param['geolon_w']  = self.param.geolon_w.interp(xq=xq, yq=yq)
+        param['geolat_w']  = self.param.geolat_w.interp(xq=xq, yq=yq)
+        
         return param.compute().chunk()
 
     def coarsen(self, factor=10, FGR_absolute=None, FGR_multiplier=None,
