@@ -386,7 +386,8 @@ class DatasetCM26():
         return ds_coarse
 
     def compute_subfilter_forcing(self, factor=4, FGR_multiplier=2,
-                coarsening=CoarsenWeighted(), filtering=Filtering(), percentile=0):
+                coarsening=CoarsenWeighted(), filtering=Filtering(), percentile=0,
+                debug = False):
         '''
         As compared to the "compute_subgrid_forcing" function, 
         here we evaluate contribution of subfilter stresses 
@@ -394,10 +395,18 @@ class DatasetCM26():
         operator is used mostly for subsampling of data. An advantage of
         this method is that it is agnostic to the numerical discretization
         scheme of the advection operator.
+
+        SGS_forcing = (bar(u) nabla) bar(u) - bar((u nabla) u)
+        du/dt = SGS
+
+        SGS_flux = bar(u)**2 - bar(u**2)
+
+        Relation, approximately:
+        div(SGS_flux) = SGS_forcing
         '''
 
         # Advection in high resolution model
-        hires_advection = self.state.advection()
+        advx_hires, advy_hires = self.state.advection()
 
         # Filtered and filtered-coarsegrained states
         ds_filter = self.coarsen(factor=1, FGR_absolute=factor*FGR_multiplier,
@@ -405,21 +414,64 @@ class DatasetCM26():
         ds_coarse = ds_filter.coarsen(factor=factor, coarsening=coarsening, percentile=percentile)
 
         # Compute advection on a filtered state
-        filter_advection = ds_filter.state.advection()
+        advx_filtered_state, advy_filtered_state = ds_filter.state.advection()
 
         # Filtering of the high-resolution advection
-        advx_filtered, advy_filtered, _ = filtering(hires_advection[0], hires_advection[1], None,
+        advx_filtered_tendency, advy_filtered_tendency, _ = filtering(advx_hires, advy_hires, None,
                                                     ds_filter, FGR_multiplier * factor)
 
         # Subfilter forcing on a fine grid
-        SGSx = advx_filtered - filter_advection[0]
-        SGSy = advy_filtered - filter_advection[1]
+        SGSx = advx_filtered_tendency - advx_filtered_state
+        SGSy = advy_filtered_tendency - advy_filtered_state
 
         # Coarsegraining the subfilter forcing
         ds_coarse.data['SGSx'], ds_coarse.data['SGSy'], _ = coarsening(SGSx, SGSy, None, 
                                                                        self, ds_coarse, factor)
+        
+        # Subfilter fluxes on fine grid
+        ## Unfiltered data
+        grid = self.grid
+        data = self.data
+        param = self.param
+        Txx_hires = grid.interp(data.u * data.u, 'X') * param.wet
+        Tyy_hires = grid.interp(data.v * data.v, 'Y') * param.wet
+        Txy_hires = grid.interp(data.u, 'X') * grid.interp(data.v, 'Y') * param.wet
 
-        return ds_coarse
+        _, _, Txx_filtered_tendency = filtering(None, None, Txx_hires, self, FGR_multiplier * factor)
+        _, _, Tyy_filtered_tendency = filtering(None, None, Tyy_hires, self, FGR_multiplier * factor)
+        _, _, Txy_filtered_tendency = filtering(None, None, Txy_hires, self, FGR_multiplier * factor)
+
+        ## Filtered data
+        grid = ds_filter.grid
+        data = ds_filter.data
+        param = ds_filter.param
+        Txx_filtered_state = grid.interp(data.u * data.u, 'X') * param.wet
+        Tyy_filtered_state = grid.interp(data.v * data.v, 'Y') * param.wet
+        Txy_filtered_state = grid.interp(data.u, 'X') * grid.interp(data.v, 'Y') * param.wet
+
+        ## Subfilter fluxes
+        ## bar(u)**2 - bar(u**2)
+        Txx = Txx_filtered_state - Txx_filtered_tendency
+        Tyy = Tyy_filtered_state - Tyy_filtered_tendency
+        Txy = Txy_filtered_state - Txy_filtered_tendency
+
+        # Subfilter fluxes on coarse grid
+        _, _, ds_coarse.data['Txx'] = coarsening(None, None, Txx, self, ds_coarse, factor)
+        _, _, ds_coarse.data['Tyy'] = coarsening(None, None, Tyy, self, ds_coarse, factor)
+        _, _, ds_coarse.data['Txy'] = coarsening(None, None, Txy, self, ds_coarse, factor)
+
+        if not(debug):
+            return ds_coarse
+        else:
+            return ds_coarse, \
+                advx_hires, advy_hires, \
+                advx_filtered_tendency, advy_filtered_tendency, \
+                advx_filtered_state, advy_filtered_state, \
+                SGSx, SGSy, \
+                Txx_hires, Tyy_hires, Txy_hires, \
+                Txx_filtered_tendency, Tyy_filtered_tendency, Txy_filtered_tendency, \
+                Txx_filtered_state, Tyy_filtered_state, Txy_filtered_state, \
+                Txx, Tyy, Txy   
 
     def perturb_velocities(self, grid_harmonic='plane_wave', amp=1e-3):
         '''

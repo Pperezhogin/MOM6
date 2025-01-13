@@ -16,6 +16,9 @@ class Coarsen:
         Note: compared to direct coarsegraining and interpolation, 
         this algorithm is almost the same for large coarsegraining factor
         '''
+        if factor ==1:
+            return u, v, T
+        
         coarsen = lambda x: x.coarsen({'xh':factor, 'yh':factor}).mean()
         u_coarse = None; v_coarse = None; T_coarse = None
 

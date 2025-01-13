@@ -1530,6 +1530,8 @@ class StateFunctions():
         '''
         https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L751
         https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L875
+
+        $- (u nabla) u$ operator, i.e. it is advection acceleration in RHS
         '''
         CAu, CAv = self.PV_cross_uv()
         KEx, KEy = self.gradKE()

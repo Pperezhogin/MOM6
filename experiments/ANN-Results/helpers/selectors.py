@@ -65,6 +65,23 @@ def select_ACC(array, time=None):
 def select_rings(array, time=None):
     return select_LatLon(array, Lat=(-60,-10), Lon=(-80,50), time=time)
 
+# Juricke regions below:
+
+def select_Gulf(array):
+    return select_LatLon(array, Lat=(30, 60), Lon=(-80,-20))
+
+def select_Kuroshio(array):
+    return select_LatLon(array, Lat=(20, 50), Lon=(120,180))
+
+def select_SO(array):
+    return select_LatLon(array, Lat=(-70,-30), Lon=(0,360))
+
+def select_Aghulas(array):
+    return select_LatLon(array, Lat=(-60,-30), Lon=(0,60))
+
+def select_Malvinas(array):
+    return select_LatLon(array, Lat=(-60,-30), Lon=(-60,0))
+
 def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=True, cmap=cmocean.cm.balance):
     if mask is not None:
         mask_nan = selector(mask).data.copy()
