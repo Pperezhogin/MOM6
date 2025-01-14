@@ -1979,6 +1979,14 @@ class StateFunctions():
         data['rel_vort_y'] = rel_vort_y
         data['rel_vort_grad'] = rel_vort_grad
 
+        # Energetics
+        data['SGS_KE'] = - (data['Txx'] + data['Tyy']) * 0.5
+        Tdd = 0.5 * (data['Txx'] - data['Tyy'])
+        Ttr = 0.5 * (data['Txx'] + data['Tyy'])
+        # Positive number means dissipation
+        data['SGS_diss'] = Tdd * data['sh_xx'] + Ttr * data['div'] + data['Txy'] * data['sh_xy_h']
+        data['SGS_diss_deviatoric'] = Tdd * data['sh_xx'] + data['Txy'] * data['sh_xy_h']
+
         # Vertical shear
         data['dudz'], data['dvdz'] = self.vertical_shear()
         data['dudz_geo'], data['dvdz_geo'], data['rhox'], data['rhoy'] = self.vertical_shear_geostrophic()
