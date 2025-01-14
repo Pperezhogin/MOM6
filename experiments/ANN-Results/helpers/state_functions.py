@@ -1672,7 +1672,7 @@ class StateFunctions():
 
         Shear_mag = self.param.wet * (sh_xx**2+self.grid.interp(sh_xy**2,['X','Y']))**0.5
 
-        f = Coriolis(self.param.yh)
+        f = Coriolis(self.param.geolat)
         Ro = Shear_mag / (np.abs(f)+1e-25)
         return Ro
     
@@ -1689,12 +1689,12 @@ class StateFunctions():
         v = grid.interp(data.v, 'Y') * param.wet
 
         dzB = grid.diff(param.zl,'Z')
-        uz = (grid.diff(u.chunk({'zl':-1}),'Z') / dzB) * param.wet_w
-        vz = (grid.diff(v.chunk({'zl':-1}),'Z') / dzB) * param.wet_w
+        uz = grid.interp((grid.diff(u.chunk({'zl':-1}),'Z') / dzB) * param.wet_w, 'Z') * param.wet
+        vz = grid.interp((grid.diff(v.chunk({'zl':-1}),'Z') / dzB) * param.wet_w, 'Z') * param.wet
 
         return uz, vz
     
-    def vertical_shear_geostrophic(self, potential=False):
+    def vertical_shear_geostrophic(self):
         '''
         Compute vertical shear for the geostrophically
         balanced motion only assuming thermal wind balance.
@@ -1707,13 +1707,16 @@ class StateFunctions():
 
         g = 9.8
         rho0 = 1025.
-        f = Coriolis(param.yh)
+        f = Coriolis(param.geolat)
 
-        rho = self.rho(potential=potential) # in-situ or potential density
-        uz  = - g /(rho0 * f) * grid.interp(grid.diff(rho.chunk({'zl':-1}),  'Y') / param.dyCv * param.wet_v, ['Y','Z']) * param.wet_w
-        vz  = + g /(rho0 * f) * grid.interp(grid.diff(rho.chunk({'zl':-1}),  'X') / param.dxCu * param.wet_u, ['X','Z']) * param.wet_w
+        rho = self.data.rho
+        rhoy = grid.interp(grid.diff(rho.chunk({'zl':-1}),  'Y') / param.dyCv * param.wet_v, 'Y') * param.wet
+        rhox = grid.interp(grid.diff(rho.chunk({'zl':-1}),  'X') / param.dxCu * param.wet_u, 'X') * param.wet
 
-        return uz, vz
+        uz_geo  = - g /(rho0 * f) * rhoy
+        vz_geo  = + g /(rho0 * f) * rhox
+
+        return uz_geo, vz_geo, rhox, rhoy 
     
     def Eady_time(self, potential_density_to_compute_vertical_shear=False, 
                     depth_threshold=0.):
@@ -1764,7 +1767,7 @@ class StateFunctions():
         Te = 1. / invTe
 
         # Inverse Richardson
-        f = Coriolis(param.yh)
+        f = Coriolis(param.geolat)
         invRi = (invTe/f)**2
 
         # Diagnostic output
@@ -1806,7 +1809,7 @@ class StateFunctions():
         denominator = dzB * param.wet_w
 
         invRi = numerator.sum('zi') / denominator.sum('zi')
-        f = Coriolis(param.yh)
+        f = Coriolis(param.geolat)
         invTe = np.abs(f) * np.sqrt(invRi)
         Te = 1 / invTe
     
@@ -1889,6 +1892,7 @@ class StateFunctions():
         N = np.sqrt(self.Nsquared)
         # Integration factor
         dzB = grid.diff(param.zl, 'Z')
+        dzT = grid.diff(param.zi, 'Z')
         dzB[0] = 0; dzB[-1] = 0
 
         # Integral int(N(z'),z'=-z..0)
@@ -1898,7 +1902,7 @@ class StateFunctions():
         # Non-dimensional vertical coordinate
         # Set coordinate to zero in points where stratification is
         # inverse and hence the integral is zero
-        z_s = xr.where(NH > 0, Ndz / NH, 0.)
+        z_s = xr.where(NH > 0, Ndz / NH, 1.)
         # The coordrinate is defined in center cells:
         # with zero at first grid point
         z_s = z_s.isel(zi=slice(0,-1)).rename({'zi': 'zl'})
@@ -1909,7 +1913,7 @@ class StateFunctions():
         cg = 1/np.pi * NH
 
         # Deformation radius
-        f, beta = Coriolis(self.param.yh, compute_beta=True)
+        f, beta = Coriolis(self.param.geolat, compute_beta=True)
         Rd = cg / np.sqrt(f**2 + cg * 2 * beta)
 
         # Eady time scale
@@ -1919,10 +1923,70 @@ class StateFunctions():
         # 10 days (10. * 86400s)
         Te = xr.where(deltaU>0, Rd / deltaU, 10.*86400)
 
+        data_constant = xr.Dataset()
+
+        # Geometry information
+        data_constant['wet'] = param['wet']
+        data_constant['wet_nan'] = xr.where(param['wet']<0.5, np.nan, param['wet'])
+        data_constant['delta_x'] = np.sqrt(param.dxT * param.dyT)
+
+        # Stratification parameters
         data['deformation_radius'] = Rd
         data['eady_time'] = Te
+        data['N_buoyancy'] = grid.interp(N, 'Z')
+        data['NH'] = NH
+        data['deltaU'] = deltaU
+
+        # Non-dimensional depth based on buyancy profile between [0,1]
         data['rescaled_depth'] = z_s
-        return data
+        # Non-dimensional depth z/H, no profile is accounted
+        depth = (dzT * param.wet).sum('zl')
+        data_constant['depth'] = depth
+        data_constant['zl_over_depth'] = np.minimum(param.zl / (depth + 1e-9), 1.0)
+
+        # Beta effects, rotation
+        data_constant['coriolis'] = f
+        data_constant['beta'] = beta
+        data_constant['dHdx'] = grid.interp(grid.diff(depth, 'X') / param.dxCu,'X')
+        data_constant['dHdy'] = grid.interp(grid.diff(depth, 'Y') / param.dyCv,'Y')
+        data_constant['H_grad_mag'] = np.sqrt(data_constant['dHdx']**2 + data_constant['dHdy']**2)
+        data_constant['beta_topo_full'] = np.sqrt((f * data_constant['dHdx'] / depth)**2 + (beta - f * data_constant['dHdy'] / depth)**2)
+        data_constant['beta_topo_meridional'] = np.abs(beta - f * data_constant['dHdy'] / depth)
+
+        # Simple inputs-outputs in the center
+        data['u_h'] = grid.interp(data.u, 'X') * param.wet
+        data['v_h'] = grid.interp(data.v, 'Y') * param.wet
+
+        data['SGSx_h'] = grid.interp(data.SGSx, 'X') * param.wet
+        data['SGSy_h'] = grid.interp(data.SGSy, 'Y') * param.wet
+
+        # Velocity gradients
+        sh_xy, sh_xx, vort_xy, div = self.velocity_gradients(compute=False)
+        rel_vort = self.relative_vorticity()
+        data['rel_vort_h'] = grid.interp(rel_vort, ['X', 'Y']) * param.wet
+        data['vort_xy_h']  = grid.interp(vort_xy, ['X', 'Y']) * param.wet
+        data['sh_xy_h']    = grid.interp(sh_xy, ['X', 'Y']) * param.wet
+        data['sh_xx'] = sh_xx
+        data['div'] = div
+        data['shear_mag'] = (data['sh_xx']**2+data['sh_xy_h']**2)**0.5
+        data['shear_vort_mag'] = (data['sh_xx']**2+data['sh_xy_h']**2+data['rel_vort_h']**2)**0.5
+
+        # Vorticity gradients
+        rel_vort_x = grid.interp(grid.diff(rel_vort, 'X') / param.dxCv * param.wet_v,'Y') * param.wet
+        rel_vort_y = grid.interp(grid.diff(rel_vort, 'Y') / param.dyCu * param.wet_u,'X') * param.wet
+        rel_vort_grad = np.sqrt(rel_vort_x**2 + rel_vort_y**2)
+        data['rel_vort_x'] = rel_vort_x
+        data['rel_vort_y'] = rel_vort_y
+        data['rel_vort_grad'] = rel_vort_grad
+
+        # Vertical shear
+        data['dudz'], data['dvdz'] = self.vertical_shear()
+        data['dudz_geo'], data['dvdz_geo'], data['rhox'], data['rhoy'] = self.vertical_shear_geostrophic()
+        data['dudz_mag'] = np.sqrt(data['dudz']**2 + data['dvdz']**2)
+        data['dudz_geo_mag'] = np.sqrt(data['dudz_geo']**2 + data['dvdz_geo']**2)
+        data['rho_grad_mag'] = np.sqrt(data['rhox']**2 + data['rhoy']**2)
+
+        return data.transpose('time','zl',...).astype('float32').drop_vars('zi'), data_constant.astype('float32')
 
     def vertical_modes(self, lon=0, lat=0, time=0, N2_small=1e-8,
         dirichlet_surface=False, dirichlet_bottom=False, few_modes=1):

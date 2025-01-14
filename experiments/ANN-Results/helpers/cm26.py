@@ -479,6 +479,8 @@ class DatasetCM26():
         _, _, ds_coarse.data['Tyy'] = coarsening(None, None, Tyy, self, ds_coarse, factor)
         _, _, ds_coarse.data['Txy'] = coarsening(None, None, Txy, self, ds_coarse, factor)
 
+        ds_coarse.data = ds_coarse.data.transpose('time','zl',...)
+
         if not(debug):
             return ds_coarse
         else:
