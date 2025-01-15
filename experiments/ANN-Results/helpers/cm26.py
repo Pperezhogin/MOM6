@@ -8,7 +8,7 @@ from functools import cache
 ######## Precomputed training datasets ############
 def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15], subfilter='subfilter', FGR=3, load=False):
     dictionary = {}
-    depth_selector = lambda x: x.isel(zl=np.arange(0,50,5))
+    depth_selector = lambda x: x.isel(zl=np.arange(0,50,5)) if len(x.zl)==50 else x
     for factor in factors:
         base_path = f'/vast/pp2681/CM26_datasets/ocean3d/{subfilter}/FGR{FGR}/factor-{factor}'
         param = depth_selector(xr.open_dataset(f'{base_path}/param.nc'))
