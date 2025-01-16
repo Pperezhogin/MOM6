@@ -239,9 +239,9 @@ class CollectionOfExperiments:
                 label = 'SSH error [m]'
                 lines = False
             ssh.plot.contourf(levels=levels, cmap='bwr', linewidths=1, extend='both', cbar_kwargs={'label': label})
-            if lines:
-                Cplot = ssh.plot.contour(levels=levels, colors='k', linewidths=1)
-                plt.gca().clabel(Cplot, Cplot.levels)
+            #if lines:
+            #     Cplot = ssh.plot.contour(levels=levels, colors='k', linewidths=1)
+            #     plt.gca().clabel(Cplot, Cplot.levels)
             plt.xticks((0, 5, 10, 15, 20))
             plt.yticks((30, 35, 40, 45, 50))
             plt.xlabel('Longitude')
@@ -253,6 +253,41 @@ class CollectionOfExperiments:
                 #print(RMSE)
                 plt.text(9,31,'RMSE='+str(round(RMSE,3))+'$m$', fontsize=14)
 
+        plt.tight_layout()
+
+    def plot_SGSmean(self, exps, labels=None, target=None, ncols=3, zl=0):
+        if labels is None:
+            labels=exps
+        nfig = len(exps)
+        ncol = min(ncols,nfig)
+        nrows = nfig / ncols
+        if nrows > 1:
+            nrows = int(np.ceil(nrows))
+        else:
+            nrows = 1
+
+        plt.figure(figsize=(5*ncol,4*nrows))
+        plt.subplots_adjust(hspace=0.3, wspace=0.3)
+
+        for ifig, exp in enumerate(exps):
+            plt.subplot(nrows,ncol,ifig+1)
+            try:
+                data = self[exp].SGS_mean.isel(zl=zl) * 1e+7
+
+                cmap = plt.cm.seismic
+                vmin,vmax,ci = -1.45,1.45,0.1
+                cilev = np.arange(vmin,vmax+ci,ci)
+                norm = plt.matplotlib.colors.BoundaryNorm(boundaries=cilev, ncolors=cmap.N)
+
+                label = 'Time-mean zonal acceleration\n by subgrid eddies, $10^{-7}\mathrm{m}\mathrm{s}^{-2}$'
+                data.plot.pcolormesh(cmap=cmap, norm=norm, cbar_kwargs={'label': label})
+                plt.xticks((0, 5, 10, 15, 20))
+                plt.yticks((30, 35, 40, 45, 50))
+                plt.xlabel('Longitude')
+                plt.ylabel('Latitude')
+                plt.title(labels[ifig])
+            except:
+                pass
         plt.tight_layout()
 
     def plot_ssh_std(self, exps, labels=None, target='R64_R2', ncols=3):

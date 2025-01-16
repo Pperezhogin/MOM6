@@ -243,6 +243,10 @@ class Experiment:
     @netcdf_property
     def e_mean(self):
         return self.ea.sel(Time=self.Averaging_time).mean(dim='Time')
+    
+    @netcdf_property
+    def SGS_mean(self):
+        return self.mom.ZB2020u.sel(Time=self.Averaging_time).mean(dim='Time')
 
     def average(self, prop):
         return eval(f'self.{prop}').sel(Time=self.Averaging_time).mean(dim='Time')
