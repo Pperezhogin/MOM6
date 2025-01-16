@@ -1308,8 +1308,8 @@ class StateFunctions():
             # Apply BC. Minus sign is needed for consistency with ZB
             Txy = - Txy.reshape(wet.shape) * wet
             # Interpolating to corner for computing the flux divergence
-            Txy = torch_pad(Txy, right=True, top=True)
-            Txy = (Txy[:-1,:-1] + Txy[1:,:-1] + Txy[:-1,1:] + Txy[1:,1:]) * 0.25 * wet_c
+            Txy_c = torch_pad(Txy, right=True, top=True)
+            Txy_c = (Txy_c[:-1,:-1] + Txy_c[1:,:-1] + Txy_c[:-1,1:] + Txy_c[1:,1:]) * 0.25 * wet_c
             
             Tdiag = Tall[:,1:]
             # This transforms the prediction 
@@ -1326,10 +1326,10 @@ class StateFunctions():
             Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
         
         Txx_padded = torch_pad(Txx * dyT**2, right=True)
-        Txy_padded = torch_pad(Txy * dxBu**2, bottom=True)
+        Txy_padded = torch_pad(Txy_c * dxBu**2, bottom=True)
         ZB20u = wet_u * (torch.diff(Txx_padded,dim=-1) / dyCu + torch.diff(Txy_padded,dim=-2) / dxCu) / (areaCu)
         
-        Txy_padded = torch_pad(Txy * dyBu**2,left=True)
+        Txy_padded = torch_pad(Txy_c * dyBu**2,left=True)
         Tyy_padded = torch_pad(Tyy * dxT**2, top=True)
         ZB20v = wet_v * (torch.diff(Txy_padded,dim=-1) / dyCv + torch.diff(Tyy_padded,dim=-2) / dxCv) / (areaCv)
 
@@ -1357,7 +1357,7 @@ class StateFunctions():
                               feature_functions, gradient_features,
                               jacobian_trace)
         
-        Txy = pred['Txy'].detach().numpy() + self.param.dxBu * 0
+        Txy = pred['Txy'].detach().numpy() + self.param.dxT * 0
         Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0
         Tyy = pred['Tyy'].detach().numpy() + self.param.dxT * 0
         ZB20u = pred['ZB20u'].detach().numpy() + self.param.dxCu * 0
