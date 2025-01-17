@@ -18,7 +18,9 @@ def fetch_data(dataset, factor=None, depth=None, ds_str='train'):
     '''
     ds = dataset[f'{ds_str}-{factor}']
     time_random = np.random.randint(len(ds.data.time))
-    data_xarray = ds.data.isel(time=time_random, zl=depth)
+    # Here we explicitly remove the two upmost grid points near the Polar Fold
+    # Fluxes and B.C. there are not well defined
+    data_xarray = ds.data.isel(time=time_random, zl=depth).isel(yh=slice(None,-2))
 
     data = {}
     for key in ['Txx', 'Txy', 'Tyy', 'sh_xx', 'sh_xy_h', 'rel_vort_h', 'wet']:
