@@ -600,6 +600,35 @@ class DatasetCM26():
             return grid.interp(M2(x,y,centered,dims),'X')
         def M2v(x,y=None,centered=False,dims='time'):
             return grid.interp(M2(x,y,centered,dims),'Y')
+        
+        try:
+            Txx_pred = self.data.Txx_pred
+            Tyy_pred = self.data.Tyy_pred
+            Txy_pred = self.data.Txy_pred
+
+            Txx = self.data.Txx
+            Tyy = self.data.Tyy
+            Txy = self.data.Txy
+
+            errxx = Txx - Txx_pred
+            erryy = Tyy - Tyy_pred
+            errxy = Txy - Txy_pred
+
+            skill['R2T_map'] = 1 - (M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time')) / (M2(Txx, dims='time') + M2(Tyy, dims='time') + M2(Txy, dims='time'))
+            skill['RMSET_map']  = np.sqrt(M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time'))
+
+            skill['R2T'] = 1 - (M2(errxx) + M2(erryy) + M2(errxy)) / (M2(Txx) + M2(Tyy) + M2(Txy))
+            skill['R2T_away'] = 1 - (M2(errxx, mask=wet2) + M2(erryy, mask=wet2) + M2(errxy, mask=wet2)) / (M2(Txx, mask=wet2) + M2(Tyy, mask=wet2) + M2(Txy, mask=wet2))
+
+            skill['Txx'] = Txx.isel(time=0)
+            skill['Tyy'] = Tyy.isel(time=0)
+            skill['Txy'] = Txy.isel(time=0)
+
+            skill['Txx_pred'] = Txx_pred.isel(time=0)
+            skill['Txy_pred'] = Txy_pred.isel(time=0)
+            skill['Tyy_pred'] = Tyy_pred.isel(time=0)
+        except:
+            pass
             
         errx = SGSx - ZB20u
         erry = SGSy - ZB20v
@@ -656,6 +685,9 @@ class DatasetCM26():
             skill['power_ZB_'+region] = power.rename({'freq_r': 'freq_r_'+region})
             skill['power_time_ZB_'+region] = power_time
 
+            skill['transfer_tensor_'+region] = self.state.transfer_tensor(Txy, Txx, Tyy, region=region)
+            skill['transfer_tensor_ZB_'+region] = self.state.transfer_tensor(Txy_pred, Txx_pred, Tyy_pred, region=region)
+
         ########### Global energy analysis ###############
         areaT = param.dxT * param.dyT
         areaU = param.dxCu * param.dyCu
@@ -671,35 +703,6 @@ class DatasetCM26():
 
         skill['ZB20u'] = ZB20u.isel(time=0)
         skill['ZB20v'] = ZB20v.isel(time=0)
-
-        try:
-            Txx_pred = self.data.Txx_pred
-            Tyy_pred = self.data.Tyy_pred
-            Txy_pred = self.data.Txy_pred
-
-            Txx = self.data.Txx
-            Tyy = self.data.Tyy
-            Txy = self.data.Txy
-
-            errxx = Txx - Txx_pred
-            erryy = Tyy - Tyy_pred
-            errxy = Txy - Txy_pred
-
-            skill['R2T_map'] = 1 - (M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time')) / (M2(Txx, dims='time') + M2(Tyy, dims='time') + M2(Txy, dims='time'))
-            skill['RMSET_map']  = np.sqrt(M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time'))
-
-            skill['R2T'] = 1 - (M2(errxx) + M2(erryy) + M2(errxy)) / (M2(Txx) + M2(Tyy) + M2(Txy))
-            skill['R2T_away'] = 1 - (M2(errxx, mask=wet2) + M2(erryy, mask=wet2) + M2(errxy, mask=wet2)) / (M2(Txx, mask=wet2) + M2(Tyy, mask=wet2) + M2(Txy, mask=wet2))
-
-            skill['Txx'] = Txx.isel(time=0)
-            skill['Tyy'] = Tyy.isel(time=0)
-            skill['Txy'] = Txy.isel(time=0)
-
-            skill['Txx_pred'] = Txx_pred.isel(time=0)
-            skill['Txy_pred'] = Txy_pred.isel(time=0)
-            skill['Tyy_pred'] = Tyy_pred.isel(time=0)
-        except:
-            pass
 
         for region in ['NA', 'Pacific', 'Equator', 'ACC']:
             for key in ['SGSx', 'SGSy', 'ZB20u', 'ZB20v', 'Txx', 'Tyy', 'Txy', 'Txx_pred', 'Tyy_pred', 'Txy_pred']:

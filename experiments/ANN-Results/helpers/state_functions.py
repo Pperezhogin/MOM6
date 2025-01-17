@@ -653,37 +653,22 @@ class StateFunctions():
             
         # Select desired Lon-Lat square
         sh_xy, sh_xx, _, div = self.velocity_gradients()
+        sh_xy = self.grid.interp(sh_xy, ['X', 'Y'])
         sh_xy = select_LatLon(sh_xy,time=slice(None,None),**kw)
         sh_xx = select_LatLon(sh_xx,time=slice(None,None),**kw)
         div = select_LatLon(div,time=slice(None,None),**kw)
         Txx = select_LatLon(Txx_in,time=slice(None,None),**kw)
         Tyy = select_LatLon(Tyy_in,time=slice(None,None),**kw)
         Txy = select_LatLon(Txy_in,time=slice(None,None),**kw)
-        
-        if Txx.shape != Txy.shape:
-            nx = min(len(x_coord(Txx)), len(x_coord(Txy)))
-            ny = min(len(y_coord(Txx)), len(y_coord(Txy)))
-            def sel(x):
-                return x[{x_coord(x).name: slice(0,nx), y_coord(x).name: slice(0,ny)}]
-            sh_xy = sel(sh_xy)
-            sh_xx = sel(sh_xx)
-            div = sel(div)
-            Txx = sel(Txx)
-            Tyy = sel(Tyy)
-            Txy = sel(Txy)
 
         # Average grid spacing (result in metres)
         dx = select_LatLon(self.param.dxT,**kw).mean().values
         dy = select_LatLon(self.param.dyT,**kw).mean().values
 
         # define uniform grid
-        for variable in [Txx,Tyy,sh_xx,div]:
+        for variable in [Txx,Tyy,sh_xx,div,Txy,sh_xy]:
             variable['xh'] = dx * np.arange(len(Txx.xh))
             variable['yh'] = dy * np.arange(len(Txx.yh))
-            
-        for variable in [Txy,sh_xy]:
-            variable['xq'] = dx * np.arange(len(Txy.xq))
-            variable['yq'] = dy * np.arange(len(Txy.yq))
 
         # In a case of dimensions are transposed differently
         Txx = Txx.transpose(*sh_xx.dims)
@@ -697,7 +682,7 @@ class StateFunctions():
             truncate=truncate, detrend=detrend, window_correction=window_correction)
         Etr = xrft.isotropic_cross_spectrum(-div, Ttr, dim=('xh','yh'), window=window, nfactor=nfactor, 
             truncate=truncate, detrend=detrend, window_correction=window_correction)
-        Exy = xrft.isotropic_cross_spectrum(-sh_xy, Txy, dim=('xq','yq'), window=window, nfactor=nfactor, 
+        Exy = xrft.isotropic_cross_spectrum(-sh_xy, Txy, dim=('xh','yh'), window=window, nfactor=nfactor, 
             truncate=truncate, detrend=detrend, window_correction=window_correction)
         
         E = np.real(Edd+Etr+Exy)
