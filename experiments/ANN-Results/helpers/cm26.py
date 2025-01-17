@@ -220,12 +220,18 @@ class DatasetCM26():
         return
     
     def __del__(self):
-        data_size = dict(self.data.dims)
+        try:
+            data_size = dict(self.data.dims)
+        except:
+            pass
         del self.data, self.param, self.grid, self.state
         #print('Log: CM2.6 object has been deleted, size:', data_size)
-        if (len(data_size) > 4):
-            # Here we make sure to delete all really large datasets
-            gc.collect()
+        try:
+            if (len(data_size) > 4):
+                # Here we make sure to delete all really large datasets
+                gc.collect()
+        except:
+            pass
         return
     
     def nanvar(self, x, away_from_coast=0):
@@ -601,6 +607,8 @@ class DatasetCM26():
         def M2v(x,y=None,centered=False,dims='time'):
             return grid.interp(M2(x,y,centered,dims),'Y')
         
+        skill = xr.Dataset()
+        
         try:
             Txx_pred = self.data.Txx_pred
             Tyy_pred = self.data.Tyy_pred
@@ -633,7 +641,6 @@ class DatasetCM26():
         errx = SGSx - ZB20u
         erry = SGSy - ZB20v
 
-        skill = xr.Dataset()
         ######## Simplest statistics ##########
         skill['SGSx_mean'] = SGSx.mean('time')
         skill['SGSy_mean'] = SGSy.mean('time')
