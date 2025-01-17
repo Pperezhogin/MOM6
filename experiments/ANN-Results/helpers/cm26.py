@@ -518,9 +518,18 @@ class DatasetCM26():
         This function makes ANN inference on the whole dataset
         '''
 
-        data = self.data[['SGSx', 'SGSy', 'u', 'v']]
+        try:
+            data = self.data[['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy']]
+        except:
+            data = self.data[['SGSx', 'SGSy', 'u', 'v']]
         data['ZB20u'] = xr.zeros_like(data.SGSx)
         data['ZB20v'] = xr.zeros_like(data.SGSy)
+        try:
+            data['Txx_pred'] = xr.zeros_like(data.Txx)
+            data['Tyy_pred'] = xr.zeros_like(data.Tyy)
+            data['Txy_pred'] = xr.zeros_like(data.Txy)
+        except:
+            pass
 
         for time in range(len(self.data.time)):
             for zl in range(len(self.data.zl)):
@@ -528,6 +537,12 @@ class DatasetCM26():
                 prediction = batch.state.ANN(ann_Txy, ann_Txx_Tyy, ann_Tall, **kw)
                 data['ZB20u'][{'time':time, 'zl':zl}] = prediction['ZB20u']
                 data['ZB20v'][{'time':time, 'zl':zl}] = prediction['ZB20v']
+                try:
+                    data['Txx_pred'][{'time':time, 'zl':zl}] = prediction['Txx']
+                    data['Tyy_pred'][{'time':time, 'zl':zl}] = prediction['Tyy']
+                    data['Txy_pred'][{'time':time, 'zl':zl}] = prediction['Txy']
+                except:
+                    pass
         
         return DatasetCM26(data, self.param)
     
@@ -547,14 +562,35 @@ class DatasetCM26():
         ZB20u = self.data.ZB20u
         ZB20v = self.data.ZB20v
 
+        try:
+            Txx_pred = self.data.Txx_pred
+            Tyy_pred = self.data.Tyy_pred
+            Txy_pred = self.data.Txy_pred
+
+            Txx = self.data.Txx
+            Tyy = self.data.Tyy
+            Txy = self.data.Txy
+        except:
+            pass
+
+        # 2 grid points away from coast
+        wet2 = propagate_mask(self.param.wet, self.grid, niter=2)
+        wet2_u = propagate_mask(self.param.wet_u, self.grid, niter=2)
+        wet2_v = propagate_mask(self.param.wet_v, self.grid, niter=2)
+
         ############# R-squared and correlation ##############
         # Here we define second moments
-        def M2(x,y=None,centered=False,dims=None,exclude_dims='zl'):
+        def M2(x,y=None,centered=False,dims=None,exclude_dims='zl', mask=None):
             if dims is None and exclude_dims is not None:
                 dims = []
                 for dim in x.dims:
                     if dim not in exclude_dims:
                         dims.append(dim)
+
+            if mask is not None:
+                x = x * mask
+                if y is not None:
+                    y = y * mask
 
             if y is None:
                 y = x
@@ -570,6 +606,13 @@ class DatasetCM26():
             
         errx = SGSx - ZB20u
         erry = SGSy - ZB20v
+
+        try:
+            errxx = Txx - Txx_pred
+            erryy = Tyy - Tyy_pred
+            errxy = Txy - Txy_pred
+        except:
+            pass
 
         skill = xr.Dataset()
         ######## Simplest statistics ##########
@@ -587,6 +630,11 @@ class DatasetCM26():
         skill['R2u_map'] = 1 - M2u(errx) / M2u(SGSx)
         skill['R2v_map'] = 1 - M2v(erry) / M2v(SGSy)
         skill['R2_map']  = 1 - (M2u(errx) + M2v(erry)) / (M2u(SGSx) + M2v(SGSy))
+        
+        try:
+            skill['R2T_map'] = 1 - (M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time')) / (M2(Txx, dims='time') + M2(Tyy, dims='time') + M2(Txy, dims='time'))
+        except:
+            pass
 
         # Here everything is centered according to definition of correlation
         skill['corru_map'] = M2u(SGSx,ZB20u,centered=True) / np.sqrt(M2u(SGSx,centered=True) * M2u(ZB20u,centered=True))
@@ -598,6 +646,15 @@ class DatasetCM26():
         skill['R2u'] = 1 - M2(errx) / M2(SGSx)
         skill['R2v'] = 1 - M2(erry) / M2(SGSy)
         skill['R2'] = 1 - (M2(errx) + M2(erry)) / (M2(SGSx) + M2(SGSy))
+        
+        skill['R2_away'] = 1 - (M2(errx, mask=wet2_u) + M2(erry, mask=wet2_v)) / (M2(SGSx, mask=wet2_u) + M2(SGSy, mask=wet2_v))
+
+        try:
+            skill['R2T'] = 1 - (M2(errxx) + M2(erryy) + M2(errxy)) / (M2(Txx) + M2(Tyy) + M2(Txy))
+            skill['R2T_away'] = 1 - (M2(errxx, mask=wet2) + M2(erryy, mask=wet2) + M2(errxy, mask=wet2)) / (M2(Txx, mask=wet2) + M2(Tyy, mask=wet2) + M2(Txy, mask=wet2))
+        except:
+            pass
+
         skill['corru'] = M2(SGSx,ZB20u,centered=True) \
             / np.sqrt(M2(SGSx,centered=True) * M2(ZB20u,centered=True))
         skill['corrv'] = M2(SGSy,ZB20v,centered=True) \
