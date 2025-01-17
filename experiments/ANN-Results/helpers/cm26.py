@@ -18,6 +18,11 @@ def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15], su
             file_list = [f'{base_path}/{key}-{j}.nc' for j in range(nfiles[key])]
             print('Reading from folder', base_path)
             data = xr.open_mfdataset(file_list, chunks={'zl':1, 'time':1}, concat_dim='time', combine='nested')
+            try:
+                permanent_features = xr.open_dataset(f'{base_path}/permanent_features.nc').load()
+                data = xr.merge([data, permanent_features])
+            except:
+                pass
             if load:
                 data = data.load()
             dictionary[f'{key}-{factor}'] = DatasetCM26(data, param)

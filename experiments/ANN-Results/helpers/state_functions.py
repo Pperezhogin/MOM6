@@ -1381,6 +1381,111 @@ class StateFunctions():
                 'dTxx_du': dTxx_du, 'dTyy_dv': dTyy_dv,
                 'dTxy_du': dTxy_du, 'dTxy_dv': dTxy_dv}
     
+    def ANN_inference(self, ann_Tall=None, stencil_size=3,
+                  rotation=0, reflect_x=False, reflect_y=False,
+                  gradient_features=['sh_xy', 'sh_xx', 'rel_vort'],
+                  data=None, time=None, zl=None):
+        '''
+        This is the "Apply_ANN" function which is designed to be much faster than the 
+        previous one mostly by reading input features from the file
+
+        if data is None, we read data from disk. Otherwise it must be passed as
+        a dictionary of torch arrays
+        '''
+
+        if data is None:
+            areaT = tensor_from_xarray(self.param.dxT) * tensor_from_xarray(self.param.dyT)
+            wet = tensor_from_xarray(self.param.wet.isel(zl=zl))
+        else:
+            areaT = data['areaT']
+            wet = data['wet']
+
+        ########## Symmetries treatment ###########
+        # Rotation symmetry
+        if rotation in [0, 180]:
+            rotation_sign = 1
+        elif rotation in [90, 270]:
+            rotation_sign = -1
+        else:
+            print('Error: use rotation one of 0, 90, 180, 270')
+        
+        # Reflection symmetry
+        reflect_sign = 1
+        if reflect_x:
+            reflect_sign = - reflect_sign
+        if reflect_y:
+            reflect_sign = - reflect_sign
+
+        # How symmetries apply to every component of velocity gradient tensor
+        sign_mapping = dict(sh_xy=rotation_sign * reflect_sign, 
+                            sh_xx=rotation_sign,
+                            vort_xy=reflect_sign,
+                            div=1, # divergence is a scalar and does not change under rotation and reflection
+                            rel_vort=reflect_sign
+                            )
+
+        ############# Helper functions ################
+        def norm(x):
+            '''
+            Norm is computed with double precision to prevent overflow
+            '''
+            return torch.sqrt((x.type(torch.float64)**2).sum(dim=-1, keepdims=True)).type(torch.float32)
+
+        def extract_nxn(x):
+            y = torch_pad(x, one_side_pad=stencil_size//2, left=True, right=True, top=True, bottom=True)
+            return image_to_nxn_stencil_gpt(y, stencil_size=stencil_size,
+                rotation=rotation, reflect_x=reflect_x, reflect_y=reflect_y)
+        
+        Arakawa_C_center  = dict(sh_xy='sh_xy_h', 
+                                 sh_xx='sh_xx', 
+                                 vort_xy='vort_xy_h', 
+                                 div='div', 
+                                 rel_vort='rel_vort_h')
+
+        if ann_Tall is not None:
+            ########## Prediction of Txx, Tyy and Txy at once in center ###############
+            input_features = []
+            for grad_feature in gradient_features:
+                if data is None:
+                    feature = tensor_from_xarray(self.data[Arakawa_C_center[grad_feature]].isel(time=time, zl=zl))
+                else:
+                    feature = data[Arakawa_C_center[grad_feature]]
+                input_features.append(extract_nxn(feature) * sign_mapping[grad_feature])
+            input_features = torch.concat(input_features, -1)
+
+            # Normalize input features
+            
+            input_norm = norm(input_features)
+            input_features = (input_features / (input_norm+1e-30))
+                
+            # Make prediction
+            Tall = ann_Tall(input_features)
+
+            # Now denormalize the output
+            Tall = Tall * input_norm * input_norm * (areaT).reshape(-1,1)
+            
+            # Transforming prediction back to original frame
+            Txy = Tall[:,:1] * (rotation_sign * reflect_sign)
+            # Apply BC. Minus sign is needed for consistency with ZB
+            Txy = - Txy.reshape(wet.shape) * wet
+            
+            Tdiag = Tall[:,1:]
+            # This transforms the prediction 
+            # back to original frame
+            if rotation in [0, 180]:
+                Txx_idx = 0
+                Tyy_idx = 1
+            elif rotation in [90, 270]:
+                Txx_idx = 1
+                Tyy_idx = 0
+            else:
+                print('Error: use rotation one of 0, 90, 180, 270')
+            Txx =  - Tdiag[:,Txx_idx].reshape(wet.shape) * wet
+            Tyy =  - Tdiag[:,Tyy_idx].reshape(wet.shape) * wet
+        
+        
+        return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy}
+    
     def KE_Arakawa(self):
         '''
         https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L1000-L1003
