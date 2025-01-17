@@ -8,6 +8,7 @@ from helpers.train_ann import train_ANN
 from helpers.feature_extractors import *
 from helpers.ann_tools import ANN, export_ANN
 import json
+import gc
 
 import os
 import argparse
@@ -124,4 +125,6 @@ if __name__ == '__main__':
                                                  stencil_size=args.stencil_size, dimensional_scaling=args.dimensional_scaling,
                                                  feature_functions=args.feature_functions, gradient_features=args.gradient_features).SGS_skill()
         skill.to_netcdf(f'{path_save}/skill-test/factor-{factor}.nc')
+        del skill
+        gc.collect()
         print(f'Testing on dataset with factor {factor} is complete')
