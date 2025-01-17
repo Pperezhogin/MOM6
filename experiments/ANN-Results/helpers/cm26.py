@@ -630,9 +630,12 @@ class DatasetCM26():
         skill['R2u_map'] = 1 - M2u(errx) / M2u(SGSx)
         skill['R2v_map'] = 1 - M2v(erry) / M2v(SGSy)
         skill['R2_map']  = 1 - (M2u(errx) + M2v(erry)) / (M2u(SGSx) + M2v(SGSy))
+
+        skill['RMSE_map']  = np.sqrt(M2u(errx) + M2v(erry))
         
         try:
             skill['R2T_map'] = 1 - (M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time')) / (M2(Txx, dims='time') + M2(Tyy, dims='time') + M2(Txy, dims='time'))
+            skill['RMSET_map']  = np.sqrt(M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time'))
         except:
             pass
 
@@ -684,5 +687,19 @@ class DatasetCM26():
 
         skill['dEdt'] = (skill['dEdt_map'] * areaT).sum(['xh', 'yh']) / (areaT).sum(['xh', 'yh'])
         skill['dEdt_ZB'] = (skill['dEdt_map_ZB'] * areaT).sum(['xh', 'yh']) / (areaT).sum(['xh', 'yh'])
+
+        skill['SGSx'] = SGSx.isel(time=0)
+        skill['SGSy'] = SGSy.isel(time=0)
+
+        skill['ZB20u'] = ZB20u.isel(time=0)
+        skill['ZB20v'] = ZB20v.isel(time=0)
+
+        skill['Txx'] = Txx.isel(time=0)
+        skill['Tyy'] = Tyy.isel(time=0)
+        skill['Txy'] = Txy.isel(time=0)
+
+        skill['Txx_pred'] = Txx_pred.isel(time=0)
+        skill['Txy_pred'] = Txy_pred.isel(time=0)
+        skill['Tyy_pred'] = Tyy_pred.isel(time=0)
 
         return skill.compute()
