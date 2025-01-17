@@ -1351,23 +1351,24 @@ class StateFunctions():
             dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
             feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
             jacobian_trace=False):
-        pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall, stencil_size,
-                              rotation, reflect_x, reflect_y,
-                              dimensional_scaling, strain_norm, flux_norm,
-                              feature_functions, gradient_features,
-                              jacobian_trace)
-        
-        Txy = pred['Txy'].detach().numpy() + self.param.dxT * 0
-        Txx = pred['Txx'].detach().numpy() + self.param.dxT * 0
-        Tyy = pred['Tyy'].detach().numpy() + self.param.dxT * 0
-        ZB20u = pred['ZB20u'].detach().numpy() + self.param.dxCu * 0
-        ZB20v = pred['ZB20v'].detach().numpy() + self.param.dxCv * 0
+        with torch.no_grad():
+            pred = self.Apply_ANN(ann_Txy, ann_Txx_Tyy, ann_Tall, stencil_size,
+                                rotation, reflect_x, reflect_y,
+                                dimensional_scaling, strain_norm, flux_norm,
+                                feature_functions, gradient_features,
+                                jacobian_trace)
+            
+        Txy = pred['Txy'].numpy() + self.param.dxT * 0
+        Txx = pred['Txx'].numpy() + self.param.dxT * 0
+        Tyy = pred['Tyy'].numpy() + self.param.dxT * 0
+        ZB20u = pred['ZB20u'].numpy() + self.param.dxCu * 0
+        ZB20v = pred['ZB20v'].numpy() + self.param.dxCv * 0
 
         if pred['dTxy_du'] is not None:
-            dTxy_du = pred['dTxy_du'].detach().numpy() + self.param.dxBu * 0
-            dTxy_dv = pred['dTxy_dv'].detach().numpy() + self.param.dxBu * 0
-            dTxx_du = pred['dTxx_du'].detach().numpy() + self.param.dxT * 0
-            dTyy_dv = pred['dTyy_dv'].detach().numpy() + self.param.dxT * 0
+            dTxy_du = pred['dTxy_du'].numpy() + self.param.dxBu * 0
+            dTxy_dv = pred['dTxy_dv'].numpy() + self.param.dxBu * 0
+            dTxx_du = pred['dTxx_du'].numpy() + self.param.dxT * 0
+            dTyy_dv = pred['dTyy_dv'].numpy() + self.param.dxT * 0
         else:
             dTxy_du = None
             dTxy_dv = None
