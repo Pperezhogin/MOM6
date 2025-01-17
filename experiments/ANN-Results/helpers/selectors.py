@@ -39,7 +39,7 @@ def select_LatLon(array, Lat=(35,45), Lon=(5,15), time=None):
     
     if 'time' in x.dims:
         if time is None:
-            x = x.isel(time=-1)
+            pass
         else:
             x = x.isel(time=time)
     return x
@@ -81,6 +81,22 @@ def select_Aghulas(array):
 
 def select_Malvinas(array):
     return select_LatLon(array, Lat=(-60,-30), Lon=(-60,0))
+
+# Select time-series
+
+def select_NA_series(array):
+    return select_LatLon(array, Lat=(25, 45), Lon=(-60,-40))
+
+def select_Pacific_series(array):
+    return select_LatLon(array, Lat=(25, 45), Lon=(-200,-180))
+
+def select_center(array):
+    x = x_coord(array)
+    y = y_coord(array)
+    central_latitude = float(y.mean())
+    central_longitude = float(x.mean())
+
+    return array.sel({x.name:central_longitude, y.name:central_latitude}, method='nearest').drop_vars([x.name, y.name])
 
 def plot(control, mask=None, vmax=None, vmin=None, selector=select_NA, cartopy=True, cmap=cmocean.cm.balance):
     if mask is not None:

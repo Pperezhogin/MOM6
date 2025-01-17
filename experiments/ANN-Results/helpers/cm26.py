@@ -4,6 +4,8 @@ import numpy as np
 from helpers.state_functions import StateFunctions
 from helpers.operators import Coarsen, CoarsenWeighted, CoarsenKochkov, Subsampling, Filtering
 from functools import cache
+from helpers.selectors import select_ACC, select_Equator, select_NA_series, select_Pacific_series, select_center
+import gc
 
 ######## Precomputed training datasets ############
 def read_datasets(keys=['train', 'test', 'validate'], factors=[4, 9, 12, 15], subfilter='subfilter', FGR=3, load=False):
@@ -218,7 +220,12 @@ class DatasetCM26():
         return
     
     def __del__(self):
+        data_size = dict(self.data.dims)
         del self.data, self.param, self.grid, self.state
+        #print('Log: CM2.6 object has been deleted, size:', data_size)
+        if (len(data_size) > 4):
+            # Here we make sure to delete all really large datasets
+            gc.collect()
         return
     
     def nanvar(self, x, away_from_coast=0):
@@ -519,9 +526,9 @@ class DatasetCM26():
         '''
 
         try:
-            data = self.data[['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy']]
+            data = self.data[['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy']].copy().compute()
         except:
-            data = self.data[['SGSx', 'SGSy', 'u', 'v']]
+            data = self.data[['SGSx', 'SGSy', 'u', 'v']].copy().compute()
         data['ZB20u'] = xr.zeros_like(data.SGSx)
         data['ZB20v'] = xr.zeros_like(data.SGSy)
         try:
@@ -544,6 +551,7 @@ class DatasetCM26():
                 except:
                     pass
         
+        gc.collect()
         return DatasetCM26(data, self.param)
     
     def SGS_skill(self):
@@ -561,17 +569,6 @@ class DatasetCM26():
         SGSy = self.data.SGSy
         ZB20u = self.data.ZB20u
         ZB20v = self.data.ZB20v
-
-        try:
-            Txx_pred = self.data.Txx_pred
-            Tyy_pred = self.data.Tyy_pred
-            Txy_pred = self.data.Txy_pred
-
-            Txx = self.data.Txx
-            Tyy = self.data.Tyy
-            Txy = self.data.Txy
-        except:
-            pass
 
         # 2 grid points away from coast
         wet2 = propagate_mask(self.param.wet, self.grid, niter=2)
@@ -607,13 +604,6 @@ class DatasetCM26():
         errx = SGSx - ZB20u
         erry = SGSy - ZB20v
 
-        try:
-            errxx = Txx - Txx_pred
-            erryy = Tyy - Tyy_pred
-            errxy = Txy - Txy_pred
-        except:
-            pass
-
         skill = xr.Dataset()
         ######## Simplest statistics ##########
         skill['SGSx_mean'] = SGSx.mean('time')
@@ -632,12 +622,6 @@ class DatasetCM26():
         skill['R2_map']  = 1 - (M2u(errx) + M2v(erry)) / (M2u(SGSx) + M2v(SGSy))
 
         skill['RMSE_map']  = np.sqrt(M2u(errx) + M2v(erry))
-        
-        try:
-            skill['R2T_map'] = 1 - (M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time')) / (M2(Txx, dims='time') + M2(Tyy, dims='time') + M2(Txy, dims='time'))
-            skill['RMSET_map']  = np.sqrt(M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time'))
-        except:
-            pass
 
         # Here everything is centered according to definition of correlation
         skill['corru_map'] = M2u(SGSx,ZB20u,centered=True) / np.sqrt(M2u(SGSx,centered=True) * M2u(ZB20u,centered=True))
@@ -651,12 +635,6 @@ class DatasetCM26():
         skill['R2'] = 1 - (M2(errx) + M2(erry)) / (M2(SGSx) + M2(SGSy))
         
         skill['R2_away'] = 1 - (M2(errx, mask=wet2_u) + M2(erry, mask=wet2_v)) / (M2(SGSx, mask=wet2_u) + M2(SGSy, mask=wet2_v))
-
-        try:
-            skill['R2T'] = 1 - (M2(errxx) + M2(erryy) + M2(errxy)) / (M2(Txx) + M2(Tyy) + M2(Txy))
-            skill['R2T_away'] = 1 - (M2(errxx, mask=wet2) + M2(erryy, mask=wet2) + M2(errxy, mask=wet2)) / (M2(Txx, mask=wet2) + M2(Tyy, mask=wet2) + M2(Txy, mask=wet2))
-        except:
-            pass
 
         skill['corru'] = M2(SGSx,ZB20u,centered=True) \
             / np.sqrt(M2(SGSx,centered=True) * M2(ZB20u,centered=True))
@@ -694,12 +672,52 @@ class DatasetCM26():
         skill['ZB20u'] = ZB20u.isel(time=0)
         skill['ZB20v'] = ZB20v.isel(time=0)
 
-        skill['Txx'] = Txx.isel(time=0)
-        skill['Tyy'] = Tyy.isel(time=0)
-        skill['Txy'] = Txy.isel(time=0)
+        try:
+            Txx_pred = self.data.Txx_pred
+            Tyy_pred = self.data.Tyy_pred
+            Txy_pred = self.data.Txy_pred
 
-        skill['Txx_pred'] = Txx_pred.isel(time=0)
-        skill['Txy_pred'] = Txy_pred.isel(time=0)
-        skill['Tyy_pred'] = Tyy_pred.isel(time=0)
+            Txx = self.data.Txx
+            Tyy = self.data.Tyy
+            Txy = self.data.Txy
 
+            errxx = Txx - Txx_pred
+            erryy = Tyy - Tyy_pred
+            errxy = Txy - Txy_pred
+
+            skill['R2T_map'] = 1 - (M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time')) / (M2(Txx, dims='time') + M2(Tyy, dims='time') + M2(Txy, dims='time'))
+            skill['RMSET_map']  = np.sqrt(M2(errxx, dims='time') + M2(erryy, dims='time') + M2(errxy, dims='time'))
+
+            skill['R2T'] = 1 - (M2(errxx) + M2(erryy) + M2(errxy)) / (M2(Txx) + M2(Tyy) + M2(Txy))
+            skill['R2T_away'] = 1 - (M2(errxx, mask=wet2) + M2(erryy, mask=wet2) + M2(errxy, mask=wet2)) / (M2(Txx, mask=wet2) + M2(Tyy, mask=wet2) + M2(Txy, mask=wet2))
+
+            skill['Txx'] = Txx.isel(time=0)
+            skill['Tyy'] = Tyy.isel(time=0)
+            skill['Txy'] = Txy.isel(time=0)
+
+            skill['Txx_pred'] = Txx_pred.isel(time=0)
+            skill['Txy_pred'] = Txy_pred.isel(time=0)
+            skill['Tyy_pred'] = Tyy_pred.isel(time=0)
+        except:
+            pass
+
+        for region in ['NA', 'Pacific', 'Equator', 'ACC']:
+            for key in ['SGSx', 'SGSy', 'ZB20u', 'ZB20v', 'Txx', 'Tyy', 'Txy', 'Txx_pred', 'Tyy_pred', 'Txy_pred']:
+                try:
+                    variable = eval(key)
+                    
+                    if region == 'NA':
+                        variable = select_center(select_NA_series(variable))
+                    elif region == 'Pacific':
+                        variable = select_center(select_Pacific_series(variable))
+                    elif region == 'Equator':
+                        variable = select_center(select_Equator(variable))
+                    elif region == 'ACC':
+                        variable = select_center(select_ACC(variable))
+                    
+                    skill[f'{key}_{region}_series'] = variable
+                except:
+                    pass
+        
+        gc.collect()
         return skill.compute()
