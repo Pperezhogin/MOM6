@@ -59,7 +59,9 @@ def MSE(batch, SGSx, SGSy, SGS_norm, ann_Txy, ann_Txx_Tyy, ann_Tall,
     ANNx = prediction['ZB20u'] * SGS_norm
     ANNy = prediction['ZB20v'] * SGS_norm
 
-    MSE_train = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2) / reduction((SGSx)**2, (SGSy)**2)
+    # Go back to classical loss
+    #MSE_train = reduction((ANNx-SGSx)**2, (ANNy-SGSy)**2) / reduction((SGSx)**2, (SGSy)**2)
+    MSE_train = ((ANNx-SGSx)**2 + (ANNy-SGSy)**2).mean()
 
     u = tensor_from_xarray(batch.data.u)
     v = tensor_from_xarray(batch.data.v)
@@ -294,8 +296,10 @@ def train_ANN(factors=[12,15],
                     (MSE_train + MSE_jacobian_trace).backward()
                 elif perturbed_inputs:
                     (MSE_perturbed).backward()
-                else:    
+                elif dEdt_weight > 0.:    
                     (MSE_weight * MSE_train + dEdt_weight * dEdt_error).backward()
+                else:
+                    MSE_train.backward()
                 optimizer.step()
 
             del batch
