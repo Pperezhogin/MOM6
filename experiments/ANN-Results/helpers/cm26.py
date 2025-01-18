@@ -628,6 +628,33 @@ class DatasetCM26():
             skill['R2T'] = 1 - (M2(errxx) + M2(erryy) + M2(errxy)) / (M2(Txx) + M2(Tyy) + M2(Txy))
             skill['R2T_away'] = 1 - (M2(errxx, mask=wet2) + M2(erryy, mask=wet2) + M2(errxy, mask=wet2)) / (M2(Txx, mask=wet2) + M2(Tyy, mask=wet2) + M2(Txy, mask=wet2))
 
+            skill['corr_Txx'] = M2(Txx,Txx_pred,centered=True) \
+                      / np.sqrt(M2(Txx,centered=True) * M2(Txx_pred,centered=True))
+            skill['corr_Tyy'] = M2(Tyy,Tyy_pred,centered=True) \
+                      / np.sqrt(M2(Tyy,centered=True) * M2(Tyy_pred,centered=True))
+            skill['corr_Txy'] = M2(Txy,Txy_pred,centered=True) \
+                      / np.sqrt(M2(Txy,centered=True) * M2(Txy_pred,centered=True))
+            
+            skill['corr_T'] = (skill['corr_Txx'] + skill['corr_Tyy'] + skill['corr_Txy']) / 3.0
+
+            corr_Txx = M2(Txx,Txx_pred,centered=True, mask=wet2) \
+                      / np.sqrt(M2(Txx,centered=True, mask=wet2) * M2(Txx_pred,centered=True, mask=wet2))
+            corr_Tyy = M2(Tyy,Tyy_pred,centered=True, mask=wet2) \
+                      / np.sqrt(M2(Tyy,centered=True, mask=wet2) * M2(Tyy_pred,centered=True, mask=wet2))
+            corr_Txy = M2(Txy,Txy_pred,centered=True, mask=wet2) \
+                      / np.sqrt(M2(Txy,centered=True, mask=wet2) * M2(Txy_pred,centered=True, mask=wet2))
+            
+            skill['corr_T_away'] = (corr_Txx + corr_Tyy + corr_Txy) / 3.0
+
+            skill['corr_Txx_map'] = M2(Txx,Txx_pred,centered=True,dims='time') \
+                      / np.sqrt(M2(Txx,centered=True,dims='time') * M2(Txx_pred,centered=True,dims='time'))
+            skill['corr_Tyy_map'] = M2(Tyy,Tyy_pred,centered=True,dims='time') \
+                      / np.sqrt(M2(Tyy,centered=True,dims='time') * M2(Tyy_pred,centered=True,dims='time'))
+            skill['corr_Txy_map'] = M2(Txy,Txy_pred,centered=True,dims='time') \
+                      / np.sqrt(M2(Txy,centered=True,dims='time') * M2(Txy_pred,centered=True,dims='time'))
+            
+            skill['corr_T_map'] = (skill['corr_Txx_map'] + skill['corr_Tyy_map'] + skill['corr_Txy_map']) / 3.0
+
             skill['Txx'] = Txx.isel(time=0)
             skill['Tyy'] = Tyy.isel(time=0)
             skill['Txy'] = Txy.isel(time=0)
@@ -677,6 +704,13 @@ class DatasetCM26():
         skill['corrv'] = M2(SGSy,ZB20v,centered=True) \
             / np.sqrt(M2(SGSy,centered=True) * M2(ZB20v,centered=True))
         skill['corr'] = (skill['corru'] + skill['corrv']) * 0.5
+
+        corru = M2(SGSx,ZB20u,centered=True,mask=wet2_u) \
+            / np.sqrt(M2(SGSx,centered=True,mask=wet2_u) * M2(ZB20u,centered=True,mask=wet2_u))
+        corrv = M2(SGSy,ZB20v,centered=True,mask=wet2_v) \
+            / np.sqrt(M2(SGSy,centered=True,mask=wet2_v) * M2(ZB20v,centered=True,mask=wet2_v))
+        skill['corr_away'] = (corru + corrv) * 0.5
+
         skill['opt_scaling'] = (M2(SGSx,ZB20u) + M2(SGSy,ZB20v)) / (M2(ZB20u) + M2(ZB20v))
 
         ############### Spectral analysis ##################
