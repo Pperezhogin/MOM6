@@ -990,7 +990,7 @@ class StateFunctions():
 
     def Apply_ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size=3,
                   rotation=0, reflect_x=False, reflect_y=False,
-                  dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-4,
+                  dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-2,
                   feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
                   jacobian_trace=False):
         '''
@@ -1333,7 +1333,7 @@ class StateFunctions():
     
     def ANN(self, ann_Txy=None, ann_Txx_Tyy=None, ann_Tall=None, stencil_size = 3,
             rotation=0, reflect_x=False, reflect_y=False,
-            dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-3,
+            dimensional_scaling=True, strain_norm = 1e-6, flux_norm = 1e-2,
             feature_functions=[], gradient_features=['sh_xy', 'sh_xx', 'vort_xy'],
             jacobian_trace=False):
         with torch.no_grad():
