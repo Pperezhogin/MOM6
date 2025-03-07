@@ -630,26 +630,39 @@ if __name__ == '__main__':
     #                 hpc = HPC.add(mem=10, ntasks=ntasks)
     #                 run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN-strain/{conf}/ZB-1.0-Cs-{SMAG}', hpc, parameters)
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for SMAG in ['0.06']:
-                parameters = PARAMETERS.add(
-                    SMAG_BI_CONST=SMAG,
-                    USE_ZB2020='True',
-                    ZB_SCALING=1.0, USE_ANN=3, 
-                    ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/Collocated-NN-params/hdn-32-32/model/Tall.nc',
-                    ).add(**configuration(conf))
-                ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-                hpc = HPC.add(mem=10, ntasks=ntasks)
-                run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN-32-32/EXP1-{conf}/ZB-1.0-Cs-{SMAG}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for SMAG in ['0.06']:
+    #             parameters = PARAMETERS.add(
+    #                 SMAG_BI_CONST=SMAG,
+    #                 USE_ZB2020='True',
+    #                 ZB_SCALING=1.0, USE_ANN=3, 
+    #                 ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/Collocated-NN-params/hdn-32-32/model/Tall.nc',
+    #                 ).add(**configuration(conf))
+    #             ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #             hpc = HPC.add(mem=10, ntasks=ntasks)
+    #             run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN-32-32/EXP1-{conf}/ZB-1.0-Cs-{SMAG}', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for SMAG in ['0.06']:
+    #             parameters = PARAMETERS.add(
+    #                 SMAG_BI_CONST=SMAG,
+    #                 USE_ZB2020='True',
+    #                 ZB_SCALING=1.0, USE_ANN=3, 
+    #                 ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/EXP-32-32/repeat/model/Tall.nc',
+    #                 ).add(**configuration(conf))
+    #             ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #             hpc = HPC.add(mem=10, ntasks=ntasks)
+    #             run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN-32-32/EXP2-{conf}/ZB-1.0-Cs-{SMAG}', hpc, parameters)
 
     for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         for SMAG in ['0.06']:
-                parameters = PARAMETERS.add(
-                    SMAG_BI_CONST=SMAG,
-                    USE_ZB2020='True',
-                    ZB_SCALING=1.0, USE_ANN=3, 
-                    ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/EXP-32-32/repeat/model/Tall.nc',
-                    ).add(**configuration(conf))
-                ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-                hpc = HPC.add(mem=10, ntasks=ntasks)
-                run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN-32-32/EXP2-{conf}/ZB-1.0-Cs-{SMAG}', hpc, parameters)
+                for model in ['20-seed0', '20-seed1', '32-32-seed0', '32-32-seed1', '16-8-seed0', '16-8-seed1']:
+                    parameters = PARAMETERS.add(
+                        SMAG_BI_CONST=SMAG,
+                        USE_ZB2020='True',
+                        ZB_SCALING=1.0, USE_ANN=3, 
+                        ANN_FILE_TALL=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter-large/FGR3/flux-models/{model}/model/Tall.nc',
+                        ).add(**configuration(conf))
+                    ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+                    hpc = HPC.add(mem=10, ntasks=ntasks, begin='5hours')
+                    run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/flux-models/{model}/{conf}-ZB-1.0-Cs-{SMAG}', hpc, parameters)

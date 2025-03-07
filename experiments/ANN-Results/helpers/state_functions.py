@@ -606,22 +606,26 @@ class StateFunctions():
                 v['time'] = np.arange(len(v.time))*dt
             except:
                 pass
-            Ps_u = xrft.power_spectrum(fu.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
-                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xq','yh'))
-            Ps_v = xrft.power_spectrum(fv.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
-                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xh','yq'))
-            Ps = (Ps_u+Ps_v)
-            # Convert 2-sided power spectrum to one-sided
-            Ps = Ps[Ps.freq_time>0]
-
-            # Time power spectrum of KE
-            KEs_u = xrft.power_spectrum(u.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
-                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xq','yh'))
-            KEs_v = xrft.power_spectrum(v.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
-                truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xh','yq'))
-            KEs = (KEs_u+KEs_v) * 0.5
-            # Convert 2-sided power spectrum to one-sided
-            KEs = KEs[KEs.freq_time>0]
+            
+            try:
+                Ps_u = xrft.power_spectrum(fu.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                    truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xq','yh'))
+                Ps_v = xrft.power_spectrum(fv.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                    truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xh','yq'))
+                Ps = (Ps_u+Ps_v)
+                # Convert 2-sided power spectrum to one-sided
+                Ps = Ps[Ps.freq_time>0]
+        
+                # Time power spectrum of KE
+                KEs_u = xrft.power_spectrum(u.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                    truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xq','yh'))
+                KEs_v = xrft.power_spectrum(v.chunk({'time':-1}), dim=('time'), window=window, nfactor=nfactor,
+                    truncate=truncate, detrend=detrend, window_correction=window_correction).mean(dim=('xh','yq'))
+                KEs = (KEs_u+KEs_v) * 0.5
+                # Convert 2-sided power spectrum to one-sided
+                KEs = KEs[KEs.freq_time>0]
+            except:
+                KEs = None; Ps = None
 
         if additional_spectra:
             return E, P, KE, Ps, KEs
@@ -721,7 +725,7 @@ class StateFunctions():
         vort_xy=dvdx-dudy
         div = (dudx+dvdy) * param.wet # For VGM model
         
-        return sh_xy, sh_xx, vort_xy, div
+        return sh_xy.squeeze(), sh_xx.squeeze(), vort_xy.squeeze(), div.squeeze()
     
     def Smagorinsky(self, Cs_biharm=0.06):
         sh_xy, sh_xx, vort_xy, _ = self.velocity_gradients()
@@ -803,7 +807,7 @@ class StateFunctions():
         
         return {'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'Shear_mag': Shear_mag, 'sh_xx': sh_xx, 'sh_xy': sh_xy, 'smagx': smagx, 'smagy': smagy}
 
-    def ZB20(self, ZB_scaling=1.0, VGM='False', scheme='staggered', coef=1./18., FGR=3.0, subtract_div=True, subtract_vort=False):
+    def ZB20(self, ZB_scaling=1.0, VGM='False', scheme='collocated', coef=1./18., FGR=3.0, subtract_div=False, subtract_vort=False, higher_order=False, two_parameters=None):
         param = self.param
         grid = self.grid
             
@@ -823,7 +827,7 @@ class StateFunctions():
         if scheme == 'staggered':
             Txy = rel_vort * sh_xx_corner
         elif scheme == 'collocated':
-            Txy = grid.interp(vort_xy_center * sh_xx, ['X', 'Y'])
+            Txy = vort_xy_center * sh_xx
 
         if VGM == 'VGM_flux':
             div_corner = grid.interp(div, ['X', 'Y']) * param.wet_c
@@ -871,9 +875,11 @@ class StateFunctions():
 
         Txx = kappa_t * Txx
         Tyy = kappa_t * Tyy
-        Txy = kappa_q * Txy
+        Txy = kappa_t * Txy
 
-        if VGM == 'VGM2_direct':
+        Txy_c = grid.interp(Txy, ['X', 'Y']) * param.wet_c
+
+        if VGM == 'direct':
             dudx = grid.diff(self.data.u, 'X') / param.dxT * param.wet
             dvdy = grid.diff(self.data.v, 'Y') / param.dyT * param.wet
 
@@ -916,27 +922,68 @@ class StateFunctions():
             # Filter scale ** 2 / 12
             Delta2 = FGR**2 * param.dxT * param.dyT / 12.
             # Here is conventional LES sign notation
-            Txx = Delta2 * (dudx**2 + dudy**2) + 0.5 * Delta2**2 * (d2udx2**2 + d2udy2**2 + 2 * d2udxdy**2)
-            Tyy = Delta2 * (dvdx**2 + dvdy**2) + 0.5 * Delta2**2 * (d2vdx2**2 + d2vdy2**2 + 2 * d2vdxdy**2)
-            Txy = Delta2 * (dudx * dvdx + dudy * dvdy) + 0.5 * Delta2**2 * (d2udx2*d2vdx2 + d2udy2 * d2vdy2 + 2 * d2udxdy * d2vdxdy)
-
-            test_field = dudx * dvdx + dudy * dvdy
+            Txx_l = -Delta2 * (dudx**2 + dudy**2)
+            Tyy_l = -Delta2 * (dvdx**2 + dvdy**2)
+            Txy_l = -Delta2 * (dudx * dvdx + dudy * dvdy)
+            if higher_order:
+                Txx_h = -0.5 * Delta2**2 * (d2udx2**2 + d2udy2**2 + 2 * d2udxdy**2)
+                Tyy_h = -0.5 * Delta2**2 * (d2vdx2**2 + d2vdy2**2 + 2 * d2vdxdy**2)
+                Txy_h = -0.5 * Delta2**2 * (d2udx2*d2vdx2 + d2udy2 * d2vdy2 + 2 * d2udxdy * d2vdxdy)
+            else:
+                Txx_h = 0 * Txx_l
+                Tyy_h = 0 * Tyy_l
+                Txy_h = 0 * Txy_l
 
             # additional tuning constant and change sign notation back to standard ZB20
-            Txx = - Txx * ZB_scaling
-            Tyy = - Tyy * ZB_scaling
-            Txy = - grid.interp(Txy, ['X', 'Y']) * param.wet_c * ZB_scaling
+            if two_parameters is None:
+                Txx = (Txx_l + Txx_h) * ZB_scaling
+                Tyy = (Tyy_l + Tyy_h) * ZB_scaling
+                Txy = (Txy_l + Txy_h) * ZB_scaling
+            else:
+                Txx = Txx_l * two_parameters[0] + Txx_h * two_parameters[1]
+                Tyy = Tyy_l * two_parameters[0] + Tyy_h * two_parameters[1]
+                Txy = Txy_l * two_parameters[0] + Txy_h * two_parameters[1]
+
+            Txy_c = grid.interp(Txy, ['X', 'Y']) * param.wet_c
+
+            # These two vectors will be used only for regression problem 
+
+            Txy_l = grid.interp(Txy_l, ['X', 'Y']) * param.wet_c
+            Txy_h = grid.interp(Txy_h, ['X', 'Y']) * param.wet_c
+
+            ZB20u_l = param.wet_u * (grid.diff(Txx_l*param.dyT**2, 'X') / param.dyCu     \
+               + grid.diff(Txy_l*param.dxBu**2, 'Y') / param.dxCu) \
+               / (param.dxCu*param.dyCu)
+            
+            ZB20u_h = param.wet_u * (grid.diff(Txx_h*param.dyT**2, 'X') / param.dyCu     \
+               + grid.diff(Txy_h*param.dxBu**2, 'Y') / param.dxCu) \
+               / (param.dxCu*param.dyCu)
+            
+            ZB20v_l = param.wet_v * (grid.diff(Txy_l*param.dyBu**2, 'X') / param.dyCv     \
+                   + grid.diff(Tyy_l*param.dxT**2, 'Y') / param.dxCv) \
+                   / (param.dxCv*param.dyCv)
+            
+            ZB20v_h = param.wet_v * (grid.diff(Txy_h*param.dyBu**2, 'X') / param.dyCv     \
+                   + grid.diff(Tyy_h*param.dxT**2, 'Y') / param.dxCv) \
+                   / (param.dxCv*param.dyCv)
+        else:
+            ZB20u_l = None
+            ZB20u_h = None
+            ZB20v_l = None
+            ZB20v_h = None
 
         ZB20u = param.wet_u * (grid.diff(Txx*param.dyT**2, 'X') / param.dyCu     \
-               + grid.diff(Txy*param.dxBu**2, 'Y') / param.dxCu) \
+               + grid.diff(Txy_c*param.dxBu**2, 'Y') / param.dxCu) \
                / (param.dxCu*param.dyCu)
 
-        ZB20v = param.wet_v * (grid.diff(Txy*param.dyBu**2, 'X') / param.dyCv     \
+        ZB20v = param.wet_v * (grid.diff(Txy_c*param.dyBu**2, 'X') / param.dyCv     \
                    + grid.diff(Tyy*param.dxT**2, 'Y') / param.dxCv) \
                    / (param.dxCv*param.dyCv)
 
         return {'ZB20u': ZB20u, 'ZB20v': ZB20v, 
-                'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy, 'test_field' : test_field}
+                'Txx': Txx, 'Tyy': Tyy, 'Txy': Txy,
+                'ZB20u_l': ZB20u_l, 'ZB20v_l': ZB20v_l,
+                'ZB20u_h': ZB20u_h, 'ZB20v_h': ZB20v_h}
     
     @lru_cache(maxsize=2)
     def compute_features(self):
@@ -946,7 +993,7 @@ class StateFunctions():
         of features
         '''
         grid = self.grid
-        param = self.param
+        param = self.param.squeeze()
 
         ########### Convert grid to torch #############
         wet = tensor_from_xarray(param.wet)
@@ -1534,7 +1581,7 @@ class StateFunctions():
         # https://github.com/NOAA-GFDL/MOM6/blob/dev/gfdl/src/core/MOM_CoriolisAdv.F90#L309-L310
         dvdx = grid.diff(param.wet_v * v * dyCv,'X')
         dudy = grid.diff(param.wet_u * u * dxCu,'Y')
-        return (dvdx - dudy) * IareaBu * param.wet_c
+        return ((dvdx - dudy) * IareaBu * param.wet_c).squeeze()
     
     def relative_vorticity_torch(self, u, v):
         '''

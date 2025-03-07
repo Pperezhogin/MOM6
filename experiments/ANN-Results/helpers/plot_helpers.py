@@ -172,21 +172,7 @@ def default_rcParams(kw={}):
         'font.family': 'MathJax_Main',
         'mathtext.fontset': 'cm',
 
-        'figure.figsize': (4, 4),
-
-        'figure.subplot.wspace': 0.3,
-        
-        'font.size': 14,
-        #'axes.labelsize': 10,
-        #'axes.titlesize': 12,
-        #'xtick.labelsize': 10,
-        #'ytick.labelsize': 10,
-        #'legend.fontsize': 10,
-
-        'axes.formatter.limits': (-2,3),
         'axes.formatter.use_mathtext': True,
-        'axes.labelpad': 0,
-        'axes.titlelocation' : 'center',
         
         'savefig.bbox': 'tight',
         'savefig.pad_inches': 0.1
