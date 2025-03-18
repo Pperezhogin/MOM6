@@ -1630,6 +1630,9 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   real :: input_norm
   integer :: shift, stencil_points
 
+  real :: start_time, end_time, total_time
+  integer :: number_of_points
+
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
         sh_xy_h,   & ! sh_xy interpolated to the center [T-1 ~ s-1]
         vort_xy_h, & ! vort_xy interpolated to the center [T-1 ~ s-1]
@@ -1677,6 +1680,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   call pass_var(vort_xy_h, G%Domain, clock=CS%id_clock_mpi)
   call pass_var(norm_h, G%Domain, clock=CS%id_clock_mpi) 
 
+  number_of_points = 0
+  total_time = 0.
   do k=1,nz
     do j=js-2,je+2 ; do i=is-2,ie+2
       x(1:stencil_points) = RESHAPE(sh_xy_h(i-shift:i+shift,j-shift:j+shift,k), (/stencil_points/))
@@ -1687,7 +1692,11 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
       x(1:3*stencil_points) = x(1:3*stencil_points) / (input_norm + CS%subroundoff_shear)
 
+      call CPU_TIME(start_time)  ! Start timing
       call ANN_apply(x, y, CS%ann_Tall)
+      call CPU_TIME(end_time)  ! End timing
+      total_time = total_time + (end_time - start_time)
+      number_of_points = number_of_points + 1
 
       y = y * input_norm * input_norm * CS%kappa_h(i,j)
 
@@ -1702,6 +1711,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     enddo; enddo
 
   enddo ! end of k loop
+
+  print *, "Elapsed CPU time ANN_apply per grid point (seconds):", total_time / number_of_points
 
   call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
   call pass_var(CS%Txx, G%Domain, clock=CS%id_clock_mpi)
