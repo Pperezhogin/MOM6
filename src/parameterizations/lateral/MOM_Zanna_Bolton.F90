@@ -1969,7 +1969,7 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IdxCu(I,j)*(dx2q(I,J-1)*Mxy(I,J-1)  - &
                             dx2q(I,J)  *Mxy(I,J)))  * &
               G%IareaCu(I,j)) / h_u
-      if (not(CS%ann_smag_conserv) .and. not(CS%backscatter_ratio>0.)) &
+      if ((.not. CS%ann_smag_conserv) .and. (.not. (CS%backscatter_ratio>0.))) &
         diffu(I,j,k) = diffu(I,j,k) + fx
       if (save_ZB2020u .or. CS%ann_smag_conserv .or. GM_conserv .or. CS%backscatter_ratio > 0.) &
         ZB2020u(I,j,k) = fx
@@ -1991,7 +1991,7 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
               G%IdxCv(i,J)*(Myy(i,j)                - &
                             Myy(i,j+1)))            * &
               G%IareaCv(i,J)) / h_v
-      if (not(CS%ann_smag_conserv) .and. not(CS%backscatter_ratio>0.)) &
+      if ((.not. CS%ann_smag_conserv) .and. (.not. (CS%backscatter_ratio>0.))) &
         diffv(i,J,k) = diffv(i,J,k) + fy
       if (save_ZB2020v .or. CS%ann_smag_conserv .or. GM_conserv .or. CS%backscatter_ratio > 0.) &
         ZB2020v(i,J,k) = fy
@@ -2073,7 +2073,7 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
     endif
     diffu = diffu + ZB2020u
     diffv = diffv + ZB2020v
-    if (CS%id_attenuation) call post_data(CS%id_attenuation, attenuation, CS%diag)
+    if (CS%id_attenuation>0) call post_data(CS%id_attenuation, attenuation, CS%diag)
   endif
 
   call cpu_clock_end(CS%id_clock_divergence)
