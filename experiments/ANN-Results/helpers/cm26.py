@@ -259,7 +259,8 @@ class DatasetCM26():
             if zl is None:
                 zl = np.random.randint(0,len(self.data.zl))
             data = data.isel(zl=zl)
-            param = param.isel(zl=zl)
+            if 'zl' in param.dims:
+                param = param.isel(zl=zl)
             
         return DatasetCM26(compute(data), param)
     
@@ -531,10 +532,13 @@ class DatasetCM26():
         This function makes ANN inference on the whole dataset
         '''
 
-        try:
-            data = self.data[['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy']].copy().compute()
-        except:
-            data = self.data[['SGSx', 'SGSy', 'u', 'v']].copy().compute()
+        data = xr.Dataset()
+        for key in ['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy', 'sh_xx', 'sh_xy_h', 'div']:
+            try:
+                data[key] = self.data[key].copy(deep=True).compute()
+            except:
+                pass
+        
         data['ZB20u'] = xr.zeros_like(data.SGSx)
         data['ZB20v'] = xr.zeros_like(data.SGSy)
         try:
@@ -565,11 +569,13 @@ class DatasetCM26():
         This function makes ANN inference on the whole dataset
         '''
 
-        try:
-            data = self.data[['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy']].copy().compute()
-        except:
-            data = self.data[['SGSx', 'SGSy', 'u', 'v']].copy().compute()
-
+        data = xr.Dataset()
+        for key in ['SGSx', 'SGSy', 'u', 'v', 'Txx', 'Txy', 'Tyy', 'sh_xx', 'sh_xy_h', 'div']:
+            try:
+                data[key] = self.data[key].copy(deep=True).compute()
+            except:
+                pass
+        
         ZB20 = self.state.ZB20(**kw)
 
         for key in ['ZB20u', 'ZB20v']:
@@ -683,6 +689,21 @@ class DatasetCM26():
             skill['Txx_pred'] = Txx_pred.isel(time=0)
             skill['Txy_pred'] = Txy_pred.isel(time=0)
             skill['Tyy_pred'] = Tyy_pred.isel(time=0)
+
+            skill['sh_xx'] = data['sh_xx'].isel(time=0)
+            skill['div'] = data['div'].isel(time=0)
+            skill['sh_xy_h'] = data['sh_xy_h'].isel(time=0)
+
+            Tdd = 0.5 * (Txx - Tyy)
+            Ttr = 0.5 * (Txx + Tyy)
+            skill['SGS_diss_map'] = (Tdd * data['sh_xx'] + Ttr * data['div'] + Txy * data['sh_xy_h']).mean('time')
+            skill['SGS_diss_snapshot'] = (Tdd * data['sh_xx'] + Ttr * data['div'] + Txy * data['sh_xy_h']).isel(time=0)
+            
+            Tdd = 0.5 * (Txx_pred - Tyy_pred)
+            Ttr = 0.5 * (Txx_pred + Tyy_pred)
+            skill['SGS_diss_pred_map'] = (Tdd * data['sh_xx'] + Ttr * data['div'] + Txy_pred * data['sh_xy_h']).mean('time')
+            skill['SGS_diss_pred_snapshot'] = (Tdd * data['sh_xx'] + Ttr * data['div'] + Txy_pred * data['sh_xy_h']).isel(time=0)
+
         except:
             pass
             
@@ -756,6 +777,9 @@ class DatasetCM26():
         areaV = param.dxCv * param.dyCv
         skill['dEdt_map'] = ((grid.interp(data.SGSx * data.u * areaU,'X') + grid.interp(data.SGSy * data.v * areaV,'Y')) * param.wet / areaT).mean('time')
         skill['dEdt_map_ZB'] = ((grid.interp(data.ZB20u * data.u * areaU,'X') + grid.interp(data.ZB20v * data.v * areaV,'Y')) * param.wet / areaT).mean('time')
+
+        skill['dEdt_snapshot'] = ((grid.interp(data.SGSx * data.u * areaU,'X') + grid.interp(data.SGSy * data.v * areaV,'Y')) * param.wet / areaT).isel(time=0)
+        skill['dEdt_snapshot_ZB'] = ((grid.interp(data.ZB20u * data.u * areaU,'X') + grid.interp(data.ZB20v * data.v * areaV,'Y')) * param.wet / areaT).isel(time=0)
 
         skill['dEdt'] = (skill['dEdt_map'] * areaT).sum(['xh', 'yh']) / (areaT).sum(['xh', 'yh'])
         skill['dEdt_ZB'] = (skill['dEdt_map_ZB'] * areaT).sum(['xh', 'yh']) / (areaT).sum(['xh', 'yh'])
