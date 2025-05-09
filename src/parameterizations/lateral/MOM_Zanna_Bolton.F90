@@ -15,7 +15,7 @@ use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
-use MOM_ANN,           only : ANN_init, ANN_apply, ANN_end, ANN_CS
+use MOM_ANN,           only : ANN_init, ANN_apply, ANN_end, ANN_CS, ANN_apply_array_v2
 
 implicit none ; private
 
@@ -666,10 +666,11 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
   integer :: ii, jj
+  integer :: m
 
-  real :: x(3*CS%stencil_size**2)    ! Vector of non-dimensional input features
+  real :: x((G%iec - G%isc + 5) * (G%jec - G%jsc + 5),3*CS%stencil_size**2)    ! Vector of non-dimensional input features
                                      ! (sh_xy, sh_xx, vort_xy) on a stencil    [nondim]
-  real :: y(3)                       ! Vector of nondimensional
+  real :: y((G%iec - G%isc + 5) * (G%jec - G%jsc + 5),3)                       ! Vector of nondimensional
                                      ! output features (Txy,Txx,Tyy) [nondim]
   real :: input_norm                 ! Norm of input features [T-1 ~> s-1]
   real :: tmp                        ! Temporal value of squared norm [T-2 ~> s-2]
@@ -728,29 +729,32 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   call pass_var(norm_h, G%Domain, clock=CS%id_clock_mpi)
 
   do k=1,nz
+    m = 0
     do j=js-2,je+2 ; do i=is-2,ie+2
-      x(1:stencil_points) =                                                            &
+      m = m+1
+      x(m,1:stencil_points) =                                                            &
                         RESHAPE(sh_xy_h(i-offset:i+offset,                             &
                                         j-offset:j+offset,k), (/stencil_points/))
-      x(stencil_points+1:2*stencil_points) =                                           &
+      x(m,stencil_points+1:2*stencil_points) =                                           &
                         RESHAPE(CS%sh_xx(i-offset:i+offset,                            &
                                          j-offset:j+offset,k), (/stencil_points/))
-      x(2*stencil_points+1:3*stencil_points) =                                         &
+      x(m,2*stencil_points+1:3*stencil_points) =                                         &
                         RESHAPE(vort_xy_h(i-offset:i+offset,                           &
                                           j-offset:j+offset,k), (/stencil_points/))
 
-      input_norm = norm_h(i,j,k)
+      x(m,:) = x(m,:) / (norm_h(i,j,k) + CS%subroundoff_shear)
+    enddo; enddo
 
-      x(:) = x(:) / (input_norm + CS%subroundoff_shear)
-
-      call ANN_apply(x, y, CS%ann_Tall)
-
-      y(:) = y(:) * input_norm * input_norm * CS%kappa_h(i,j)
-
-      Txy(i,j)      = y(1)
-      CS%Txx(i,j,k) = y(2)
-      CS%Tyy(i,j,k) = y(3)
-    enddo ; enddo
+    call ANN_apply_array_v2(m, x, y, CS%ann_Tall)
+    
+    m = 0
+    do j=js-2,je+2 ; do i=is-2,ie+2
+      m = m+1
+      y(m,:) = y(m,:) * norm_h(i,j,k) * norm_h(i,j,k) * CS%kappa_h(i,j)
+      Txy(i,j)      = y(m,1)
+      CS%Txx(i,j,k) = y(m,2)
+      CS%Tyy(i,j,k) = y(m,3)
+    enddo; enddo
 
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
       CS%Txy(I,J,k) = 0.25 * ( (Txy(i+1,j+1) + Txy(i,j)) &
