@@ -34,8 +34,6 @@ type, private :: layer_type; private
   real, allocatable :: A(:,:) !< Matrix in column-major order
                               !! of size A(output_width, input_width) [nondim]
   real, allocatable :: b(:)   !< bias vector of size output_width [nondim]
-  real, allocatable :: Atranspose(:,:) !< Matrix in column-major order
-                                       !! of size A(output_width, input_width) [nondim]
 end type layer_type
 
 !> Control structure/type for ANN
@@ -119,7 +117,6 @@ subroutine ANN_init(CS, NNfile)
     fieldname = trim('A') // trim(layer_num_str)
     call MOM_read_data(NNfile, fieldname, CS%layers(i)%A, &
                         (/1,1,1,1/),(/CS%layers(i)%output_width,CS%layers(i)%input_width,1,1/))
-    CS%layers(i)%Atranspose(:,:) = transpose( CS%layers(i)%A(:,:) )
 
     ! Reading bias b
     fieldname = trim('b') // trim(layer_num_str)
@@ -173,7 +170,6 @@ subroutine ANN_allocate(CS, num_layers, layer_sizes)
 
     allocate( CS%layers(l)%A(CS%layers(l)%output_width, CS%layers(l)%input_width) )
     allocate( CS%layers(l)%b(CS%layers(l)%output_width) )
-    allocate( CS%layers(l)%Atranspose(CS%layers(l)%input_width, CS%layers(l)%output_width) )
 
     CS%parameters = CS%parameters &
        + CS%layer_sizes(l) * CS%layer_sizes(l+1) & ! For weights
@@ -466,7 +462,6 @@ subroutine set_layer(ANN, layer, weights, biases, activation)
   if ( size(weights,2) /= size(ANN%layers(layer)%A,2) ) &
       call MOM_error(FATAL, "MOM_ANN, set_layer: mismatch in size of weights (second dim)")
   ANN%layers(layer)%A(:,:) = weights(:,:)
-  ANN%layers(layer)%Atranspose(:,:) = transpose( weights(:,:) )
 
   ANN%layers(layer)%activation = activation
 end subroutine set_layer
