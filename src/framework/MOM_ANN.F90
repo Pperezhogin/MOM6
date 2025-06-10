@@ -806,6 +806,9 @@ subroutine set_layer(ANN, layer, weights, biases, activation)
       call MOM_error(FATAL, "MOM_ANN, set_layer: mismatch in size of weights (second dim)")
   ANN%layers(layer)%A(:,:) = weights(:,:)
   ANN%layers(layer)%Atranspose(:,:) = transpose( weights(:,:) )
+  ANN%layers(layer)%A4(:,:) = real(ANN%layers(layer)%A(:,:), kind=4)
+  ANN%layers(layer)%A4transpose(:,:) = real(ANN%layers(layer)%Atranspose(:,:), kind=4)
+  ANN%layers(layer)%b4(:) = real(ANN%layers(layer)%b(:), kind=4)
 
   ANN%layers(layer)%activation = activation
 end subroutine set_layer
@@ -1013,6 +1016,16 @@ logical function ANN_unit_tests(verbose)
   ! as above with v5 of ANN_apply applied to 2d inputs, x(space,feature)
   call ANN_apply_array_sio(2, reshape([0.,1.,2.,3.,4.,5.,6.,7.],[2,4]), y2, ANN)
   call test%real_arr(2, y2, [2.,5.], 'Rectifier+summation+bias+norms 4-layer array v2')
+  deallocate( y2 )
+
+  allocate( y2(1,2) )
+  call ANN_apply_array_amazing(2, reshape([0.,1.,2.,3.,4.,5.,6.,7.],[2,4]), y2, ANN)
+  call test%real_arr(2, y2, [2.,5.], 'Rectifier+summation+bias+norms 4-layer array amazing')
+  deallocate( y2 )
+
+  allocate( y2(1,2) )
+  call ANN_apply_array_amazing_t(2, reshape([0.,1.,2.,3.,4.,5.,6.,7.],[2,4]), y2, ANN)
+  call test%real_arr(2, y2, [2.,5.], 'Rectifier+summation+bias+norms 4-layer array amazing_t')
   deallocate( y2 )
 
   call ANN_end(ANN)

@@ -30,8 +30,8 @@ integer :: nxy ! Spatial dimension
 !nlayers = 7; nin = 4; layer_width = 16; nout = 1 ! Deep network
 !nlayers = 4; nin = 4; layer_width = 48; nout = 1 ! Shallow-wide network
 !nlayers = 3; nin = 4; layer_width = 20; nout = 1 ! Small network
-!nlayers = 3; nin = 27; layer_width = 20; nout = 3 ! Small network
-nlayers = 4; nin = 27; layer_width = 32; nout = 3 ! medium network
+nlayers = 3; nin = 27; layer_width = 20; nout = 3 ! Small network
+!nlayers = 4; nin = 27; layer_width = 32; nout = 3 ! medium network
 
 nsamp = 100
 nits = 20000
@@ -78,14 +78,19 @@ call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
 write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               12, "MOM_ANN:ANN_apply_array_sio(array)")
+              write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               13, "MOM_ANN:ANN_apply_array_amazing(array)")
+              write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               14, "MOM_ANN:ANN_apply_array_amazing_t(array)")
+              write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               15, "MOM_ANN:ANN_apply_array_amazing_t_nonorm(array)")
+              write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               16, "MOM_ANN:ANN_apply_array_amazing_t_nonorm_stack(array)")
+              write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               17, "MOM_ANN:ANN_apply_array_new(array)")
 write(*,"()")
