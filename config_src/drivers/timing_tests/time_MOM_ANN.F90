@@ -5,7 +5,9 @@ program time_MOM_ANN
 use MOM_ANN, only : ANN_CS
 use MOM_ANN, only : ANN_allocate, ANN_apply, ANN_end
 use MOM_ANN, only : ANN_apply_vector_orig, ANN_apply_vector_oi
-use MOM_ANN, only : ANN_apply_array_sio
+use MOM_ANN, only : ANN_apply_array_sio, ANN_apply_array_amazing, &
+ANN_apply_array_amazing_t, ANN_apply_array_amazing_t_nonorm, &
+ANN_apply_array_amazing_t_nonorm_stack
 use MOM_ANN, only : ANN_random
 
 implicit none
@@ -24,14 +26,16 @@ integer :: nsamp ! Number of measurements
 integer :: nits ! Number of calls to time
 integer :: nxy ! Spatial dimension
 
-nlayers = 7; nin = 4; layer_width = 16; nout = 1 ! Deep network
+!nlayers = 7; nin = 4; layer_width = 16; nout = 1 ! Deep network
 !nlayers = 4; nin = 4; layer_width = 48; nout = 1 ! Shallow-wide network
 !nlayers = 3; nin = 4; layer_width = 20; nout = 1 ! Small network
+nlayers = 3; nin = 27; layer_width = 20; nout = 3 ! Small network
+!nlayers = 4; nin = 27; layer_width = 32; nout = 3 ! medium network
 
 nsamp = 100
 nits = 20000
 !nits = 300000 ! Needed for robust measurements on small networks
-nxy = 100 ! larger array
+nxy = 400 ! larger array
 !nxy = 10 ! small array
 
 ! Optionally grab ANN and timing parameters from the command line
@@ -73,6 +77,14 @@ call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
 write(*,"(',')")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               12, "MOM_ANN:ANN_apply_array_sio(array)")
+call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
+              13, "MOM_ANN:ANN_apply_array_amazing(array)")
+call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
+              14, "MOM_ANN:ANN_apply_array_amazing_t(array)")
+call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
+              15, "MOM_ANN:ANN_apply_array_amazing_t_nonorm(array)")
+call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
+              16, "MOM_ANN:ANN_apply_array_amazing_t_nonorm_stack(array)")
 write(*,"()")
 
 write(*,'(a)') "}"
@@ -131,7 +143,6 @@ subroutine time_ANN(nlayers, nin, width, nout, nsamp, nits, nxy, impl, label)
   do samp = 1, nsamp
     select case (impl)
       case (0)
-        aits = nits
         call cpu_time(start)
         do iter = 1, nits ! Make many passes to reduce sampling error
           call ANN_apply(x_s, y_s, ANN)
@@ -160,6 +171,34 @@ subroutine time_ANN(nlayers, nin, width, nout, nsamp, nits, nxy, impl, label)
         enddo
         call cpu_time(finish)
         asamp = nsamp * aits ! Account for working on whole arrays
+      case (13)
+        call cpu_time(start)
+        do iter = 1, aits ! Make many passes to reduce sampling error
+          call ANN_apply_array_amazing(nxy, x_sf(:,:), y_sf(:,:), ANN)
+        enddo
+        call cpu_time(finish)
+        asamp = nsamp * aits ! Account for working on whole arrays
+      case (14)
+        call cpu_time(start)
+        do iter = 1, aits ! Make many passes to reduce sampling error
+          call ANN_apply_array_amazing_t(nxy, x_sf(:,:), y_sf(:,:), ANN)
+        enddo
+        call cpu_time(finish)
+        asamp = nsamp * aits ! Account for working on whole arrays
+      case (15)
+        call cpu_time(start)
+        do iter = 1, aits ! Make many passes to reduce sampling error
+          call ANN_apply_array_amazing_t_nonorm(nxy, x_sf(:,:), y_sf(:,:), ANN)
+        enddo
+        call cpu_time(finish)
+        asamp = nsamp * aits ! Account for working on whole arrays
+      case (16)
+        call cpu_time(start)
+        do iter = 1, aits ! Make many passes to reduce sampling error
+          call ANN_apply_array_amazing_t_nonorm_stack(nxy, x_sf(:,:), y_sf(:,:), ANN)
+        enddo
+        call cpu_time(finish)
+        asamp = nsamp * aits ! Account for working on whole arrays
     end select
 
     timing = ( finish - start ) / real(nits) ! Average time per call
@@ -174,7 +213,7 @@ subroutine time_ANN(nlayers, nin, width, nout, nsamp, nits, nxy, impl, label)
   tstd = tstd / real(nsamp) ! convert to mean of squares
   tstd = tstd - tmean**2  ! convert to variance
   tstd = sqrt( tstd * real(nsamp) / real(nsamp-1) ) ! convert to standard deviation
-  words_per_sec = ANN%parameters / ( tmean * 1024 * 1024 )
+  words_per_sec = ANN%parameters / ( tmean * 1024 * 1024 * 1024 )
 
   write(*,"(2x,3a)") '"', trim(label), '": {'
   write(*,"(4x,a,1pe11.4,',')") '"min": ', tmin
@@ -182,7 +221,7 @@ subroutine time_ANN(nlayers, nin, width, nout, nsamp, nits, nxy, impl, label)
   write(*,"(4x,a,1pe11.4,',')") '"std": ', tstd
   write(*,"(4x,a,i0,',')") '"n_samples": ', asamp
   write(*,"(4x,a,1pe11.4,',')") '"max": ', tmax
-  write(*,"(4x,a,1pe11.4,'}')", advance="no") '"MBps": ', words_per_sec
+  write(*,"(4x,a,1pe11.4,'}')", advance="no") '"Gflops": ', words_per_sec
 
 end subroutine time_ANN
 

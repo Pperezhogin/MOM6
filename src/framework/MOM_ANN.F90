@@ -13,6 +13,8 @@ implicit none ; private
 
 public ANN_init, ANN_allocate, ANN_apply, ANN_end, ANN_unit_tests
 public ANN_apply_vector_orig, ANN_apply_vector_oi, ANN_apply_array_sio
+public ANN_apply_array_amazing, ANN_apply_array_amazing_t
+public ANN_apply_array_amazing_t_nonorm, ANN_apply_array_amazing_t_nonorm_stack
 public set_layer, set_input_normalization, set_output_normalization
 public ANN_random, randomize_layer
 
@@ -36,6 +38,12 @@ type, private :: layer_type; private
   real, allocatable :: b(:)   !< bias vector of size output_width [nondim]
   real, allocatable :: Atranspose(:,:) !< Matrix in column-major order
                                        !! of size A(output_width, input_width) [nondim]
+
+  real(4), allocatable :: A4(:,:) !< Matrix in column-major order
+                              !! of size A(output_width, input_width) [nondim]
+  real(4), allocatable :: A4transpose(:,:) !< Matrix in column-major order
+                              !! of size A(output_width, input_width) [nondim]
+  real(4), allocatable :: b4(:)   !< bias vector of size output_width [nondim]
 end type layer_type
 
 !> Control structure/type for ANN
@@ -120,10 +128,13 @@ subroutine ANN_init(CS, NNfile)
     call MOM_read_data(NNfile, fieldname, CS%layers(i)%A, &
                         (/1,1,1,1/),(/CS%layers(i)%output_width,CS%layers(i)%input_width,1,1/))
     CS%layers(i)%Atranspose(:,:) = transpose( CS%layers(i)%A(:,:) )
+    CS%layers(i)%A4transpose(:,:) = real(CS%layers(i)%Atranspose(:,:), kind=4)
+    CS%layers(i)%A4(:,:) = real(CS%layers(i)%A(:,:), kind=4)
 
     ! Reading bias b
     fieldname = trim('b') // trim(layer_num_str)
     call MOM_read_data(NNfile, fieldname, CS%layers(i)%b)
+    CS%layers(i)%b4(:) = real(CS%layers(i)%b(:), kind=4)
   enddo
 
   ! No activation function for the last layer
@@ -173,7 +184,10 @@ subroutine ANN_allocate(CS, num_layers, layer_sizes)
 
     allocate( CS%layers(l)%A(CS%layers(l)%output_width, CS%layers(l)%input_width) )
     allocate( CS%layers(l)%b(CS%layers(l)%output_width) )
+    allocate( CS%layers(l)%A4(CS%layers(l)%output_width, CS%layers(l)%input_width) )
+    allocate( CS%layers(l)%b4(CS%layers(l)%output_width) )
     allocate( CS%layers(l)%Atranspose(CS%layers(l)%input_width, CS%layers(l)%output_width) )
+    allocate( CS%layers(l)%A4transpose(CS%layers(l)%input_width, CS%layers(l)%output_width) )
 
     CS%parameters = CS%parameters &
        + CS%layer_sizes(l) * CS%layer_sizes(l+1) & ! For weights
@@ -231,7 +245,11 @@ subroutine ANN_end(CS)
 
   do i = 1, CS%num_layers-1
     deallocate(CS%layers(i)%A)
+    deallocate(CS%layers(i)%Atranspose)
     deallocate(CS%layers(i)%b)
+    deallocate(CS%layers(i)%A4)
+    deallocate(CS%layers(i)%A4transpose)
+    deallocate(CS%layers(i)%b4)
   enddo
   deallocate(CS%layers)
 
@@ -443,6 +461,257 @@ subroutine ANN_apply_array_sio(nij, x, y, CS)
 
   end subroutine layer_apply_sio
 end subroutine ANN_apply_array_sio
+
+subroutine ANN_apply_array_amazing(nij, x, y, CS)
+  type(ANN_CS), intent(in)    :: CS !< ANN control structure
+  integer,      intent(in)    :: nij !< Size of spatial dimension
+  real,         intent(in)    :: x(nij, CS%layer_sizes(1)) !< input [arbitrary]
+  real,         intent(inout) :: y(nij, CS%layer_sizes(CS%num_layers)) !< output [arbitrary]
+  ! Local variables
+  real(4), allocatable :: x_1(:,:), x_2(:,:) ! intermediate states [nondim]
+  integer :: l, i, o ! Layer, input, output index
+
+  allocate( x_1( nij, maxval( CS%layer_sizes(:) ) ) )
+  allocate( x_2( nij, maxval( CS%layer_sizes(:) ) ) )
+
+  ! Normalize input
+  do i = 1, CS%layer_sizes(1)
+    x_1(:,i) = real(( x(:,i) - CS%input_means(i) ) * CS%input_norms(i), kind=4)
+  enddo
+
+  ! Apply Linear layers
+  do l = 1, CS%num_layers-2, 2
+    call layer_apply_amazing(nij, x_1, x_2, CS%layers(l))
+    call layer_apply_amazing(nij, x_2, x_1, CS%layers(l+1))
+  enddo
+  if (mod(CS%num_layers,2)==0) then
+    call layer_apply_amazing(nij, x_1, x_2, CS%layers(CS%num_layers-1))
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = x_2(:,o) * CS%output_norms(o) + CS%output_means(o)
+    enddo
+  else
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = real(x_1(:,o) * CS%output_norms(o) + CS%output_means(o), kind=8)
+    enddo
+  endif
+
+  deallocate(x_1, x_2)
+
+  contains
+
+  !> Applies linear layer to input data x and stores the result in y with
+  !! y = A*x + b with optional application of the activation function so the
+  !! overall operations is ReLU(A*x + b)
+  subroutine layer_apply_amazing(nij, x, y, layer)
+    type(layer_type), intent(in)    :: layer !< Linear layer
+    integer,          intent(in)    :: nij   !< Size of spatial dimension
+    real(4),             intent(in)    :: x(nij, layer%input_width) !< Input vector [nondim]
+    real(4),             intent(inout) :: y(nij, layer%output_width) !< Output vector [nondim]
+    ! Local variables
+    integer :: i, o ! Input, output indices
+
+    do o = 1, layer%output_width
+      ! Add bias
+      y(:,o) = layer%b4(o)
+      ! Multiply by kernel
+      do i = 1, layer%input_width
+        y(:,o) = y(:,o) + x(:,i) * layer%A4(o, i)
+      enddo
+      ! Apply activation function
+      if (layer%activation) y(:,o) = max(y(:,o), real(0.0, kind=4))
+    enddo
+
+  end subroutine layer_apply_amazing
+end subroutine ANN_apply_array_amazing
+
+subroutine ANN_apply_array_amazing_t(nij, x, y, CS)
+  type(ANN_CS), intent(in)    :: CS !< ANN control structure
+  integer,      intent(in)    :: nij !< Size of spatial dimension
+  real,         intent(in)    :: x(nij, CS%layer_sizes(1)) !< input [arbitrary]
+  real,         intent(inout) :: y(nij, CS%layer_sizes(CS%num_layers)) !< output [arbitrary]
+  ! Local variables
+  real(4), allocatable :: x_1(:,:), x_2(:,:) ! intermediate states [nondim]
+  integer :: l, i, o ! Layer, input, output index
+
+  allocate( x_1( nij, maxval( CS%layer_sizes(:) ) ) )
+  allocate( x_2( nij, maxval( CS%layer_sizes(:) ) ) )
+
+  ! Normalize input
+  do i = 1, CS%layer_sizes(1)
+    x_1(:,i) = real(( x(:,i) - CS%input_means(i) ) * CS%input_norms(i), kind=4)
+  enddo
+
+  ! Apply Linear layers
+  do l = 1, CS%num_layers-2, 2
+    call layer_apply_amazing_t(nij, x_1, x_2, CS%layers(l))
+    call layer_apply_amazing_t(nij, x_2, x_1, CS%layers(l+1))
+  enddo
+  if (mod(CS%num_layers,2)==0) then
+    call layer_apply_amazing_t(nij, x_1, x_2, CS%layers(CS%num_layers-1))
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = x_2(:,o) * CS%output_norms(o) + CS%output_means(o)
+    enddo
+  else
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = real(x_1(:,o) * CS%output_norms(o) + CS%output_means(o), kind=8)
+    enddo
+  endif
+
+  deallocate(x_1, x_2)
+
+  contains
+
+  !> Applies linear layer to input data x and stores the result in y with
+  !! y = A*x + b with optional application of the activation function so the
+  !! overall operations is ReLU(A*x + b)
+  subroutine layer_apply_amazing_t(nij, x, y, layer)
+    type(layer_type), intent(in)    :: layer !< Linear layer
+    integer,          intent(in)    :: nij   !< Size of spatial dimension
+    real(4),             intent(in)    :: x(nij, layer%input_width) !< Input vector [nondim]
+    real(4),             intent(inout) :: y(nij, layer%output_width) !< Output vector [nondim]
+    ! Local variables
+    integer :: i, o ! Input, output indices
+
+    do o = 1, layer%output_width
+      ! Add bias
+      y(:,o) = layer%b4(o)
+      ! Multiply by kernel
+      do i = 1, layer%input_width
+        y(:,o) = y(:,o) + x(:,i) * layer%A4transpose(i, o)
+      enddo
+      ! Apply activation function
+      if (layer%activation) y(:,o) = max(y(:,o), real(0.0, kind=4))
+    enddo
+
+  end subroutine layer_apply_amazing_t
+end subroutine ANN_apply_array_amazing_t
+
+subroutine ANN_apply_array_amazing_t_nonorm(nij, x, y, CS)
+  type(ANN_CS), intent(in)    :: CS !< ANN control structure
+  integer,      intent(in)    :: nij !< Size of spatial dimension
+  real,         intent(in)    :: x(nij, CS%layer_sizes(1)) !< input [arbitrary]
+  real,         intent(inout) :: y(nij, CS%layer_sizes(CS%num_layers)) !< output [arbitrary]
+  ! Local variables
+  real(4), allocatable :: x_1(:,:), x_2(:,:) ! intermediate states [nondim]
+  integer :: l, i, o ! Layer, input, output index
+
+  allocate( x_1( nij, maxval( CS%layer_sizes(:) ) ) )
+  allocate( x_2( nij, maxval( CS%layer_sizes(:) ) ) )
+
+  ! Normalize input
+  do i = 1, CS%layer_sizes(1)
+    x_1(:,i) = real(x(:,i), kind=4)
+  enddo
+
+  ! Apply Linear layers
+  do l = 1, CS%num_layers-2, 2
+    call layer_apply_amazing_t(nij, x_1, x_2, CS%layers(l))
+    call layer_apply_amazing_t(nij, x_2, x_1, CS%layers(l+1))
+  enddo
+  if (mod(CS%num_layers,2)==0) then
+    call layer_apply_amazing_t(nij, x_1, x_2, CS%layers(CS%num_layers-1))
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = x_2(:,o) * CS%output_norms(o) + CS%output_means(o)
+    enddo
+  else
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = real(x_1(:,o), kind=8)
+    enddo
+  endif
+
+  deallocate(x_1, x_2)
+
+  contains
+
+  !> Applies linear layer to input data x and stores the result in y with
+  !! y = A*x + b with optional application of the activation function so the
+  !! overall operations is ReLU(A*x + b)
+  subroutine layer_apply_amazing_t(nij, x, y, layer)
+    type(layer_type), intent(in)    :: layer !< Linear layer
+    integer,          intent(in)    :: nij   !< Size of spatial dimension
+    real(4),             intent(in)    :: x(nij, layer%input_width) !< Input vector [nondim]
+    real(4),             intent(inout) :: y(nij, layer%output_width) !< Output vector [nondim]
+    ! Local variables
+    integer :: i, o ! Input, output indices
+
+    do o = 1, layer%output_width
+      ! Add bias
+      y(:,o) = layer%b4(o)
+      ! Multiply by kernel
+      do i = 1, layer%input_width
+        y(:,o) = y(:,o) + x(:,i) * layer%A4transpose(i, o)
+      enddo
+      ! Apply activation function
+      if (layer%activation) y(:,o) = max(y(:,o), real(0.0, kind=4))
+    enddo
+
+  end subroutine layer_apply_amazing_t
+end subroutine ANN_apply_array_amazing_t_nonorm
+
+subroutine ANN_apply_array_amazing_t_nonorm_stack(nij, x, y, CS)
+  type(ANN_CS), intent(in)    :: CS !< ANN control structure
+  integer,      intent(in)    :: nij !< Size of spatial dimension
+  real,         intent(in)    :: x(nij, CS%layer_sizes(1)) !< input [arbitrary]
+  real,         intent(inout) :: y(nij, CS%layer_sizes(CS%num_layers)) !< output [arbitrary]
+  ! Local variables
+  real(4) :: x_1(nij, maxval( CS%layer_sizes(:) )), x_2(nij, maxval( CS%layer_sizes(:) )) ! intermediate states [nondim]
+  integer :: l, i, o ! Layer, input, output index
+
+  ! Normalize input
+  do i = 1, CS%layer_sizes(1)
+    x_1(:,i) = real(x(:,i), kind=4)
+  enddo
+
+  ! Apply Linear layers
+  do l = 1, CS%num_layers-2, 2
+    call layer_apply_amazing_t(nij, x_1, x_2, CS%layers(l))
+    call layer_apply_amazing_t(nij, x_2, x_1, CS%layers(l+1))
+  enddo
+  if (mod(CS%num_layers,2)==0) then
+    call layer_apply_amazing_t(nij, x_1, x_2, CS%layers(CS%num_layers-1))
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = x_2(:,o) * CS%output_norms(o) + CS%output_means(o)
+    enddo
+  else
+    ! Un-normalize output
+    do o = 1, CS%layer_sizes(CS%num_layers)
+      y(:,o) = real(x_1(:,o), kind=8)
+    enddo
+  endif
+
+  contains
+
+  !> Applies linear layer to input data x and stores the result in y with
+  !! y = A*x + b with optional application of the activation function so the
+  !! overall operations is ReLU(A*x + b)
+  subroutine layer_apply_amazing_t(nij, x, y, layer)
+    type(layer_type), intent(in)    :: layer !< Linear layer
+    integer,          intent(in)    :: nij   !< Size of spatial dimension
+    real(4),             intent(in)    :: x(nij, layer%input_width) !< Input vector [nondim]
+    real(4),             intent(inout) :: y(nij, layer%output_width) !< Output vector [nondim]
+    ! Local variables
+    integer :: i, o ! Input, output indices
+
+    do o = 1, layer%output_width
+      ! Add bias
+      y(:,o) = layer%b4(o)
+      ! Multiply by kernel
+      do i = 1, layer%input_width
+        y(:,o) = y(:,o) + x(:,i) * layer%A4transpose(i, o)
+      enddo
+      ! Apply activation function
+      if (layer%activation) y(:,o) = max(y(:,o), real(0.0, kind=4))
+    enddo
+
+  end subroutine layer_apply_amazing_t
+end subroutine ANN_apply_array_amazing_t_nonorm_stack
 
 !> Sets weights and bias for a single layer
 subroutine set_layer(ANN, layer, weights, biases, activation)
