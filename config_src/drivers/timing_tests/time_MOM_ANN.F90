@@ -7,7 +7,8 @@ use MOM_ANN, only : ANN_allocate, ANN_apply, ANN_end
 use MOM_ANN, only : ANN_apply_vector_orig, ANN_apply_vector_oi
 use MOM_ANN, only : ANN_apply_array_sio, ANN_apply_array_amazing, &
 ANN_apply_array_amazing_t, ANN_apply_array_amazing_t_nonorm, &
-ANN_apply_array_amazing_t_nonorm_stack
+ANN_apply_array_amazing_t_nonorm_stack, ANN_apply_array_new
+
 use MOM_ANN, only : ANN_random
 
 implicit none
@@ -29,8 +30,8 @@ integer :: nxy ! Spatial dimension
 !nlayers = 7; nin = 4; layer_width = 16; nout = 1 ! Deep network
 !nlayers = 4; nin = 4; layer_width = 48; nout = 1 ! Shallow-wide network
 !nlayers = 3; nin = 4; layer_width = 20; nout = 1 ! Small network
-nlayers = 3; nin = 27; layer_width = 20; nout = 3 ! Small network
-!nlayers = 4; nin = 27; layer_width = 32; nout = 3 ! medium network
+!nlayers = 3; nin = 27; layer_width = 20; nout = 3 ! Small network
+nlayers = 4; nin = 27; layer_width = 32; nout = 3 ! medium network
 
 nsamp = 100
 nits = 20000
@@ -85,6 +86,8 @@ call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               15, "MOM_ANN:ANN_apply_array_amazing_t_nonorm(array)")
 call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
               16, "MOM_ANN:ANN_apply_array_amazing_t_nonorm_stack(array)")
+call time_ANN(nlayers, nin, layer_width, nout, nsamp, nits, nxy, &
+              17, "MOM_ANN:ANN_apply_array_new(array)")
 write(*,"()")
 
 write(*,'(a)') "}"
@@ -196,6 +199,13 @@ subroutine time_ANN(nlayers, nin, width, nout, nsamp, nits, nxy, impl, label)
         call cpu_time(start)
         do iter = 1, aits ! Make many passes to reduce sampling error
           call ANN_apply_array_amazing_t_nonorm_stack(nxy, x_sf(:,:), y_sf(:,:), ANN)
+        enddo
+        call cpu_time(finish)
+        asamp = nsamp * aits ! Account for working on whole arrays
+      case (17)
+        call cpu_time(start)
+        do iter = 1, aits ! Make many passes to reduce sampling error
+          call ANN_apply_array_new(nxy, x_sf(:,:), y_sf(:,:), ANN)
         enddo
         call cpu_time(finish)
         asamp = nsamp * aits ! Account for working on whole arrays
