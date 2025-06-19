@@ -256,7 +256,7 @@ pure elemental function activation_fn_r4(x) result (y)
   real(4), intent(in) :: x !< Scalar input value [nondim]
   real(4)             :: y !< Scalar output value [nondim]
 
-  y = max(x, 0.0) ! ReLU activation
+  y = max(x, 0.0_4) ! ReLU activation
 
 end function activation_fn_r4
 
