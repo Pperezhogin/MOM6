@@ -15,7 +15,7 @@ use MOM_domains,       only : To_North, To_East
 use MOM_domains,       only : pass_var, CORNER
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE, CLOCK_ROUTINE
-use MOM_ANN,           only : ANN_init, ANN_apply_array_sio, ANN_end, ANN_CS
+use MOM_ANN,           only : ANN_init, ANN_apply_array_sio_r4, ANN_end, ANN_CS
 
 implicit none ; private
 
@@ -769,7 +769,7 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     call cpu_clock_end(CS%id_clock_ANN_features)
 
     call cpu_clock_begin(CS%id_clock_ANN_inference)
-    call ANN_apply_array_sio(nij, x, y, CS%ann_Tall)
+    call ANN_apply_array_sio_r4(nij, x, y, CS%ann_Tall)
     call cpu_clock_end(CS%id_clock_ANN_inference)
 
     call cpu_clock_begin(CS%id_clock_ANN_features)
@@ -786,9 +786,9 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     call cpu_clock_end(CS%id_clock_ANN_features)
   enddo ! end of k loop
 
-  call create_group_pass(pass_flux, CS%Txy_h, G%Domain)
-  call create_group_pass(pass_flux, CS%Txx, G%Domain)
-  call create_group_pass(pass_flux, CS%Tyy, G%Domain)
+  call create_group_pass(pass_flux, CS%Txy_h, G%Domain, halo=2)
+  call create_group_pass(pass_flux, CS%Txx, G%Domain, halo=2)
+  call create_group_pass(pass_flux, CS%Tyy, G%Domain, halo=2)
   call do_group_pass(pass_flux, G%Domain, clock=CS%id_clock_mpi)
 
   call cpu_clock_begin(CS%id_clock_ANN_features)
