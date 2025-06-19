@@ -97,7 +97,8 @@ type, public :: ZB2020_CS ; private
   integer :: id_clock_copy
   integer :: id_clock_cdiss
   integer :: id_clock_stress
-  integer :: id_clock_stress_ANN
+  integer :: id_clock_ANN_inference
+  integer :: id_clock_ANN_features
   integer :: id_clock_divergence
   integer :: id_clock_mpi
   integer :: id_clock_filter
@@ -232,9 +233,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   CS%id_clock_copy = cpu_clock_id('(ZB2020 copy fields)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_cdiss = cpu_clock_id('(ZB2020 compute c_diss)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_stress = cpu_clock_id('(ZB2020 compute stress)', grain=CLOCK_ROUTINE, sync=.false.)
-  CS%id_clock_stress_ANN = cpu_clock_id('(ZB2020 compute stress ANN)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_ANN_inference = cpu_clock_id('(ZB2020 ANN inference)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_ANN_features = cpu_clock_id('(ZB2020 ANN features)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_divergence = cpu_clock_id('(ZB2020 compute divergence)', grain=CLOCK_ROUTINE, sync=.false.)
-  CS%id_clock_mpi = cpu_clock_id('(ZB2020 filter MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
+  CS%id_clock_mpi = cpu_clock_id('(ZB2020 MPI exchanges)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_filter = cpu_clock_id('(ZB2020 filter no MPI)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_post = cpu_clock_id('(ZB2020 post data)', grain=CLOCK_ROUTINE, sync=.false.)
   CS%id_clock_source = cpu_clock_id('(ZB2020 compute energy source)', grain=CLOCK_ROUTINE, sync=.false.)
@@ -665,7 +667,7 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n, m
-  integer :: ii, jj
+  integer :: jj
   integer :: nij
 
   real, allocatable :: x(:,:)        ! Vector of non-dimensional input features
@@ -674,29 +676,34 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   real, allocatable :: y(:,:)        ! Vector of nondimensional
                                      ! output features number of horizontal grid points x
                                      ! (Txy,Txx,Tyy) [nondim]
+  real :: xx(3*CS%stencil_size**2)   ! Vector of dimensional input features
+                                     ! (sh_xy, sh_xx, vort_xy) on a stencil [T-1 ~> s-1]
   real :: yy(3)                      ! Vector of dimensional
                                      ! output features (Txy,Txx,Tyy) [L2 T-2 ~> m2 s-2]
-  real :: input_norm                 ! Norm of input features [T-1 ~> s-1]
   real :: tmp                        ! Temporal value of squared norm [T-2 ~> s-2]
   integer :: offset                  ! Half the stencil size. Used for selection
   integer :: stencil_points          ! The number of points after flattening
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
-        sh_xy_h,   & ! sh_xy interpolated to the center [T-1 ~> s-1]
-        vort_xy_h, & ! vort_xy interpolated to the center [T-1 ~> s-1]
+        sh_xy_h,   & ! sh_xy interpolated to the center        [T-1 ~> s-1]
+        vort_xy_h    ! vort_xy interpolated to the center      [T-1 ~> s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)) :: &
         norm_h       ! Norm of input feautres in center points [T-1 ~> s-1]
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
-        sqr_h, & ! Squared norm of velocity gradients in center points [T-2 ~> s-2]
-        Txy      ! Predicted Txy in center points                      [T-1 ~> s-1]
+        Txy      ! Predicted Txy in center points              [T-1 ~> s-1]
 
-  call cpu_clock_begin(CS%id_clock_stress_ANN)
+  type(group_pass_type) :: pass_vel_grads  ! A handle used for group halo passes
+  type(group_pass_type) :: pass_flux       ! A handle used for group halo passes
+
+  call cpu_clock_begin(CS%id_clock_ANN_features)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   ! Number of horizontal grid points in ANN inference loop below
-  nij = (ie - is + 5) * (je - js + 5)
+  nij = (ie - is + 3) * (je - js + 3)
   allocate(x(nij, 3 * CS%stencil_size**2))
   allocate(y(nij, 3))
 
@@ -704,83 +711,87 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   vort_xy_h = 0.
   norm_h = 0.
 
-  call pass_var(CS%sh_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
-  call pass_var(CS%sh_xx, G%Domain, clock=CS%id_clock_mpi)
-  call pass_var(CS%vort_xy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
-
-  offset = (CS%stencil_size-1)/2
-  stencil_points = CS%stencil_size**2
-
   ! Interpolate input features
   do k=1,nz
-    do j=js-2,je+2 ; do i=is-2,ie+2
+    do j=js,je ; do i=is,ie
       ! It is assumed that B.C. is applied to sh_xy and vort_xy
       sh_xy_h(i,j,k) = 0.25 * ( (CS%sh_xy(I-1,J-1,k) + CS%sh_xy(I,J,k)) &
                               + (CS%sh_xy(I-1,J,k) + CS%sh_xy(I,J-1,k)) )
 
       vort_xy_h(i,j,k) = 0.25 * ( (CS%vort_xy(I-1,J-1,k) + CS%vort_xy(I,J,k)) &
                                 + (CS%vort_xy(I-1,J,k) + CS%vort_xy(I,J-1,k)) )
-
-      sqr_h(i,j) = (CS%sh_xx(i,j,k)**2 + sh_xy_h(i,j,k)**2 + vort_xy_h(i,j,k)**2) * G%mask2dT(i,j)
-    enddo; enddo
-
-    do j=js,je ; do i=is,ie
-      tmp = 0.0
-      do jj=j-offset,j+offset; do ii=i-offset,i+offset
-        tmp = tmp + sqr_h(ii,jj)
-      enddo; enddo
-      norm_h(i,j,k) = sqrt(tmp)
     enddo; enddo
   enddo
 
-  call pass_var(sh_xy_h, G%Domain, clock=CS%id_clock_mpi)
-  call pass_var(vort_xy_h, G%Domain, clock=CS%id_clock_mpi)
-  call pass_var(norm_h, G%Domain, clock=CS%id_clock_mpi)
+  call cpu_clock_end(CS%id_clock_ANN_features)
+
+  call create_group_pass(pass_vel_grads, sh_xy_h, G%Domain)
+  call create_group_pass(pass_vel_grads, vort_xy_h, G%Domain)
+  call create_group_pass(pass_vel_grads, CS%sh_xx, G%Domain)
+  call do_group_pass(pass_vel_grads, G%Domain, clock=CS%id_clock_mpi)
+
+  offset = (CS%stencil_size-1)/2
+  stencil_points = CS%stencil_size**2
 
   do k=1,nz
+    call cpu_clock_begin(CS%id_clock_ANN_features)
     m = 0
-    do j=js-2,je+2 ; do i=is-2,ie+2
+    do j=js-1,je+1 ; do i=is-1,ie+1
       m = m + 1
-      x(m,1:stencil_points) =                                                            &
+      ! Collect three components of the velocity gradient tensor on a stencil
+      ! into a single vector xx
+      xx(1:stencil_points) =                                                             &
                         RESHAPE(sh_xy_h(i-offset:i+offset,                               &
                                         j-offset:j+offset,k), (/stencil_points/))
-      x(m,stencil_points+1:2*stencil_points) =                                           &
+      xx(stencil_points+1:2*stencil_points)  =                                           &
                         RESHAPE(CS%sh_xx(i-offset:i+offset,                              &
                                          j-offset:j+offset,k), (/stencil_points/))
-      x(m,2*stencil_points+1:3*stencil_points) =                                         &
+      xx(2*stencil_points+1:3*stencil_points) =                                          &
                         RESHAPE(vort_xy_h(i-offset:i+offset,                             &
                                           j-offset:j+offset,k), (/stencil_points/))
-      
-      x(m,:) = x(m,:) / (norm_h(i,j,k) + CS%subroundoff_shear)
+
+      ! Compute local square of velocity gradient norm
+      tmp = 0.
+      do jj=1,stencil_points
+        ! Pointwise vort_xy**2 + sh_xx**2 + sh_xy**2
+        tmp = tmp + ((xx(jj) * xx(jj) + xx(jj+stencil_points) * xx(jj+stencil_points)) + &
+                      xx(jj+2*stencil_points) * xx(jj+2*stencil_points))
+      enddo
+      norm_h(i,j) = sqrt(tmp)
+
+      x(m,:) = xx(:) / (norm_h(i,j) + CS%subroundoff_shear)
     enddo; enddo
+    call cpu_clock_end(CS%id_clock_ANN_features)
 
+    call cpu_clock_begin(CS%id_clock_ANN_inference)
     call ANN_apply_array_sio(nij, x, y, CS%ann_Tall)
+    call cpu_clock_end(CS%id_clock_ANN_inference)
 
+    call cpu_clock_begin(CS%id_clock_ANN_features)
     m = 0
-    do j=js-2,je+2 ; do i=is-2,ie+2
+    do j=js-1,je+1 ; do i=is-1,ie+1
       m = m+1
-      yy(:) = y(m, :) * norm_h(i,j,k) * norm_h(i,j,k) * CS%kappa_h(i,j)
+      yy(:) = y(m, :) * norm_h(i,j) * norm_h(i,j) * CS%kappa_h(i,j)
 
       Txy(i,j)      = yy(1)
       CS%Txx(i,j,k) = yy(2)
       CS%Tyy(i,j,k) = yy(3)
     enddo ; enddo
 
-    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+    do J=Jsq,Jeq ; do I=Isq,Ieq
       CS%Txy(I,J,k) = 0.25 * ( (Txy(i+1,j+1) + Txy(i,j)) &
                              + (Txy(i+1,j)   + Txy(i,j+1))) * G%mask2dBu(I,J)
     enddo; enddo
-
+    call cpu_clock_end(CS%id_clock_ANN_features)
   enddo ! end of k loop
-
-  call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
-  call pass_var(CS%Txx, G%Domain, clock=CS%id_clock_mpi)
-  call pass_var(CS%Tyy, G%Domain, clock=CS%id_clock_mpi)
 
   deallocate(x)
   deallocate(y)
 
-  call cpu_clock_end(CS%id_clock_stress_ANN)
+  call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call create_group_pass(pass_flux, CS%Txx, G%Domain)
+  call create_group_pass(pass_flux, CS%Tyy, G%Domain)
+  call do_group_pass(pass_flux, G%Domain, clock=CS%id_clock_mpi)
 
 end subroutine compute_stress_ANN_collocated
 
