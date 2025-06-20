@@ -746,7 +746,7 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
       
       tmp = 0.
       n = 0
-      ! Fuse assembling a vector of input features 
+      ! Fuse assembling a vector of input features
       ! and computation of its norm
       do jj = -offset, offset
         do ii = -offset, offset
