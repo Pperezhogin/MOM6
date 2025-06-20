@@ -57,10 +57,6 @@ type, public :: ZB2020_CS ; private
                      !! points including metric terms [T-1 ~> s-1]
           vort_xy, & !< Vertical vorticity (dv/dx - du/dy) in q (CORNER)
                      !! points including metric terms [T-1 ~> s-1]
-          sh_xy_h,  & !< Horizontal shearing strain (du/dy + dv/dx) in q (CENTER)
-                     !! points including metric terms [T-1 ~> s-1]
-          vort_xy_h,& !< Vertical vorticity (dv/dx - du/dy) in q (CENTER)
-                     !! points including metric terms [T-1 ~> s-1]
           hq         !< Thickness in CORNER points [H ~> m or kg m-2]
 
   real, dimension(:,:,:), allocatable :: &
@@ -261,8 +257,6 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
 
   if (CS%use_ann) then
-    allocate(CS%sh_xy_h(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
-    allocate(CS%vort_xy_h(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
     allocate(CS%Txy_h(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
   endif
 
@@ -335,8 +329,6 @@ subroutine ZB2020_end(CS)
   type(ZB2020_CS), intent(inout) :: CS  !< ZB2020 control structure.
 
   if (CS%use_ann) then
-    deallocate(CS%sh_xy_h)
-    deallocate(CS%vort_xy_h)
     deallocate(CS%Txy_h)
   endif
   deallocate(CS%sh_xx)
@@ -424,18 +416,6 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
   enddo; enddo
-
-  ! Interpolate sh_xy and vort_xy to h points to reduce memory burden
-  if (CS%use_ann) then
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      ! It is assumed that B.C. is applied to sh_xy and vort_xy
-      CS%sh_xy_h(i,j,k) = 0.25 * ( (CS%sh_xy(I-1,J-1,k) + CS%sh_xy(I,J,k)) &
-                                 + (CS%sh_xy(I-1,J,k) + CS%sh_xy(I,J-1,k)) )
-
-      CS%vort_xy_h(i,j,k) = 0.25 * ( (CS%vort_xy(I-1,J-1,k) + CS%vort_xy(I,J,k)) &
-                                   + (CS%vort_xy(I-1,J,k) + CS%vort_xy(I,J-1,k)) )
-    enddo; enddo
-  endif
 
   call cpu_clock_end(CS%id_clock_copy)
 
@@ -715,6 +695,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   integer :: stencil_points          ! The number of points after flattening
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
+        sh_xy_h, &    ! Shearing strain interpolated to h point [T-1 ~> s-1]
+        vort_xy_h, &  ! Vorticity to h point [T-1 ~> s-1]
         norm_h       ! Norm of input feautres in center points [T-1 ~> s-1]
 
   type(group_pass_type) :: pass_vel_grads  ! A handle used for group halo passes
@@ -728,11 +710,14 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   allocate(x(nij, 3 * CS%stencil_size**2))
   allocate(y(nij, 3))
 
+  ! If stencil_size==3, the halo required to apply the model
+  ! in center points is only 1. This halo is available
+  ! without MPI exhchange in symmetric and non-symmetric memory models
   if (CS%stencil_size > 3) then
-    call create_group_pass(pass_vel_grads, CS%sh_xy_h, G%Domain)
-    call create_group_pass(pass_vel_grads, CS%vort_xy_h, G%Domain)
-    call create_group_pass(pass_vel_grads, CS%sh_xx, G%Domain)
+    call create_group_pass(pass_vel_grads, CS%sh_xy, G%Domain, position=CORNER)
+    call create_group_pass(pass_vel_grads, CS%vort_xy, G%Domain, position=CORNER)
     call do_group_pass(pass_vel_grads, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(CS%sh_xx, G%Domain, clock=CS%id_clock_mpi)
   endif
 
   offset = (CS%stencil_size-1)/2
@@ -740,6 +725,16 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
   do k=1,nz
     call cpu_clock_begin(CS%id_clock_ANN_features)
+    ! Precompute interpolated values to efficiently reuse in the next loop.
+    ! Interpolation from corner to center assuming that B.C.
+    ! is already applied
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      sh_xy_h(i,j) = 0.25 * ( (CS%sh_xy(i-1,j-1,k) + CS%sh_xy(i,j,k)) &
+                            + (CS%sh_xy(i-1,j,k) + CS%sh_xy(i,j-1,k)) )
+      vort_xy_h(i,j) = 0.25 * ( (CS%vort_xy(i-1,j-1,k) + CS%vort_xy(i,j,k)) &
+                              + (CS%vort_xy(i-1,j,k) + CS%vort_xy(i,j-1,k)) )
+    enddo; enddo
+
     m = 0
     do j=js,je ; do i=is,ie
       m = m + 1
@@ -748,12 +743,12 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
       n = 0
       ! Fuse assembling a vector of input features 
       ! and computation of its norm
-      do jj = -offset, offset
-        do ii = -offset, offset
+      do jj = j-offset, j+offset
+        do ii = i-offset, i+offset
           n = n + 1
-          x1 = CS%sh_xy_h(i+ii, j+jj, k)
-          x2 = CS%sh_xx(i+ii, j+jj, k)
-          x3 = CS%vort_xy_h(i+ii, j+jj, k)
+          x1 = sh_xy_h(ii,jj)
+          x2 = CS%sh_xx(ii,jj,k)
+          x3 = vort_xy_h(ii,jj)
 
           xx(n)                  = x1
           xx(n+stencil_points)   = x2
@@ -764,8 +759,10 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
       end do
       norm_h(i,j) = sqrt(tmp)
 
-      ! Normalize the input features
-      x(m,:) = xx(:) / (norm_h(i,j) + CS%subroundoff_shear)
+      ! Normalize the input features using dimensional scaling
+      do n=1, 3*stencil_points
+        x(m,n) = xx(n) / (norm_h(i,j) + CS%subroundoff_shear)
+      enddo
     enddo; enddo
     call cpu_clock_end(CS%id_clock_ANN_features)
 
@@ -777,7 +774,10 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     m = 0
     do j=js,je ; do i=is,ie
       m = m+1
-      yy(:) = y(m, :) * norm_h(i,j) * norm_h(i,j) * CS%kappa_h(i,j)
+      ! Denormalize the output features using dimensional scaling
+      do n=1,3
+        yy(n) = y(m, n) * norm_h(i,j) * norm_h(i,j) * CS%kappa_h(i,j)
+      enddo
 
       CS%Txy_h(i,j,k) = yy(1)
       CS%Txx(i,j,k)   = yy(2)
