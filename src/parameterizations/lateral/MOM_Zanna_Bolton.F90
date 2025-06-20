@@ -695,7 +695,7 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n, m
-  integer :: jj
+  integer :: ii, jj
   integer :: nij
 
   real, allocatable :: x(:,:)        ! Vector of non-dimensional input features
@@ -709,6 +709,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   real :: yy(3)                      ! Vector of dimensional
                                      ! output features (Txy,Txx,Tyy) [L2 T-2 ~> m2 s-2]
   real :: tmp                        ! Temporal value of squared norm [T-2 ~> s-2]
+  real :: x1, x2, x3                 ! Components of the velocity gradient tensor
+                                     ! (sh_xy, sh_xx, vort_xy) at a point [T-1 ~> s-1]
   integer :: offset                  ! Half the stencil size. Used for selection
   integer :: stencil_points          ! The number of points after flattening
 
@@ -741,29 +743,28 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     m = 0
     do j=js,je ; do i=is,ie
       m = m + 1
-      ! Collect three components of the velocity gradient tensor on a stencil
-      ! into a single vector xx
-      xx(1:stencil_points) =                                                             &
-                        RESHAPE(CS%sh_xy_h(i-offset:i+offset,                            &
-                                           j-offset:j+offset,k), (/stencil_points/))
-      xx(stencil_points+1:2*stencil_points)  =                                           &
-                        RESHAPE(CS%sh_xx(i-offset:i+offset,                              &
-                                         j-offset:j+offset,k), (/stencil_points/))
-      xx(2*stencil_points+1:3*stencil_points) =                                          &
-                        RESHAPE(CS%vort_xy_h(i-offset:i+offset,                          &
-                                             j-offset:j+offset,k), (/stencil_points/))
-
-      ! Compute l2 norm of the vector of input features
-      ! Somewhat complicated summation algorithm is chosen
-      ! to preserve regression. It was also found to be faster
+      
       tmp = 0.
-      do jj=1,stencil_points
-        ! Pointwise vort_xy**2 + sh_xx**2 + sh_xy**2
-        tmp = tmp + ((xx(jj) * xx(jj) + xx(jj+stencil_points) * xx(jj+stencil_points)) + &
-                      xx(jj+2*stencil_points) * xx(jj+2*stencil_points))
-      enddo
+      n = 0
+      ! Fuse assembling a vector of input features 
+      ! and computation of its norm
+      do jj = -offset, offset
+        do ii = -offset, offset
+          n = n + 1
+          x1 = CS%sh_xy_h(i+ii, j+jj, k)
+          x2 = CS%sh_xx(i+ii, j+jj, k)
+          x3 = CS%vort_xy_h(i+ii, j+jj, k)
+
+          xx(n)                  = x1
+          xx(n+stencil_points)   = x2
+          xx(n+2*stencil_points) = x3
+
+          tmp = tmp + (((x1*x1) + x2*x2) + x3*x3)
+        end do
+      end do
       norm_h(i,j) = sqrt(tmp)
 
+      ! Normalize the input features
       x(m,:) = xx(:) / (norm_h(i,j) + CS%subroundoff_shear)
     enddo; enddo
     call cpu_clock_end(CS%id_clock_ANN_features)
