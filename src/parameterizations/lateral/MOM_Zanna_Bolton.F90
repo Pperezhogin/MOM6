@@ -743,7 +743,6 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     m = 0
     do j=js,je ; do i=is,ie
       m = m + 1
-      
       tmp = 0.
       n = 0
       ! Fuse assembling a vector of input features
