@@ -26,7 +26,7 @@ use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs, thermo_var_ptrs
 use MOM_Zanna_Bolton,          only : ZB2020_lateral_stress, ZB2020_init, ZB2020_end
-use MOM_Zanna_Bolton,          only : ZB2020_CS, ZB2020_copy_gradient_and_thickness
+use MOM_Zanna_Bolton,          only : ZB2020_CS, ZB2020_layerwise_computations
 
 implicit none ; private
 
@@ -1579,7 +1579,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
     ! Pass the velocity gradients and thickness to ZB2020
     if (CS%use_ZB2020) then
-      call ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, G, GV, CS%ZB2020, k)
+      call ZB2020_layerwise_computations(sh_xx, sh_xy, vort_xy, hq, G, GV, CS%ZB2020, k)
     endif
 
     if (CS%Laplacian) then

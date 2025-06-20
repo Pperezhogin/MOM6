@@ -21,7 +21,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public ZB2020_lateral_stress, ZB2020_init, ZB2020_end, ZB2020_copy_gradient_and_thickness
+public ZB2020_lateral_stress, ZB2020_init, ZB2020_end, ZB2020_layerwise_computations
 
 !> Control structure for Zanna-Bolton-2020 parameterization.
 type, public :: ZB2020_CS ; private
@@ -251,13 +251,14 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   ! We set the stress tensor and velocity gradient tensor to zero
   ! with full halo because they potentially may be filtered
   ! with marching halo algorithm
-  allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
-  allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
-  allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   allocate(CS%hq(SZIB_(G),SZJB_(G),SZK_(GV)))
 
   if (CS%use_ann) then
     allocate(CS%Txy_h(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+  else
+    allocate(CS%sh_xx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
+    allocate(CS%sh_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
+    allocate(CS%vort_xy(SZIB_(G),SZJB_(G),SZK_(GV)), source=0.)
   endif
 
   allocate(CS%Txx(SZI_(G),SZJ_(G),SZK_(GV)), source=0.)
@@ -330,10 +331,11 @@ subroutine ZB2020_end(CS)
 
   if (CS%use_ann) then
     deallocate(CS%Txy_h)
+  else
+    deallocate(CS%sh_xx)
+    deallocate(CS%sh_xy)
+    deallocate(CS%vort_xy)  
   endif
-  deallocate(CS%sh_xx)
-  deallocate(CS%sh_xy)
-  deallocate(CS%vort_xy)
   deallocate(CS%hq)
 
   deallocate(CS%Txx)
@@ -363,26 +365,24 @@ end subroutine ZB2020_end
 !! We save as much halo for velocity gradients as possible
 !! In symmetric (preferable) memory model: halo 2 for sh_xx
 !! and halo 1 for sh_xy and vort_xy
-!! We apply zero boundary conditions to velocity gradients
-!! which is required for filtering operations
-subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
+!! We assume that zero B.C. are already applied to gradients
+subroutine ZB2020_layerwise_computations(sh_xx, sh_xy, vort_xy, hq, &
                                        G, GV, CS, k)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
   type(ZB2020_CS),               intent(inout) :: CS     !< ZB2020 control structure.
 
   real, dimension(SZIB_(G),SZJB_(G)), &
-    intent(in) :: sh_xy       !< horizontal shearing strain (du/dy + dv/dx)
+    intent(inout) :: sh_xy       !< horizontal shearing strain (du/dy + dv/dx)
                               !! including metric terms [T-1 ~> s-1]
   real, dimension(SZIB_(G),SZJB_(G)), &
-    intent(in) :: vort_xy     !< Vertical vorticity (dv/dx - du/dy)
+    intent(inout) :: vort_xy     !< Vertical vorticity (dv/dx - du/dy)
                               !! including metric terms [T-1 ~> s-1]
   real, dimension(SZIB_(G),SZJB_(G)), &
     intent(in) :: hq          !< harmonic mean of the harmonic means
                               !! of the u- & v point thicknesses [H ~> m or kg m-2]
-
   real, dimension(SZI_(G),SZJ_(G)), &
-    intent(in) :: sh_xx       !< horizontal tension (du/dx - dv/dy)
+    intent(inout) :: sh_xx       !< horizontal tension (du/dx - dv/dy)
                               !! including metric terms [T-1 ~> s-1]
 
   integer, intent(in) :: k    !< The vertical index of the layer to be passed.
@@ -399,27 +399,29 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
     CS%hq(I,J,k) = hq(I,J)
   enddo; enddo
 
-  ! No physical B.C. is required for
-  ! sh_xx in ZB2020. However, filtering
-  ! may require BC
-  do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
-    CS%sh_xx(i,j,k) = sh_xx(i,j) * G%mask2dT(i,j)
-  enddo ; enddo
+  ! Compute attenuation if specified
+  call compute_c_diss(G, GV, CS, sh_xy, sh_xx, vort_xy, k)
 
-  ! We multiply by mask to remove
-  ! implicit dependence on CS%no_slip
-  ! flag in hor_visc module
-  do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-    CS%sh_xy(I,J,k) = sh_xy(I,J) * G%mask2dBu(I,J)
-  enddo; enddo
+  if (CS%use_ann) then
+    call compute_stress_ANN_collocated(G, GV, CS, sh_xy, sh_xx, vort_xy, k)
+  else
+    ! Save gradients for filtering
+    do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
+      CS%sh_xx(i,j,k) = sh_xx(i,j)
+    enddo ; enddo
 
-  do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-    CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
-  enddo; enddo
+    do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+      CS%sh_xy(I,J,k) = sh_xy(I,J)
+    enddo; enddo
+
+    do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+      CS%vort_xy(I,J,k) = vort_xy(I,J)
+    enddo; enddo
+  endif
 
   call cpu_clock_end(CS%id_clock_copy)
 
-end subroutine ZB2020_copy_gradient_and_thickness
+end subroutine ZB2020_layerwise_computations
 
 !> Baroclinic Zanna-Bolton-2020 parameterization, see
 !! eq. 6 in https://laurezanna.github.io/files/Zanna-Bolton-2020.pdf
@@ -454,6 +456,8 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
   real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: dx2q    !< dx^2 at q points [L2 ~> m2]
   real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: dy2q    !< dy^2 at q points [L2 ~> m2]
 
+  type(group_pass_type) :: pass_flux       ! A handle used for group halo passes
+
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k, n
 
@@ -462,17 +466,15 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-  ! Compute attenuation if specified
-  call compute_c_diss(G, GV, CS)
-
-  ! Sharpen velocity gradients if specified
-  call filter_velocity_gradients(G, GV, CS)
-
-  ! Compute the stress tensor given the
-  ! (optionally sharpened) velocity gradients
   if (CS%use_ann) then
-    call compute_stress_ANN_collocated(G, GV, CS)
+    call create_group_pass(pass_flux, CS%Txy_h, G%Domain, halo=2)
+    call create_group_pass(pass_flux, CS%Txx, G%Domain, halo=2)
+    call create_group_pass(pass_flux, CS%Tyy, G%Domain, halo=2)
+    call do_group_pass(pass_flux, G%Domain, clock=CS%id_clock_mpi)
   else
+    ! Compute the stress tensor given the
+    ! (optionally sharpened) velocity gradients
+    call filter_velocity_gradients(G, GV, CS)
     call compute_stress(G, GV, CS)
   endif
 
@@ -502,13 +504,20 @@ end subroutine ZB2020_lateral_stress
 !! where shear = sqrt(sh_xx**2 + sh_xy**2) or shear = sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
 !! In symmetric memory model, components of velocity gradient tensor
 !! should have halo 1 and zero boundary conditions. The result: c_diss having halo 1.
-subroutine compute_c_diss(G, GV, CS)
+subroutine compute_c_diss(G, GV, CS, sh_xy, sh_xx, vort_xy, k)
   type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: &
+                      sh_xy, &       !< Shearing strain at q points [T-1 ~> s-1]
+                      vort_xy        !< Vorticity at q points [T-1 ~> s-1]
 
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: i, j, k, n
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: &
+                      sh_xx          !< Horizontal tension at h points [T-1 ~> s-1]
+  integer, intent(in) :: k           !< The vertical index of the layer to be passed
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j, n
 
   real :: shear ! Shear in Klower2018 formula at h points [T-1 ~> s-1]
 
@@ -517,35 +526,31 @@ subroutine compute_c_diss(G, GV, CS)
 
   call cpu_clock_begin(CS%id_clock_cdiss)
 
-  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
-  do k=1,nz
+  ! sqrt(sh_xx**2 + sh_xy**2)
+  if (CS%Klower_shear == 0) then
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      shear = sqrt(sh_xx(i,j)**2 + 0.25 * (          &
+                    ((sh_xy(I-1,J-1)**2) + (sh_xy(I,J)**2)) &
+                  + ((sh_xy(I-1,J  )**2) + (sh_xy(I,J-1)**2)) &
+                  ))
+      CS%c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
+    enddo; enddo
 
-    ! sqrt(sh_xx**2 + sh_xy**2)
-    if (CS%Klower_shear == 0) then
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        shear = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (          &
-                     ((CS%sh_xy(I-1,J-1,k)**2) + (CS%sh_xy(I,J  ,k)**2)) &
-                   + ((CS%sh_xy(I-1,J  ,k)**2) + (CS%sh_xy(I,J-1,k)**2)) &
-                    ))
-        CS%c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
-      enddo; enddo
-
-    ! sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
-    elseif (CS%Klower_shear == 1) then
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        shear = sqrt(CS%sh_xx(i,j,k)**2 + 0.25 * (             &
-                     ((CS%sh_xy(I-1,J-1,k)**2 + CS%vort_xy(I-1,J-1,k)**2) &
-                   +  (CS%sh_xy(I,J,k)**2     + CS%vort_xy(I,J,k)**2))    &
-                   + ((CS%sh_xy(I-1,J,k)**2   + CS%vort_xy(I-1,J,k)**2)   &
-                   +  (CS%sh_xy(I,J-1,k)**2   + CS%vort_xy(I,J-1,k)**2))  &
-                    ))
-        CS%c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
-      enddo; enddo
-    endif
-
-  enddo ! end of k loop
+  ! sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+  elseif (CS%Klower_shear == 1) then
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      shear = sqrt(sh_xx(i,j)**2 + 0.25 * (             &
+                    ((sh_xy(I-1,J-1)**2 + vort_xy(I-1,J-1)**2) &
+                  +  (sh_xy(I,J)**2     + vort_xy(I,J)**2))    &
+                  + ((sh_xy(I-1,J)**2   + vort_xy(I-1,J)**2)   &
+                  +  (sh_xy(I,J-1)**2   + vort_xy(I,J-1)**2))  &
+                  ))
+      CS%c_diss(i,j,k) = 1. / (1. + shear * CS%ICoriolis_h(i,j))
+    enddo; enddo
+  endif
 
   call cpu_clock_end(CS%id_clock_cdiss)
 
@@ -668,13 +673,20 @@ end subroutine compute_stress
 !! 3) Non-dimensionalize input features
 !! 4) Make ANN inference in grid centers
 !! 5) Restore physical dimensionality and interpolate Txy back to corners
-subroutine compute_stress_ANN_collocated(G, GV, CS)
+subroutine compute_stress_ANN_collocated(G, GV, CS, sh_xy, sh_xx, vort_xy, k)
   type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
   type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: &
+                      sh_xy, &       !< Shearing strain at q points [T-1 ~> s-1]
+                      vort_xy        !< Vorticity at q points [T-1 ~> s-1]
 
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: i, j, k, n, m
+  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: &
+                      sh_xx          !< Horizontal tension at h points [T-1 ~> s-1]
+  integer, intent(in) :: k           !< The vertical index of the layer to be passed
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: i, j, n, m
   integer :: ii, jj
   integer :: nij
 
@@ -700,9 +712,19 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
         norm_h       ! Norm of input feautres in center points [T-1 ~> s-1]
 
   type(group_pass_type) :: pass_vel_grads  ! A handle used for group halo passes
-  type(group_pass_type) :: pass_flux       ! A handle used for group halo passes
 
-  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  ! If stencil_size==3, the halo required to apply the model
+  ! in center points is only 1. This halo is available
+  ! without MPI exhchange in symmetric and non-symmetric memory models
+  if (CS%stencil_size > 3) then
+    call create_group_pass(pass_vel_grads, sh_xy, G%Domain, position=CORNER)
+    call create_group_pass(pass_vel_grads, vort_xy, G%Domain, position=CORNER)
+    call do_group_pass(pass_vel_grads, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(sh_xx, G%Domain, clock=CS%id_clock_mpi)
+  endif
+
+  call cpu_clock_begin(CS%id_clock_ANN_features)
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   ! Number of horizontal grid points in ANN inference loop below
@@ -710,97 +732,70 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   allocate(x(nij, 3 * CS%stencil_size**2))
   allocate(y(nij, 3))
 
-  ! If stencil_size==3, the halo required to apply the model
-  ! in center points is only 1. This halo is available
-  ! without MPI exhchange in symmetric and non-symmetric memory models
-  if (CS%stencil_size > 3) then
-    call create_group_pass(pass_vel_grads, CS%sh_xy, G%Domain, position=CORNER)
-    call create_group_pass(pass_vel_grads, CS%vort_xy, G%Domain, position=CORNER)
-    call do_group_pass(pass_vel_grads, G%Domain, clock=CS%id_clock_mpi)
-    call pass_var(CS%sh_xx, G%Domain, clock=CS%id_clock_mpi)
-  endif
-
   offset = (CS%stencil_size-1)/2
   stencil_points = CS%stencil_size**2
 
-  do k=1,nz
-    call cpu_clock_begin(CS%id_clock_ANN_features)
-    ! Precompute interpolated values to efficiently reuse in the next loop.
-    ! Interpolation from corner to center assuming that B.C.
-    ! is already applied
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      sh_xy_h(i,j) = 0.25 * ( (CS%sh_xy(i-1,j-1,k) + CS%sh_xy(i,j,k)) &
-                            + (CS%sh_xy(i-1,j,k) + CS%sh_xy(i,j-1,k)) )
-      vort_xy_h(i,j) = 0.25 * ( (CS%vort_xy(i-1,j-1,k) + CS%vort_xy(i,j,k)) &
-                              + (CS%vort_xy(i-1,j,k) + CS%vort_xy(i,j-1,k)) )
-    enddo; enddo
+  ! Precompute interpolated values to efficiently reuse in the next loop.
+  ! Interpolation from corner to center assuming that B.C.
+  ! is already applied
+  do j=js-1,je+1 ; do i=is-1,ie+1
+    sh_xy_h(i,j) = 0.25 * ( (sh_xy(i-1,j-1) + sh_xy(i,j)) &
+                          + (sh_xy(i-1,j) + sh_xy(i,j-1)) )
+    vort_xy_h(i,j) = 0.25 * ( (vort_xy(i-1,j-1) + vort_xy(i,j)) &
+                            + (vort_xy(i-1,j) + vort_xy(i,j-1)) )
+  enddo; enddo
 
-    m = 0
-    do j=js,je ; do i=is,ie
-      m = m + 1
-      tmp = 0.
-      n = 0
-      ! Fuse assembling a vector of input features
-      ! and computation of its norm
-      do jj = j-offset, j+offset
-        do ii = i-offset, i+offset
-          n = n + 1
-          x1 = sh_xy_h(ii,jj)
-          x2 = CS%sh_xx(ii,jj,k)
-          x3 = vort_xy_h(ii,jj)
+  m = 0
+  do j=js,je ; do i=is,ie
+    m = m + 1
+    tmp = 0.
+    n = 0
+    ! Fuse assembling a vector of input features
+    ! and computation of its norm
+    do jj = j-offset, j+offset
+      do ii = i-offset, i+offset
+        n = n + 1
+        x1 = sh_xy_h(ii,jj)
+        x2 = sh_xx(ii,jj)
+        x3 = vort_xy_h(ii,jj)
 
-          xx(n)                  = x1
-          xx(n+stencil_points)   = x2
-          xx(n+2*stencil_points) = x3
+        xx(n)                  = x1
+        xx(n+stencil_points)   = x2
+        xx(n+2*stencil_points) = x3
 
-          tmp = tmp + (((x1*x1) + x2*x2) + x3*x3)
-        end do
+        tmp = tmp + (((x1*x1) + x2*x2) + x3*x3)
       end do
-      norm_h(i,j) = sqrt(tmp)
+    end do
+    norm_h(i,j) = sqrt(tmp)
 
-      ! Normalize the input features using dimensional scaling
-      do n=1, 3*stencil_points
-        x(m,n) = xx(n) / (norm_h(i,j) + CS%subroundoff_shear)
-      enddo
-    enddo; enddo
-    call cpu_clock_end(CS%id_clock_ANN_features)
+    ! Normalize the input features using dimensional scaling
+    do n=1, 3*stencil_points
+      x(m,n) = xx(n) / (norm_h(i,j) + CS%subroundoff_shear)
+    enddo
+  enddo; enddo
+  call cpu_clock_end(CS%id_clock_ANN_features)
 
-    call cpu_clock_begin(CS%id_clock_ANN_inference)
-    call ANN_apply_array_sio_r4(nij, x, y, CS%ann_Tall)
-    call cpu_clock_end(CS%id_clock_ANN_inference)
-
-    call cpu_clock_begin(CS%id_clock_ANN_features)
-    m = 0
-    do j=js,je ; do i=is,ie
-      m = m+1
-      ! Denormalize the output features using dimensional scaling
-      do n=1,3
-        yy(n) = y(m, n) * norm_h(i,j) * norm_h(i,j) * CS%kappa_h(i,j)
-      enddo
-
-      CS%Txy_h(i,j,k) = yy(1)
-      CS%Txx(i,j,k)   = yy(2)
-      CS%Tyy(i,j,k)   = yy(3)
-    enddo ; enddo
-
-    call cpu_clock_end(CS%id_clock_ANN_features)
-  enddo ! end of k loop
-
-  call create_group_pass(pass_flux, CS%Txy_h, G%Domain, halo=2)
-  call create_group_pass(pass_flux, CS%Txx, G%Domain, halo=2)
-  call create_group_pass(pass_flux, CS%Tyy, G%Domain, halo=2)
-  call do_group_pass(pass_flux, G%Domain, clock=CS%id_clock_mpi)
+  call cpu_clock_begin(CS%id_clock_ANN_inference)
+  call ANN_apply_array_sio_r4(nij, x, y, CS%ann_Tall)
+  call cpu_clock_end(CS%id_clock_ANN_inference)
 
   call cpu_clock_begin(CS%id_clock_ANN_features)
-  do k=1,nz
-    do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-      CS%Txy(I,J,k) = 0.25 * ( (CS%Txy_h(i+1,j+1,k) + CS%Txy_h(i,j,k)) &
-                             + (CS%Txy_h(i+1,j,k)   + CS%Txy_h(i,j+1,k))) * G%mask2dBu(I,J)
-    enddo; enddo
-  enddo
+  m = 0
+  do j=js,je ; do i=is,ie
+    m = m+1
+    ! Denormalize the output features using dimensional scaling
+    do n=1,3
+      yy(n) = y(m, n) * norm_h(i,j) * norm_h(i,j) * CS%kappa_h(i,j)
+    enddo
+
+    CS%Txy_h(i,j,k) = yy(1)
+    CS%Txx(i,j,k)   = yy(2)
+    CS%Tyy(i,j,k)   = yy(3)
+  enddo ; enddo
 
   deallocate(x)
   deallocate(y)
+
   call cpu_clock_end(CS%id_clock_ANN_features)
 
 end subroutine compute_stress_ANN_collocated
@@ -859,6 +854,8 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
   real :: h_v ! Thickness interpolated to v points [H ~> m or kg m-2].
   real :: fx  ! Zonal acceleration      [L T-2 ~> m s-2]
   real :: fy  ! Meridional acceleration [L T-2 ~> m s-2]
+  real :: Txy ! Subgrid stress xy component in q [L2 T-2 ~> m2 s-2]
+  real :: c_diss ! Attenuation parameter [nondim] (Klower2018, Juricke2019,2020)
 
   real :: h_neglect    ! Thickness so small it can be lost in
                        ! roundoff and so neglected [H ~> m or kg m-2]
@@ -877,33 +874,31 @@ subroutine compute_stress_divergence(u, v, h, diffu, diffv, dx2h, dy2h, dx2q, dy
 
   h_neglect  = GV%H_subroundoff
 
+  c_diss = 1.
   do k=1,nz
-    if (CS%Klower_R_diss > 0) then
-      do J=js-1,Jeq ; do I=is-1,Ieq
-          Mxy(I,J) = (CS%Txy(I,J,k) *                                         &
-                      (0.25 * ( (CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
-                              + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))  &
-                      )                                                       &
-                     ) * CS%hq(I,J,k)
-      enddo ; enddo
-    else
-      do J=js-1,Jeq ; do I=is-1,Ieq
-        Mxy(I,J) = CS%Txy(I,J,k) * CS%hq(I,J,k)
-      enddo ; enddo
-    endif
+    do J=js-1,Jeq ; do I=is-1,Ieq
+        if (CS%use_ann) then
+          Txy = 0.25 * (  (CS%Txy_h(i+1,j+1,k) + CS%Txy_h(i,j,k)) &
+                        + (CS%Txy_h(i+1,j,k)   + CS%Txy_h(i,j+1,k))) * G%mask2dBu(I,J)
+        else
+          Txy = CS%Txy(I,J,k)
+        endif
+        if (CS%Klower_R_diss > 0) then
+          c_diss = 0.25 * ( (CS%c_diss(i,j  ,k) + CS%c_diss(i+1,j+1,k))   &
+                          + (CS%c_diss(i,j+1,k) + CS%c_diss(i+1,j  ,k)))
+        endif
 
-    if (CS%Klower_R_diss > 0) then
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        Mxx(i,j) = ((CS%Txx(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dy2h(i,j)
-        Myy(i,j) = ((CS%Tyy(i,j,k) * CS%c_diss(i,j,k)) * h(i,j,k)) * dx2h(i,j)
-      enddo ; enddo
-    else
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        Mxx(i,j) = ((CS%Txx(i,j,k)) * h(i,j,k)) * dy2h(i,j)
-        Myy(i,j) = ((CS%Tyy(i,j,k)) * h(i,j,k)) * dx2h(i,j)
-      enddo ; enddo
-    endif
-
+        Mxy(I,J) = Txy * c_diss * CS%hq(I,J,k)
+    enddo ; enddo
+    
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      if (CS%Klower_R_diss > 0) then
+        c_diss = CS%c_diss(i,j,k)
+      endif
+      Mxx(i,j) = ((CS%Txx(i,j,k) * c_diss) * h(i,j,k)) * dy2h(i,j)
+      Myy(i,j) = ((CS%Tyy(i,j,k) * c_diss) * h(i,j,k)) * dx2h(i,j)
+    enddo ; enddo
+    
     ! Evaluate du/dt=1/h x.Div(h T) (Line 1495 of MOM_hor_visc.F90)
     do j=js,je ; do I=Isq,Ieq
       h_u = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k)) + h_neglect
