@@ -512,7 +512,7 @@ subroutine compute_c_diss(G, GV, CS, sh_xy, sh_xx, vort_xy, k)
                       sh_xy, &       !< Shearing strain at q points [T-1 ~> s-1]
                       vort_xy        !< Vorticity at q points [T-1 ~> s-1]
 
-  real, dimension(SZIB_(G),SZJB_(G)), intent(in) :: &
+  real, dimension(SZI_(G), SZJ_(G)), intent(in) :: &
                       sh_xx          !< Horizontal tension at h points [T-1 ~> s-1]
   integer, intent(in) :: k           !< The vertical index of the layer to be passed
 
@@ -681,7 +681,7 @@ subroutine compute_stress_ANN_collocated(G, GV, CS, sh_xy, sh_xx, vort_xy, k)
                       sh_xy, &       !< Shearing strain at q points [T-1 ~> s-1]
                       vort_xy        !< Vorticity at q points [T-1 ~> s-1]
 
-  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: &
+  real, dimension(SZI_(G), SZJ_(G)), intent(inout) :: &
                       sh_xx          !< Horizontal tension at h points [T-1 ~> s-1]
   integer, intent(in) :: k           !< The vertical index of the layer to be passed
 

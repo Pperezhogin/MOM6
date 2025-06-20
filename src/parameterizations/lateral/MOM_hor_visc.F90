@@ -1579,6 +1579,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
     ! Pass the velocity gradients and thickness to ZB2020
     if (CS%use_ZB2020) then
+      sh_xx(:,:) = sh_xx(:,:) * G%mask2dT(:,:)
       call ZB2020_layerwise_computations(sh_xx, sh_xy, vort_xy, hq, G, GV, CS%ZB2020, k)
     endif
 
