@@ -684,10 +684,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   real, allocatable :: y(:,:)        ! Vector of nondimensional
                                      ! output features number of horizontal grid points x
                                      ! (Txy,Txx,Tyy) [nondim]
-  real :: xx(3*CS%stencil_size**2)   ! Vector of dimensional input features
-                                     ! (sh_xy, sh_xx, vort_xy) on a stencil [T-1 ~> s-1]
-  real :: yy(3)                      ! Vector of dimensional
-                                     ! output features (Txy,Txx,Tyy) [L2 T-2 ~> m2 s-2]
+  real, allocatable :: input_norm(:) ! Inverse norm of input features in center points [T ~> s]
+  real, allocatable :: output_norm(:)! Norm of output features in center points [L2T-2 ~> m2 s-2]
   real :: tmp                        ! Temporal value of squared norm [T-2 ~> s-2]
   real :: x1, x2, x3                 ! Components of the velocity gradient tensor
                                      ! (sh_xy, sh_xx, vort_xy) at a point [T-1 ~> s-1]
@@ -697,7 +695,6 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   real, dimension(SZI_(G),SZJ_(G)) :: &
         sh_xy_h, &    ! Shearing strain interpolated to h point [T-1 ~> s-1]
         vort_xy_h, &  ! Vorticity to h point [T-1 ~> s-1]
-        norm_h       ! Norm of input feautres in center points [T-1 ~> s-1]
 
   type(group_pass_type) :: pass_vel_grads  ! A handle used for group halo passes
   type(group_pass_type) :: pass_flux       ! A handle used for group halo passes
@@ -709,6 +706,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   nij = (ie - is + 1) * (je - js + 1)
   allocate(x(nij, 3 * CS%stencil_size**2))
   allocate(y(nij, 3))
+  allocate(input_norm(nij))
+  allocate(output_norm(nij))
 
   ! If stencil_size==3, the halo required to apply the model
   ! in center points is only 1. This halo is available
@@ -749,20 +748,24 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
           x2 = CS%sh_xx(ii,jj,k)
           x3 = vort_xy_h(ii,jj)
 
-          xx(n)                  = x1
-          xx(n+stencil_points)   = x2
-          xx(n+2*stencil_points) = x3
+          x(m,n)                  = x1
+          x(m,n+stencil_points)   = x2
+          x(m,n+2*stencil_points) = x3
 
           tmp = tmp + (((x1*x1) + x2*x2) + x3*x3)
         end do
       end do
-      norm_h(i,j) = sqrt(tmp)
-
-      ! Normalize the input features using dimensional scaling
-      do n=1, 3*stencil_points
-        x(m,n) = xx(n) / (norm_h(i,j) + CS%subroundoff_shear)
-      enddo
+      ! Momentum fluxes scale as dx^2 * |grad V|^2
+      output_norm(m) = tmp * CS%kappa_h(i,j)
+      ! Input features are simply normalized by their norm
+      input_norm(m) = 1. / (sqrt(tmp) + CS%subroundoff_shear)
     enddo; enddo
+    ! Normalize the input features using dimensional scaling
+    do n=1, 3*stencil_points
+      do m=1,nij
+        x(m,n) = x(m,n) * input_norm(m)
+      enddo
+    enddo
     call cpu_clock_end(CS%id_clock_ANN_features)
 
     call cpu_clock_begin(CS%id_clock_ANN_inference)
@@ -774,13 +777,9 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
     do j=js,je ; do i=is,ie
       m = m+1
       ! Denormalize the output features using dimensional scaling
-      do n=1,3
-        yy(n) = y(m, n) * norm_h(i,j) * norm_h(i,j) * CS%kappa_h(i,j)
-      enddo
-
-      CS%Txy_h(i,j,k) = yy(1)
-      CS%Txx(i,j,k)   = yy(2)
-      CS%Tyy(i,j,k)   = yy(3)
+      CS%Txy_h(i,j,k) = y(m, 1) * output_norm(m)
+      CS%Txx(i,j,k)   = y(m, 2) * output_norm(m)
+      CS%Tyy(i,j,k)   = y(m, 3) * output_norm(m)
     enddo ; enddo
 
     call cpu_clock_end(CS%id_clock_ANN_features)
@@ -801,6 +800,8 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
   deallocate(x)
   deallocate(y)
+  deallocate(input_norm)
+  deallocate(output_norm)
   call cpu_clock_end(CS%id_clock_ANN_features)
 
 end subroutine compute_stress_ANN_collocated
