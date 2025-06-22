@@ -694,7 +694,7 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
         sh_xy_h, &    ! Shearing strain interpolated to h point [T-1 ~> s-1]
-        vort_xy_h, &  ! Vorticity to h point [T-1 ~> s-1]
+        vort_xy_h     ! Vorticity to h point [T-1 ~> s-1]
 
   type(group_pass_type) :: pass_vel_grads  ! A handle used for group halo passes
   type(group_pass_type) :: pass_flux       ! A handle used for group halo passes
