@@ -786,6 +786,9 @@ logical function ANN_unit_tests(verbose)
     call ANN_apply_array_sio(20, x2, y2, ANN)
     rand_res = rand_res .or. maxval( abs( maxval(y2(:,:),1) - y_good(:) ) ) > 0. ! Check results from array v2 = v1
     rand_res = rand_res .or. maxval( abs( minval(y2(:,:),1) - y_good(:) ) ) > 0. ! Check results from array v2 = v1
+    call ANN_apply_array_sio_r4(20, x2, y2, ANN)
+    rand_res = rand_res .or. maxval( abs( maxval(y2(:,:),1) - y_good(:) ) ) / maxval(abs(y_good(:))) > 1.e-4 ! Here accuracy is only real(4)
+    rand_res = rand_res .or. maxval( abs( minval(y2(:,:),1) - y_good(:) ) ) / maxval(abs(y_good(:))) > 1.e-4 ! Here accuracy is only real(4)
     deallocate( x, y, y_good, x2, y2 )
     call ANN_end(ANN)
   enddo
