@@ -22,7 +22,7 @@ def create_slurm(p, filename):
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
     'source ~/MOM6-examples/build/intel/env',
-    'time srun ./MOM6 > out.txt',
+    'time srun /home/pp2681/MOM6-examples/build/compiled_executables/MOM6-WENO-ANN > out.txt',
     'sacct -j $SLURM_JOB_ID --format=JobID,JobName,MaxRSS,Elapsed',
     'sacct -j $SLURM_JOB_ID --units=G --format=User,JobID%24,JobName,state,elapsed,TotalCPU,ReqMem,MaxRss,MaxVMSize,nnodes,ncpus,nodelist,Elapsed',
     'mkdir -p output',
@@ -183,6 +183,8 @@ PARAMETERS = dictionary(
     VG_SHARP_SEL=1,
     STRESS_SMOOTH_PASS=0,
     STRESS_SMOOTH_SEL=1,
+    U_TRUNC_FILE = 'U_velocity_truncations',
+    V_TRUNC_FILE = 'V_velocity_truncations'
 ) + configuration('R4')
 
 JansenHeld = dictionary(
@@ -654,15 +656,92 @@ if __name__ == '__main__':
     #             hpc = HPC.add(mem=10, ntasks=ntasks)
     #             run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/ANN-32-32/EXP2-{conf}/ZB-1.0-Cs-{SMAG}', hpc, parameters)
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        for SMAG in ['0.06']:
-                for model in ['20-seed0', '20-seed1', '32-32-seed0', '32-32-seed1', '16-8-seed0', '16-8-seed1']:
-                    parameters = PARAMETERS.add(
-                        SMAG_BI_CONST=SMAG,
-                        USE_ZB2020='True',
-                        ZB_SCALING=1.0, USE_ANN=3, 
-                        ANN_FILE_TALL=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter-large/FGR3/flux-models/{model}/model/Tall.nc',
-                        ).add(**configuration(conf))
-                    ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-                    hpc = HPC.add(mem=10, ntasks=ntasks, begin='5hours')
-                    run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/flux-models/{model}/{conf}-ZB-1.0-Cs-{SMAG}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     for SMAG in ['0.06']:
+    #             for model in ['20-seed0', '20-seed1', '32-32-seed0', '32-32-seed1', '16-8-seed0', '16-8-seed1']:
+    #                 parameters = PARAMETERS.add(
+    #                     SMAG_BI_CONST=SMAG,
+    #                     USE_ZB2020='True',
+    #                     ZB_SCALING=1.0, USE_ANN=3, 
+    #                     ANN_FILE_TALL=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter-large/FGR3/flux-models/{model}/model/Tall.nc',
+    #                     ).add(**configuration(conf))
+    #                 ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #                 hpc = HPC.add(mem=10, ntasks=ntasks, begin='5hours')
+    #                 run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/flux-models/{model}/{conf}-ZB-1.0-Cs-{SMAG}', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(
+    #         USE_ZB2020='True',
+    #         ZB2020_USE_ANN='True',
+    #         ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/EXP1/model/Tall.nc',
+    #         USE_CIRCULATION_IN_HORVISC='True',
+    #         SMAGORINSKY_AH='False',
+    #         BOUND_CORIOLIS='False',
+    #         NIHALO = 5,
+    #         NJHALO = 5,
+    #         CORIOLIS_SCHEME='WENOVI7TH_PV_ENSTRO',
+    #         KE_SCHEME='KE_UP3',
+    #         UP3_LIMITER='UP3_KOREN',
+    #         H_THRESH='1e-20'
+    #         ).add(**configuration(conf))
+    #     ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #     hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-default/{conf}', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(
+    #         USE_ZB2020='True',
+    #         ZB2020_USE_ANN='True',
+    #         ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/Collocated-NN-params/hdn-32-32/model/Tall.nc',
+    #         USE_CIRCULATION_IN_HORVISC='True',
+    #         SMAGORINSKY_AH='False',
+    #         BOUND_CORIOLIS='False',
+    #         NIHALO = 5,
+    #         NJHALO = 5,
+    #         CORIOLIS_SCHEME='WENOVI7TH_PV_ENSTRO',
+    #         KE_SCHEME='KE_UP3',
+    #         UP3_LIMITER='UP3_KOREN',
+    #         H_THRESH='1e-20'
+    #         ).add(**configuration(conf))
+    #     ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #     hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-32-32-div/{conf}', hpc, parameters)
+
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(
+    #         USE_ZB2020='True',
+    #         ZB2020_USE_ANN='True',
+    #         ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter-large/FGR3/flux-models/32-32-seed0/model/Tall.nc',
+    #         USE_CIRCULATION_IN_HORVISC='True',
+    #         SMAGORINSKY_AH='False',
+    #         BOUND_CORIOLIS='False',
+    #         NIHALO = 5,
+    #         NJHALO = 5,
+    #         CORIOLIS_SCHEME='WENOVI7TH_PV_ENSTRO',
+    #         KE_SCHEME='KE_UP3',
+    #         UP3_LIMITER='UP3_KOREN',
+    #         H_THRESH='1e-20'
+    #         ).add(**configuration(conf))
+    #     ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #     hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-32-32-flux/{conf}', hpc, parameters)
+
+    #for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    for conf in ['R6', 'R7', 'R8']:
+        parameters = PARAMETERS.add(
+            USE_ZB2020='True',
+            ZB2020_USE_ANN='True',
+            ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR2/EXP1/model/Tall.nc',
+            USE_CIRCULATION_IN_HORVISC='True',
+            SMAGORINSKY_AH='False',
+            BOUND_CORIOLIS='False',
+            NIHALO = 5,
+            NJHALO = 5,
+            CORIOLIS_SCHEME='WENOVI7TH_PV_ENSTRO',
+            KE_SCHEME='KE_UP3',
+            UP3_LIMITER='UP3_KOREN',
+            H_THRESH='1e-20'
+            ).add(**configuration(conf))
+        ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+        hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
+        run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-FGR2-EXP1/{conf}', hpc, parameters)
