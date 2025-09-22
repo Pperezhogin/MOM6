@@ -44,6 +44,9 @@ type, public :: ZB2020_CS ; private
                               !! geostrophically-unbalanced flows (Klower 2018, Juricke2020,2019)
                               !! Subgrid stress is multiplied by 1/(1+(shear/(f*R_diss)))
                               !! R_diss=-1: attenuation is not used; typical value R_diss=1.0 [nondim]
+  real :: c1, c2, c3, c4      !! Nondimensional numbers of velocity gradient model of order 6 (VGM6),
+                              !! c1-c3. Additional c4 is Smagorinsky coefficient - an additional 
+                              !! dissipation/backscatter
   integer   :: Klower_shear   !< Type of expression for shear in Klower formula
                               !! 0: sqrt(sh_xx**2 + sh_xy**2)
                               !! 1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
@@ -77,6 +80,7 @@ type, public :: ZB2020_CS ; private
         maskw_h,  & !< Mask of land point at h points multiplied by filter weight [nondim]
         maskw_q     !< Same mask but for q points [nondim]
 
+  logical :: use_VGM6 !< Use VGM6 subgrid parameterization
   logical :: use_ann  !< If True, momentum fluxes are inferred with ANN
   integer :: stencil_size  !< Default is 3x3
   type(ANN_CS) :: ann_Tall !< ANN instance for off-diagonal and diagonal stress
@@ -149,6 +153,9 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
                  "subgrid momentum parameterization of mesoscale eddies.", default=.false.)
   if (.not. use_ZB2020) return
 
+  call get_param(param_file, mdl, "ZB2020_USE_VGM6", CS%use_VGM6, &
+                 "VGM6 inference of momentum fluxes", default=.false.)
+
   call get_param(param_file, mdl, "ZB2020_USE_ANN", CS%use_ann, &
                  "ANN inference of momentum fluxes", default=.false.)
 
@@ -162,6 +169,18 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   call get_param(param_file, mdl, "ZB_SCALING", CS%amplitude, &
                  "The nondimensional scaling factor in ZB model, " //&
                  "typically 0.5-2.5", units="nondim", default=0.5)
+
+  call get_param(param_file, mdl, "VGM6_c1", CS%c1, &
+                 "2nd order coefficient of VGM6", units="nondim", default=0.57)
+
+  call get_param(param_file, mdl, "VGM6_c2", CS%c2, &
+                 "4nd order coefficient of VGM6", units="nondim", default=0.9)
+
+  call get_param(param_file, mdl, "VGM6_c3", CS%c3, &
+                 "6th order coefficient of VGM6", units="nondim", default=1.55)
+
+  call get_param(param_file, mdl, "VGM6_c4", CS%c4, &
+                 "Additional Smagorinsky coefficient in VGM6", units="nondim", default=0.0)
 
   call get_param(param_file, mdl, "ZB_TRACE_MODE", CS%ZB_type, &
                  "Select how to compute the trace part of ZB model:\n" //&
@@ -462,6 +481,8 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
   ! (optionally sharpened) velocity gradients
   if (CS%use_ann) then
     call compute_stress_ANN_collocated(G, GV, CS)
+  elseif (CS%use_VGM6) then
+    call high_order_grad_model(u, v, G, GV, CS)
   else
     call compute_stress(G, GV, CS)
   endif
@@ -783,6 +804,188 @@ subroutine compute_stress_ANN_collocated(G, GV, CS)
   call cpu_clock_end(CS%id_clock_stress_ANN)
 
 end subroutine compute_stress_ANN_collocated
+
+
+!!! B.C. and halo are assumed to be applied.
+!!! B.C. is applied at the output
+function ddx(array, G) result(output)
+  type(ocean_grid_type),   intent(in)          :: G      !< The ocean's grid structure.
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: array  !< Array in center points [any]
+  real, dimension(SZI_(G),SZJ_(G)) :: output !< Array in center points [any]
+
+  integer :: is, ie, js, je, i, j
+
+  is  = G%isc  ; ie  = G%iec
+  js  = G%jsc  ; je  = G%jec
+
+  do j=js,je ; do i=is,ie
+    output(i,j) = 0.5 * G%mask2dT(i,j) *                                           &
+                ((array(i+1,j) - array(i,j)) * G%IdxCu(I,j)   * G%mask2dCu(I,j) +  &
+                 (array(i,j) - array(i-1,j)) * G%IdxCu(I-1,j) * G%mask2dCu(I-1,j))
+  enddo; enddo
+end function ddx
+
+!!! B.C. and halo are assumed to be applied.
+!!! B.C. is applied at the output
+function ddy(array, G) result(output)
+  type(ocean_grid_type),   intent(in)          :: G      !< The ocean's grid structure.
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: array  !< Array in center points [any]
+  real, dimension(SZI_(G),SZJ_(G)) :: output !< Array in center points [any]
+
+  integer :: is, ie, js, je, i, j
+
+  is  = G%isc  ; ie  = G%iec
+  js  = G%jsc  ; je  = G%jec
+
+  do j=js,je ; do i=is,ie
+    output(i,j) = 0.5 * G%mask2dT(i,j) *                                           &
+                ((array(i,j+1) - array(i,j)) * G%IdyCv(i,J)   * G%mask2dCv(i,J) +  &
+                 (array(i,j) - array(i,j-1)) * G%IdyCv(i,J-1) * G%mask2dCv(i,J-1))
+  enddo; enddo
+end function ddy
+
+!> Compute stress tensor 
+!!  T =
+!! (Txx, Txy;
+!!  Txy, Tyy)
+!! Which contributes to accceleration as follows:
+!! du/dt = div(T) = div(bar(u)bar(u) - bar(uu))
+!! tr(T) < 0
+!! We use 6th order gradient model + Smagorinsky, that is
+!! T = - c1 * delta^2 * nabla(u) * nabla(u) + 
+!!     - c2 * delta^4 * nabla^2(u) * nabla^2(u)
+!!     - c3 * delta^6 * nabla^3(u) * nabla^3(u)
+!!     + с4 * delta^2 |S| S_ij
+!! Reasonable values for all coefficients are as follows
+!! (assuming FGR=3)
+!! c1 = 1 * 3/4
+!! c2 = 1/2 * (3/4)^2 = 9/32 = 0.28125
+!! c3 = 1/6 * (3/4)^3 = 27/384 = 0.0703125
+!! Here, 1, 1/2, 1/6 are n!. Also, 3/4 is FGR^2/12. This becomes
+!! 1/12 naturally in typical LES applications of 3D turbulence.
+!! However, in practice for wide filters we find values of c1,c2,c3 in a range 0..2.
+!! In particular,
+!! c1=0.5, c2=1, c3=1.77
+!! Typical value of Smagorinsky coefficient (c4) should be between -0.5 and 0.5
+!! Negative c4 is backscatter, positive is dissipation.
+!! Note that negative c4/8 should be smaller than the biharmonic smagorinsky coefficient,
+!! which is 0.06
+subroutine high_order_grad_model(u, v, G, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(ZB2020_CS),         intent(inout) :: CS   !< ZB2020 control structure.
+
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                                 intent(in)    :: u  !< The zonal velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                                 intent(in)    :: v  !< The meridional velocity [L T-1 ~> m s-1].
+
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k
+
+  real :: shear, & ! [s-1]
+          sh_xy_h       ! Shearing strain interpolated to h point [T-1 ~> s-1]
+  
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        Txy, &      ! Predicted Txy in center points          [T-1 ~> s-1]
+        delta2      ! [m^2]
+
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        u_h, v_h ! [m s-1]
+
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        dudx, dudy, dvdx, dvdy ! [s-1]
+  
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        d2udx2, d2udxdy, d2udy2, d2vdx2, d2vdxdy, d2vdy2 ! [s-1m-1]
+
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+        d3udx3, d3udx2dy, d3udxdy2, d3udy3, d3vdx3, d3vdx2dy, d3vdxdy2, d3vdy3 ! [s-1m-2]
+
+  call cpu_clock_begin(CS%id_clock_stress)
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  ! Interpolate input features
+  do k=1,nz
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      u_h(i,j) = (u(I,j,k) + u(I-1,j,k)) * 0.5 * G%mask2dT(i,j)
+      v_h(i,j) = (v(i,J,k) + v(i,J-1,k)) * 0.5 * G%mask2dT(i,j)
+      delta2(i,j) = G%areaT(i,j) * G%mask2dT(i,j)
+    enddo; enddo
+
+    dudx = ddx(u_h,G)
+    dudy = ddy(u_h,G)
+    dvdx = ddx(v_h,G)
+    dvdy = ddx(v_h,G)
+
+    call pass_var(dudx, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(dudy, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(dvdx, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(dvdy, G%Domain, clock=CS%id_clock_mpi)
+
+    d2udx2  = ddx(dudx,G)
+    d2udxdy = ddy(dudx,G)
+    d2udy2  = ddy(dudy,G)
+
+    d2vdx2  = ddx(dvdx,G)
+    d2vdxdy = ddy(dvdx,G)
+    d2vdy2  = ddy(dvdy,G)
+
+    call pass_var(d2udx2, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(d2udxdy, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(d2udy2, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(d2vdx2, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(d2vdxdy, G%Domain, clock=CS%id_clock_mpi)
+    call pass_var(d2vdy2, G%Domain, clock=CS%id_clock_mpi)
+
+    d3udx3    = ddx(d2udx2,G)
+    d3udx2dy  = ddy(d2udx2,G)
+    d3udxdy2  = ddx(d2udy2,G)
+    d3udy3    = ddy(d2udy2,G)
+
+    d3vdx3    = ddx(d2vdx2,G)
+    d3vdx2dy  = ddy(d2vdx2,G)
+    d3vdxdy2  = ddx(d2vdy2,G)
+    d3vdy3    = ddy(d2vdy2,G)
+
+    do j=js,je ; do i=is,ie
+      sh_xy_h = 0.25 * ( (CS%sh_xy(I-1,J-1,k) + CS%sh_xy(I,J,k)) &
+                       + (CS%sh_xy(I-1,J,k) + CS%sh_xy(I,J-1,k)) ) * G%mask2dT(i,j)
+      shear = sqrt(CS%sh_xx(i,j,k)**2 + sh_xy_h**2)
+
+      CS%Txx(i,j,k) = - CS%c1 * delta2(i,j)    * (dudx(i,j)**2   + dudy(i,j)**2) & 
+                      - CS%c2 * delta2(i,j)**2 * (d2udx2(i,j)**2 + d2udy2(i,j)**2 + 2 * d2udxdy(i,j)**2) &
+                      - CS%c3 * delta2(i,j)**3 * (d3udx3(i,j)**2 + d3udy3(i,j)**2 + 3 * (d3udx2dy(i,j)**2 + d3udxdy2(i,j)**2)) &
+                      + CS%c4 * delta2(i,j)    * shear * CS%sh_xx(i,j,k)
+
+      CS%Tyy(i,j,k) = - CS%c1 * delta2(i,j)    * (dvdx(i,j)**2   + dvdy(i,j)**2) & 
+                      - CS%c2 * delta2(i,j)**2 * (d2vdx2(i,j)**2 + d2vdy2(i,j)**2 + 2 * d2vdxdy(i,j)**2) &
+                      - CS%c3 * delta2(i,j)**3 * (d3vdx3(i,j)**2 + d3vdy3(i,j)**2 + 3 * (d3vdx2dy(i,j)**2 + d3vdxdy2(i,j)**2)) &
+                      - CS%c4 * delta2(i,j)    * shear * CS%sh_xx(i,j,k)
+      
+      Txy(i,j)      = - CS%c1 * delta2(i,j)    * (dudx(i,j) * dvdx(i,j) + dudy(i,j)*dvdy(i,j)) & 
+                      - CS%c2 * delta2(i,j)**2 * (d2udx2(i,j)*d2vdx2(i,j) + d2udy2(i,j)*d2vdy2(i,j) + 2 * d2udxdy(i,j)*d2vdxdy(i,j)) &
+                      - CS%c3 * delta2(i,j)**3 * (d3udx3(i,j)*d3vdx3(i,j) + d3udy3(i,j)*d3vdy3(i,j) + 3 * (d3udx2dy(i,j)*d3vdx2dy(i,j) + d3udxdy2(i,j)*d3vdxdy2(i,j))) &
+                      + CS%c4 * delta2(i,j)    * shear * sh_xy_h
+    enddo; enddo
+
+    call pass_var(Txy, G%Domain, clock=CS%id_clock_mpi)
+    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+      CS%Txy(I,J,k) = 0.25 * ( (Txy(i+1,j+1) + Txy(i,j)) &
+                             + (Txy(i+1,j)   + Txy(i,j+1))) * G%mask2dBu(I,J)
+    enddo; enddo
+
+  enddo ! end of k loop
+
+  call pass_var(CS%Txy, G%Domain, clock=CS%id_clock_mpi, position=CORNER)
+  call pass_var(CS%Txx, G%Domain, clock=CS%id_clock_mpi)
+  call pass_var(CS%Tyy, G%Domain, clock=CS%id_clock_mpi)
+
+  call cpu_clock_end(CS%id_clock_stress)
+
+end subroutine high_order_grad_model
 
 !> Compute the divergence of subgrid stress
 !! weighted with thickness, i.e.
