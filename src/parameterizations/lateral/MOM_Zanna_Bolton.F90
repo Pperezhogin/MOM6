@@ -906,6 +906,29 @@ subroutine high_order_grad_model(u, v, G, GV, CS)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  
+  Txy = 0.
+  delta2 = 0.
+  u_h = 0.
+  v_h = 0.
+  dudx = 0.
+  dudy = 0.
+  dvdx = 0.
+  dvdy = 0.
+  d2udx2=0.
+  d2udxdy=0.
+  d2udy2=0.
+  d2vdx2=0.
+  d2vdxdy=0.
+  d2vdy2=0.
+  d3udx3=0.
+  d3udx2dy=0.
+  d3udxdy2=0.
+  d3udy3=0.
+  d3vdx3=0.
+  d3vdx2dy=0.
+  d3vdxdy2=0.
+  d3vdy3=0.
 
   ! Interpolate input features
   do k=1,nz
