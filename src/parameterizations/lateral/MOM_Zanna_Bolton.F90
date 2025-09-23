@@ -94,6 +94,7 @@ type, public :: ZB2020_CS ; private
   integer :: id_Tyy = -1
   integer :: id_Txy = -1
   integer :: id_cdiss = -1
+  integer :: id_h = -1, id_u = -1, id_v = -1
   !>@}
 
   !>@{ CPU time clock IDs
@@ -238,6 +239,13 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
 
   CS%id_Txy = register_diag_field('ocean_model', 'Txy', diag%axesBL, Time, &
       'Off-diagonal term (Txy) in the ZB stress tensor', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+
+  CS%id_h = register_diag_field('ocean_model', 'h_ZB', diag%axesTL, Time, &
+      'Thickness in ZB module', 'm', conversion=GV%H_to_m)
+  CS%id_u = register_diag_field('ocean_model', 'u_ZB', diag%axesCuL, Time, &
+      'Zonal velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
+  CS%id_v = register_diag_field('ocean_model', 'v_ZB', diag%axesCvL, Time, &
+      'Meridional velocity in ZB module', 'ms-1', conversion=US%L_T_to_m_s)
 
   if (CS%Klower_R_diss > 0) then
     CS%id_cdiss = register_diag_field('ocean_model', 'c_diss', diag%axesTL, Time, &
@@ -502,6 +510,10 @@ subroutine ZB2020_lateral_stress(u, v, h, diffu, diffv, G, GV, CS, &
   if (CS%id_Txy>0)       call post_data(CS%id_Txy, CS%Txy, CS%diag)
 
   if (CS%id_cdiss>0)     call post_data(CS%id_cdiss, CS%c_diss, CS%diag)
+
+  if (CS%id_h>0)         call post_data(CS%id_h, h, CS%diag)
+  if (CS%id_u>0)         call post_data(CS%id_u, u, CS%diag)
+  if (CS%id_v>0)         call post_data(CS%id_v, v, CS%diag)
   call cpu_clock_end(CS%id_clock_post)
 
   call cpu_clock_end(CS%id_clock_module)
@@ -941,7 +953,7 @@ subroutine high_order_grad_model(u, v, G, GV, CS)
     dudx = ddx(u_h,G)
     dudy = ddy(u_h,G)
     dvdx = ddx(v_h,G)
-    dvdy = ddx(v_h,G)
+    dvdy = ddy(v_h,G)
 
     call pass_var(dudx, G%Domain, clock=CS%id_clock_mpi)
     call pass_var(dudy, G%Domain, clock=CS%id_clock_mpi)
