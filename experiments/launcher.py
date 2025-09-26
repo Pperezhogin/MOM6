@@ -55,7 +55,7 @@ def run_experiment(folder, hpc, parameters):
     create_MOM_override(parameters, os.path.join(folder,'MOM_override'))
     
     os.system('cp -r ~/MOM6-examples/src/MOM6/experiments/configurations/double_gyre/* '+folder)
-    os.system('cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 '+folder)
+    #os.system('cp ~/MOM6-examples/build/intel/ocean_only/repro/MOM6 '+folder)
 
     with open(os.path.join(folder,'args.json'), 'w') as f:
         json.dump(parameters, f, indent=2)
