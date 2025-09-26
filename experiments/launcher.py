@@ -22,7 +22,7 @@ def create_slurm(p, filename):
     'scontrol show jobid -dd $SLURM_JOB_ID',
     'module purge',
     'source ~/MOM6-examples/build/intel/env',
-    'time srun /home/pp2681/MOM6-examples/build/compiled_executables/MOM6-WENO-ANN > out.txt',
+    'time srun /home/pp2681/MOM6-examples/build/compiled_executables/MOM6-dev-m2lines-Aug18 > out.txt',
     'sacct -j $SLURM_JOB_ID --format=JobID,JobName,MaxRSS,Elapsed',
     'sacct -j $SLURM_JOB_ID --units=G --format=User,JobID%24,JobName,state,elapsed,TotalCPU,ReqMem,MaxRss,MaxVMSize,nnodes,ncpus,nodelist,Elapsed',
     'mkdir -p output',
@@ -726,22 +726,14 @@ if __name__ == '__main__':
     #     hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
     #     run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-32-32-flux/{conf}', hpc, parameters)
 
-    #for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-    for conf in ['R6', 'R7', 'R8']:
+    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
         parameters = PARAMETERS.add(
             USE_ZB2020='True',
+            ZB_SCALING=1.0,
             ZB2020_USE_ANN='True',
-            ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR2/EXP1/model/Tall.nc',
+            ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/equivariant/16-v1/model/Tall.nc',
             USE_CIRCULATION_IN_HORVISC='True',
-            SMAGORINSKY_AH='False',
-            BOUND_CORIOLIS='False',
-            NIHALO = 5,
-            NJHALO = 5,
-            CORIOLIS_SCHEME='WENOVI7TH_PV_ENSTRO',
-            KE_SCHEME='KE_UP3',
-            UP3_LIMITER='UP3_KOREN',
-            H_THRESH='1e-20'
             ).add(**configuration(conf))
         ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-        hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
-        run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-FGR2-EXP1/{conf}', hpc, parameters)
+        hpc = HPC.add(mem=5, ntasks=ntasks, time=6)
+        run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/eANN/16/{conf}', hpc, parameters)
