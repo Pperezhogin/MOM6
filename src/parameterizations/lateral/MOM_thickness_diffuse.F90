@@ -104,6 +104,11 @@ type, public :: thickness_diffuse_CS ; private
                                  !! isopycnal height diffusivity
   logical :: use_stanley_gm      !< If true, also use the Stanley parameterization in MOM_thickness_diffuse
 
+  character(len=200) :: thickness_nudging_file !< Path to data to be used for nudging
+  logical :: do_thickness_nudging !< Flag which activates nudging
+  real :: thickness_nudging_timescale !< Time-scale used for nudging
+  real :: current_time !< Current time since the start of the simulation in seconds
+
   type(diag_ctrl), pointer :: diag => NULL() !< structure used to regulate timing of diagnostics
   real, allocatable :: GMwork(:,:)        !< Work by isopycnal height diffusion [R Z L2 T-3 ~> W m-2]
   real, allocatable :: diagSlopeX(:,:,:)  !< Diagnostic: zonal neutral slope [Z L-1 ~> nondim]
@@ -123,6 +128,7 @@ type, public :: thickness_diffuse_CS ; private
   integer :: id_KH_u1   = -1, id_KH_v1   = -1, id_KH_t1  = -1
   integer :: id_slope_x = -1, id_slope_y = -1
   integer :: id_sfn_unlim_x = -1, id_sfn_unlim_y = -1, id_sfn_x = -1, id_sfn_y = -1
+  integer :: id_target_h = -1, id_h_nudging_tendency = -1
   !>@}
 end type thickness_diffuse_CS
 
@@ -189,14 +195,53 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
   logical :: use_QG_Leith
   integer :: i, j, k, is, ie, js, je, nz
 
+  integer :: nudging_time_index_start, nudging_time_index_end
+  real :: time_within_the_day, weight0, weight1
+  real :: h0(G%isd:G%ied, G%jsd:G%jed,SZK_(GV)), h1(G%isd:G%ied, G%jsd:G%jed,SZK_(GV)), h_target(G%isd:G%ied, G%jsd:G%jed,SZK_(GV))
+  real :: h_nudging_tendency(G%isd:G%ied, G%jsd:G%jed,SZK_(GV))
+  character(len=200) :: nudging_file
+  character(len=16)   :: time_idx_str
+
   if (.not. CS%initialized) call MOM_error(FATAL, "MOM_thickness_diffuse: "//&
          "Module must be initialized before it is used.")
+  
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+
+  ! Apply nudging here
+  if (CS%do_thickness_nudging) then
+    nudging_time_index_start = floor(CS%current_time / 86400.)
+    nudging_time_index_end = nudging_time_index_start + 1
+    time_within_the_day = CS%current_time - nudging_time_index_start * 86400. ! In seconds
+    weight1 = time_within_the_day / 86400.
+    weight0 = 1 - weight1
+    
+    write(time_idx_str, '(I0)') nudging_time_index_start
+    nudging_file = trim(CS%thickness_nudging_file) // trim(time_idx_str) // trim(".nc")
+    !write(*,*) 'Start nudging file', nudging_file
+    call MOM_read_data(trim(nudging_file), "h", h0, G%domain)
+    write(time_idx_str, '(I0)') nudging_time_index_end
+    nudging_file = trim(CS%thickness_nudging_file) // trim(time_idx_str) // trim(".nc")
+    !write(*,*) 'End nudging file', nudging_file
+    call MOM_read_data(trim(nudging_file), "h", h1, G%domain)
+
+    h_target = weight1 * h1 + weight0 * h0
+
+    h_nudging_tendency(is:ie, js:je, :) = 1. / CS%thickness_nudging_timescale * (h_target(is:ie, js:je, :) - h(is:ie, js:je, :))
+
+    h(is:ie, js:je, :) = h(is:ie, js:je, :) + dt * h_nudging_tendency(is:ie, js:je, :)
+
+!    write(*,*) 'current_time, nudging_time_index_start, time_within_the_day, weight0, weight1', CS%current_time, nudging_time_index_start, time_within_the_day, weight0, weight1
+
+    CS%current_time = CS%current_time + dt
+
+    if (CS%id_h_nudging_tendency>0)       call post_data(CS%id_h_nudging_tendency, h_nudging_tendency, CS%diag)
+    if (CS%id_target_h>0)       call post_data(CS%id_target_h, h_target, CS%diag)
+  endif
 
   if ((.not.CS%thickness_diffuse) &
       .or. .not. (CS%Khth > 0.0 .or. CS%read_khth &
       .or. VarMix%use_variable_mixing)) return
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   h_neglect = GV%H_subroundoff
 
   if (allocated(MEKE%GM_src)) then
@@ -2204,6 +2249,23 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
+
+  call get_param(param_file, mdl, "DO_THICKNESS_NUDGING", CS%do_thickness_nudging, &
+                "If true, thickness is nudged towards data read from file", default=.false.)
+
+  call get_param(param_file, mdl, "THICKNESS_NUDGING_FILE", CS%thickness_nudging_file, &
+                 "File with thickness to be used for nudging", &
+                 default="/scratch/pp2681/mom6/Feb2022/filtered/R32_R2_FGR3/high_frequency/time_")
+
+  call get_param(param_file, mdl, "THICKNESS_NUDGING_TIMESCALE", CS%thickness_nudging_timescale, &
+                 "Time-scale of nudging increments. Typically 1 day or 86400s", units="s", default=86400.0)
+
+  ! Initialize nudging here
+  if (CS%do_thickness_nudging) then
+    CS%current_time = 0
+    write(*,*) 'Time initialized in nudging: ', CS%current_time
+  endif
+
   call get_param(param_file, mdl, "THICKNESSDIFFUSE", CS%thickness_diffuse, &
                  "If true, interface heights are diffused with a "//&
                  "coefficient of KHTH.", default=.false.)
@@ -2407,6 +2469,14 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
     allocate(CS%KH_u_GME(G%IsdB:G%IedB, G%jsd:G%jed, GV%ke+1), source=0.)
     allocate(CS%KH_v_GME(G%isd:G%ied, G%JsdB:G%JedB, GV%ke+1), source=0.)
   endif
+
+  CS%id_target_h = register_diag_field('ocean_model', 'target_h', diag%axesTL, Time, &
+           'The target thickness field towards which the nudging works', &
+           'm')
+
+  CS%id_h_nudging_tendency = register_diag_field('ocean_model', 'h_nudging', diag%axesTL, Time, &
+           'Nudging tendency produced by nadging towards target thickness field', &
+           'm s-1')
 
   CS%id_uhGM = register_diag_field('ocean_model', 'uhGM', diag%axesCuL, Time, &
            'Time Mean Diffusive Zonal Thickness Flux', &
