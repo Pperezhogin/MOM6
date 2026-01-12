@@ -726,14 +726,27 @@ if __name__ == '__main__':
     #     hpc = HPC.add(mem=10, ntasks=ntasks, time=6)
     #     run_experiment(f'/scratch/pp2681/mom6/Wenda-WENO/WENO7-ANN-32-32-flux/{conf}', hpc, parameters)
 
-    for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
-        parameters = PARAMETERS.add(
-            USE_ZB2020='True',
-            ZB_SCALING=1.0,
-            ZB2020_USE_ANN='True',
-            ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/equivariant/16-v1/model/Tall.nc',
-            USE_CIRCULATION_IN_HORVISC='True',
-            ).add(**configuration(conf))
-        ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
-        hpc = HPC.add(mem=5, ntasks=ntasks, time=6)
-        run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/eANN/16/{conf}', hpc, parameters)
+    # for conf in ['R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8']:
+    #     parameters = PARAMETERS.add(
+    #         USE_ZB2020='True',
+    #         ZB_SCALING=1.0,
+    #         ZB2020_USE_ANN='True',
+    #         ZB2020_ANN_FILE_TALL='/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/equivariant/16-v1/model/Tall.nc',
+    #         USE_CIRCULATION_IN_HORVISC='True',
+    #         ).add(**configuration(conf))
+    #     ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+    #     hpc = HPC.add(mem=5, ntasks=ntasks, time=6)
+    #     run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/eANN/16/{conf}', hpc, parameters)
+
+    for conf in ['R2', 'R4', 'R6']:
+        for model in ['N4-forcing', 'N4-forcing-fluxes', 'N8-forcing', 'N8-forcing-fluxes']:
+            parameters = PARAMETERS.add(
+                USE_ZB2020='True',
+                ZB_SCALING=1.0,
+                ZB2020_USE_ANN='True',
+                ZB2020_ANN_FILE_TALL=f'/scratch/pp2681/mom6/CM26_ML_models/ocean3d/subfilter/FGR3/equivariant/learning_rate/{model}/0.05/model/Tall.nc',
+                USE_CIRCULATION_IN_HORVISC='True',
+                ).add(**configuration(conf))
+            ntasks = dict(R2=4, R3=10, R4=24, R5=24, R6=24, R7=24, R8=24)[conf]
+            hpc = HPC.add(mem=5, ntasks=ntasks, time=3)
+            run_experiment(f'/scratch/pp2681/mom6/CM26_Double_Gyre/generalization/eANN/64/{model}/{conf}', hpc, parameters)
