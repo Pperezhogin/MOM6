@@ -47,6 +47,8 @@ type, public :: ZB2020_CS ; private
   integer   :: Klower_shear   !< Type of expression for shear in Klower formula
                               !! 0: sqrt(sh_xx**2 + sh_xy**2)
                               !! 1: sqrt(sh_xx**2 + sh_xy**2 + vort_xy**2)
+  real      :: time_filter_scale !< Time scale in seconds for filtering input data
+                                 !! in ZB or ZB_ANN backscatter models [T ~> s]
   integer   :: Marching_halo  !< The number of filter iterations per a single MPI
                               !! exchange
 
@@ -162,6 +164,10 @@ subroutine ZB2020_init(Time, G, GV, US, param_file, diag, CS, use_ZB2020)
   call get_param(param_file, mdl, "ZB_SCALING", CS%amplitude, &
                  "The nondimensional scaling factor in ZB model, " //&
                  "typically 0.5-2.5", units="nondim", default=0.5)
+
+  call get_param(param_file, mdl, "ZB_INPUT_TIME_FILTER_SCALE", CS%time_filter_scale, &
+                 "The time scale in seconds for filtering input data in" //&
+                 "ZB or ZB_ANN backscatter models. If negative, no filtering is applied.", units="s", default=-1.)
 
   call get_param(param_file, mdl, "ZB_TRACE_MODE", CS%ZB_type, &
                  "Select how to compute the trace part of ZB model:\n" //&
@@ -356,7 +362,7 @@ end subroutine ZB2020_end
 !! We apply zero boundary conditions to velocity gradients
 !! which is required for filtering operations
 subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
-                                       G, GV, CS, k)
+                                       G, GV, CS, k, dt)
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)    :: GV     !< The ocean's vertical grid structure.
   type(ZB2020_CS),               intent(inout) :: CS     !< ZB2020 control structure.
@@ -376,14 +382,28 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
                               !! including metric terms [T-1 ~> s-1]
 
   integer, intent(in) :: k    !< The vertical index of the layer to be passed.
+  real, intent(in)    :: dt   !< The model time step in seconds [T ~> s]
 
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq
   integer :: i, j
+
+  real :: persistence_factor !! An O(1) number quantifying a contribution of the previous time step
+                             !! in exponential moving average filter
+  real :: new_info_factor    !! An O(1) number quantifying a contribution of new incoming information
+                             !! in exponential moving average filter
 
   call cpu_clock_begin(CS%id_clock_copy)
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  if (CS%time_filter_scale > 0.) then
+    persistence_factor = exp(-dt / CS%time_filter_scale)
+    new_info_factor = 1. - persistence_factor
+  else
+    persistence_factor = 0.
+    new_info_factor = 1.
+  endif
 
   do J=js-1,Jeq ; do I=is-1,Ieq
     CS%hq(I,J,k) = hq(I,J)
@@ -393,18 +413,18 @@ subroutine ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, &
   ! sh_xx in ZB2020. However, filtering
   ! may require BC
   do j=Jsq-1,je+2 ; do i=Isq-1,ie+2
-    CS%sh_xx(i,j,k) = sh_xx(i,j) * G%mask2dT(i,j)
+    CS%sh_xx(i,j,k) = (new_info_factor * sh_xx(i,j) + persistence_factor * CS%sh_xx(i,j,k)) * G%mask2dT(i,j)
   enddo ; enddo
 
   ! We multiply by mask to remove
   ! implicit dependence on CS%no_slip
   ! flag in hor_visc module
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-    CS%sh_xy(I,J,k) = sh_xy(I,J) * G%mask2dBu(I,J)
+    CS%sh_xy(I,J,k) = (new_info_factor * sh_xy(I,J) + persistence_factor * CS%sh_xy(I,J,k)) * G%mask2dBu(I,J)
   enddo; enddo
 
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-    CS%vort_xy(I,J,k) = vort_xy(I,J) * G%mask2dBu(I,J)
+    CS%vort_xy(I,J,k) = (new_info_factor * vort_xy(I,J) + persistence_factor * CS%vort_xy(I,J,k)) * G%mask2dBu(I,J)
   enddo; enddo
 
   call cpu_clock_end(CS%id_clock_copy)
