@@ -543,9 +543,7 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
   endif
 
   ! Calculate uhD, vhD from h, e, KH_u, KH_v, tv%T/S
-  ! DB <
-  if (STOCH%skeb_use_gm .and. CS%use_meso_sfn_ANN) then
-    ! Both STOCH and ANN are active
+if (STOCH%skeb_use_gm) then
     if (use_stored_slopes) then
       call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
                                   int_slope_u, int_slope_v, VarMix%slope_x, VarMix%slope_y, &
@@ -556,33 +554,18 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
                                   int_slope_u, int_slope_v, STOCH=STOCH, VarMix=VarMix, &
                                   Sfn_unlim_u_3D=Sfn_unlim_u_3D, Sfn_unlim_v_3D=Sfn_unlim_v_3D)
     endif
-  !if (STOCH%skeb_use_gm) then
-  elseif (STOCH%skeb_use_gm) then
-  ! DB >  
-    if (use_stored_slopes) then
-      call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
-                                  int_slope_u, int_slope_v, VarMix%slope_x, VarMix%slope_y, &
-                                  STOCH=STOCH, VarMix=VarMix)
-    else
-      call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
-                                  int_slope_u, int_slope_v, STOCH=STOCH, VarMix=VarMix)
-    endif
-  ! DB < 
-  elseif (CS%use_meso_sfn_ANN) then
-    call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
-                                  int_slope_u, int_slope_v, &
-                                  Sfn_unlim_u_3D=Sfn_unlim_u_3D, Sfn_unlim_v_3D=Sfn_unlim_v_3D)
-  ! DB >
   else
     if (use_stored_slopes) then
       call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
-                                  int_slope_u, int_slope_v, VarMix%slope_x, VarMix%slope_y)
+                                  int_slope_u, int_slope_v, VarMix%slope_x, VarMix%slope_y, &
+                                  Sfn_unlim_u_3D=Sfn_unlim_u_3D, Sfn_unlim_v_3D=Sfn_unlim_v_3D)
     else
       call thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV, US, MEKE, CS, &
-                                  int_slope_u, int_slope_v)
+                                  int_slope_u, int_slope_v, &
+                                  Sfn_unlim_u_3D=Sfn_unlim_u_3D, Sfn_unlim_v_3D=Sfn_unlim_v_3D)
     endif
   endif
-
+  
   if (VarMix%use_variable_mixing) then
     if (allocated(MEKE%Rd_dx_h) .and. allocated(VarMix%Rd_dx_h)) then
       !$OMP parallel do default(shared)
