@@ -9,13 +9,12 @@ module MOM_ANN
 
 use MOM_io, only : MOM_read_data, field_exists
 use MOM_error_handler, only : MOM_error, FATAL, MOM_mesg
-use numerical_testing_type, only : testing
 
 implicit none ; private
 
 !#include <MOM_memory.h>
 
-public ANN_init, ANN_allocate, ANN_apply, ANN_end, ANN_unit_tests
+public ANN_init, ANN_allocate, ANN_apply, ANN_end
 public ANN_apply_vector_orig, ANN_apply_vector_oi, ANN_apply_array_sio
 public set_layer, set_input_normalization, set_output_normalization
 public ANN_random, randomize_layer
@@ -546,167 +545,6 @@ subroutine randomize_layer(ANN, nlayers, layer, widths)
 
 end subroutine randomize_layer
 
-!> Runs unit tests on ANN functions.
-!!
-!! Should only be called from a single/root thread.
-!! Returns True if a test fails, otherwise False.
-logical function ANN_unit_tests(verbose)
-  logical, intent(in) :: verbose !< If true, write results to stdout
-  ! Local variables
-  type(ANN_CS) :: ANN ! An ANN
-  type(testing) :: test ! Manage tests
-  real, allocatable :: x(:), y(:), y_good(:), x2(:,:), y2(:,:) ! Inputs, outputs [arbitrary]
-  integer, parameter :: max_rand_nlay = 10 ! Deepest random ANN to generate
-  integer :: widths(max_rand_nlay) ! Number of layers for random ANN
-  integer :: nlay ! Number of layers for random ANN
-  integer :: i, iter ! Loop counters
-  logical :: rand_res ! Status of random tests
-
-  ANN_unit_tests = .false. ! Start by assuming all is well
-  call test%set(verbose=verbose) ! Pass verbose mode to test
-
-  ! Identity ANN for one input
-  allocate( y(1) )
-  call ANN_allocate(ANN, 2, [1,1])
-  call set_layer(ANN, 1, reshape([1.],[1,1]), [0.], .false.)
-  call ANN_apply([1.], y, ANN)
-  call test%real_scalar(y(1), 1., 'Scalar identity')
-  deallocate( y )
-  call ANN_end(ANN)
-
-  ! Summation ANN
-  allocate( y(1) )
-  call ANN_allocate(ANN, 2, [4,1])
-  call set_layer(ANN, 1, reshape([1.,1.,1.,1.], [1,4]), [0.], .false.)
-  call ANN_apply([-1.,0.,1.,2.], y, ANN)
-  call test%real_scalar(y(1), 2., 'Summation')
-  deallocate( y )
-  call ANN_end(ANN)
-
-  ! Identity ANN for vector input/output
-  call ANN_allocate(ANN, 2, [3,3])
-  allocate( y(3) )
-  call set_layer(ANN, 1, reshape([1.,0.,0., &
-                                  0.,1.,0., &
-                                  0.,0.,1.], [3,3]), [0.,0.,0.], .false.)
-  call ANN_apply([-1.,0.,1.], y, ANN)
-  call test%real_arr(3, y, [-1.,0.,1.], 'Vector identity')
-  deallocate( y )
-  call ANN_end(ANN)
-
-  ! Rectifying ANN for vector input/output
-  allocate( y(3) )
-  call ANN_allocate(ANN, 2, [3,3])
-  call set_layer(ANN, 1, reshape([1.,0.,0., &
-                                  0.,1.,0., &
-                                  0.,0.,1.], [3,3]), [0.,0.,0.], .true.)
-  call ANN_apply([-1.,0.,1.], y, ANN)
-  call test%real_arr(3, y, [0.,0.,1.], 'Rectifier')
-  deallocate( y )
-  call ANN_end(ANN)
-
-  ! The next 3 tests re-use the same network with 4 inputs, a 4-wide hidden layer, and one output
-  allocate( y(1) )
-  call ANN_allocate(ANN, 3, [4,4,1])
-
-  ! 1 hidden layer: rectifier followed by summation
-  ! Inputs: [-1,0,1,2]
-  ! Rectified: [0,0,1,2]
-  ! Sum: 3
-  ! Outputs: 3
-  call set_layer(ANN, 1, reshape([1.,0.,0.,0., &
-                                  0.,1.,0.,0., &
-                                  0.,0.,1.,0., &
-                                  0.,0.,0.,1.], [4,4]), [0.,0.,0.,0.], .true.)
-  call set_layer(ANN, 2, reshape([1.,1.,1.,1.], [1,4]), [0.], .false.)
-  call ANN_apply_vector_orig([-1.,0.,1.,2.], y, ANN)
-  call test%real_scalar(y(1), 3., 'Rectifier+summation')
-
-  ! as above but with biases
-  ! Inputs: [-2,-1,0,1]
-  ! After bias: [-1,0,1,2] with b=1
-  ! Rectified: [0,0,1,2]
-  ! Sum: 3
-  ! After bias: 6 with b=3
-  ! Outputs: 6
-  call set_layer(ANN, 1, reshape([1.,0.,0.,0., &
-                                  0.,1.,0.,0., &
-                                  0.,0.,1.,0., &
-                                  0.,0.,0.,1.], [4,4]), [1.,1.,1.,1.], .true.)
-  call set_layer(ANN, 2, reshape([1.,1.,1.,1.], [1,4]), [3.], .false.)
-  call ANN_apply_vector_orig([-2.,-1.,0.,1.], y, ANN)
-  call test%real_scalar(y(1), 6., 'Rectifier+summation+bias')
-
-  ! as above but with normalization of inputs and outputs
-  ! Inputs: [0,2,4,6]
-  ! Normalized inputs: [-2,-1,0,1] (using mean=-4, norm=2)
-  ! Normalized outputs: 6
-  ! De-normalized output: 2 (using mean=-10, norm=2)
-  call set_input_normalization(ANN, means=[4.,4.,4.,4.], norms=[0.5,0.5,0.5,0.5])
-  call set_output_normalization(ANN, norms=[2.], means=[-10.])
-  call ANN_apply_vector_orig([0.,2.,4.,6.], y, ANN)
-  call test%real_scalar(y(1), 2., 'Rectifier+summation+bias+norms')
-
-  deallocate( y )
-  call ANN_end(ANN)
-
-  ! as above with a 1x1 4th identity layer (to check loop combinations)
-  allocate( y(1) )
-  call ANN_allocate(ANN, 4, [4,4,1,1])
-  call set_layer(ANN, 1, reshape([1.,0.,0.,0., &
-                                  0.,1.,0.,0., &
-                                  0.,0.,1.,0., &
-                                  0.,0.,0.,1.], [4,4]), [1.,1.,1.,1.], .true.)
-  call set_layer(ANN, 2, reshape([1.,1.,1.,1.], [1,4]), [3.], .false.)
-  call set_layer(ANN, 3, reshape([1.],[1,1]), [0.], .false.)
-  call set_input_normalization(ANN, means=[4.,4.,4.,4.], norms=[0.5,0.5,0.5,0.5])
-  call set_output_normalization(ANN, norms=[2.], means=[-10.])
-  call ANN_apply_vector_orig([0.,2.,4.,6.], y, ANN)
-  call test%real_scalar(y(1), 2., 'Rectifier+summation+bias+norms 4-layer')
-
-  ! as above with v2 of ANN_apply
-  call ANN_apply_vector_oi([0.,2.,4.,6.], y, ANN)
-  call test%real_scalar(y(1), 2., 'Rectifier+summation+bias+norms 4-layer v2')
-  deallocate( y )
-
-  allocate( y2(1,2) )
-  ! as above with v5 of ANN_apply applied to 2d inputs, x(space,feature)
-  call ANN_apply_array_sio(2, reshape([0.,1.,2.,3.,4.,5.,6.,7.],[2,4]), y2, ANN)
-  call test%real_arr(2, y2, [2.,5.], 'Rectifier+summation+bias+norms 4-layer array v2')
-  deallocate( y2 )
-
-  call ANN_end(ANN)
-
-  ! The following block checks that for random ANN (weights and layers widths)
-  ! each of the various implementations of inference give identical results.
-  ! This helped catch loop and allocation errors.
-  rand_res = .false.
-  do iter = 1, 1000
-    allocate( y(max_rand_nlay+1) )
-    call random_number(y) ! Vector of random numbers 0..1
-    nlay = 2 + floor( y(max_rand_nlay+1) * ( max_rand_nlay - 1 ) ) ! 2 < nlay < max_rand_nlay
-    widths(:) = 1 + floor( y(1:nlay) * 8 ) ! 1 < layer width < 8
-    deallocate( y )
-    call ANN_random(ANN, nlay, widths)
-    allocate( x(widths(1)), y(widths(nlay)), y_good(widths(nlay)) )
-    call ANN_apply_vector_orig(x, y_good, ANN)
-    call ANN_apply_vector_oi(x, y, ANN)
-    rand_res = rand_res .or. maxval( abs( y(:) - y_good(:) ) ) > 0. ! Check results from v2 = v1
-    allocate( x2(20,widths(1)), y2(20,widths(nlay)) ) ! 2D input, output
-    do i = 1, 20
-      x2(i,:) = x(:)
-    enddo
-    call ANN_apply_array_sio(20, x2, y2, ANN)
-    rand_res = rand_res .or. maxval( abs( maxval(y2(:,:),1) - y_good(:) ) ) > 0. ! Check results from array v2 = v1
-    rand_res = rand_res .or. maxval( abs( minval(y2(:,:),1) - y_good(:) ) ) > 0. ! Check results from array v2 = v1
-    deallocate( x, y, y_good, x2, y2 )
-    call ANN_end(ANN)
-  enddo
-  call test%test(rand_res, 'Equivalence between inference variants with random results')
-
-  ANN_unit_tests = test%summarize('ANN_unit_tests')
-
-end function ANN_unit_tests
 
 !> \namespace mom_ann
 !!
